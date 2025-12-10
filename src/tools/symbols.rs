@@ -170,7 +170,7 @@ pub fn get_task_context(input: &GetTaskContextInput, workspace_root: &Path) -> R
     let token_budget = input.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET);
     let char_budget = (token_budget as f32 * CHARS_PER_TOKEN) as i32;
 
-    let mut warnings = Vec::new();
+    let warnings = Vec::new();
     let mut code_snippets = Vec::new();
     let mut related_beads = Vec::new();
     let mut doc_fragments = Vec::new();

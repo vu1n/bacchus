@@ -66,9 +66,10 @@ fn main() {
                 lines_added: added,
                 lines_removed: removed,
             };
+            // Breaking change format: symbol|kind|description (pipe-separated to avoid conflict with :: in symbols)
             let breaking_changes: Option<Vec<tools::BreakingChange>> = breaking.map(|b| {
                 b.split(',').map(|change| {
-                    let parts: Vec<&str> = change.splitn(3, ':').collect();
+                    let parts: Vec<&str> = change.splitn(3, '|').collect();
                     tools::BreakingChange {
                         symbol: parts.first().unwrap_or(&"").to_string(),
                         change_kind: parts.get(1).unwrap_or(&"").to_string(),
@@ -76,17 +77,13 @@ fn main() {
                     }
                 }).collect()
             });
-            // Note: reportFootprint needs async handling for re-indexing
-            // For now, return a simplified response
-            let output = tools::ReportFootprintOutput {
-                success: true,
+            let input = tools::ReportFootprintInput {
                 bead_id,
-                symbols_touched: vec![],
-                conflicts: vec![],
-                notifications_sent: 0,
-                start_hash: "".to_string(),
+                agent_id,
+                diff_summary,
+                breaking_changes,
             };
-            Ok(serde_json::to_string_pretty(&output).unwrap())
+            tools::report_footprint(&input, &workspace_root).map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
         Commands::Heartbeat { bead_id, agent_id } => {

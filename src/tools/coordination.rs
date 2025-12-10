@@ -533,6 +533,203 @@ pub fn list_stale_tasks(input: &ListStaleTasksInput) -> Result<ListStaleTasksOut
     })
 }
 
+/// Report actual changes made (footprint) and notify stakeholders
+pub fn report_footprint(input: &ReportFootprintInput, workspace_root: &Path) -> Result<ReportFootprintOutput> {
+    let now = current_timestamp();
+
+    with_db(|conn| {
+        // Verify task ownership
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT owner FROM tasks WHERE bead_id = ?1",
+                [&input.bead_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+
+        if owner.as_deref() != Some(&input.agent_id) {
+            return Ok(ReportFootprintOutput {
+                success: false,
+                bead_id: input.bead_id.clone(),
+                symbols_touched: vec![],
+                conflicts: vec![],
+                notifications_sent: 0,
+                start_hash: "".to_string(),
+            });
+        }
+
+        // Get existing symbol hashes for changed files (before re-indexing)
+        let mut old_hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for file in &input.diff_summary.files_changed {
+            let mut stmt = conn.prepare(
+                "SELECT fq_name, hash FROM symbols WHERE file = ?1"
+            )?;
+            let rows: Vec<(String, String)> = stmt
+                .query_map([file], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (fq_name, hash) in rows {
+                old_hashes.insert(fq_name, hash);
+            }
+        }
+
+        // Re-index changed files
+        let mut symbols_touched = Vec::new();
+        let mut parser = crate::indexer::Parser::new().map_err(|e| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            )
+        })?;
+
+        for file in &input.diff_summary.files_changed {
+            let file_path = workspace_root.join(file);
+            if !file_path.exists() {
+                // File was deleted - remove symbols
+                conn.execute("DELETE FROM symbols WHERE file = ?1", [file])?;
+                continue;
+            }
+
+            let content = fs::read_to_string(&file_path).map_err(|e| {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                )
+            })?;
+
+            let parse_result = parser.parse_file(&content, file);
+            if let Ok((tree, language)) = parse_result {
+                let symbols = crate::indexer::extract_symbols(&tree, file, &content, language);
+
+                // Delete old symbols for this file
+                conn.execute("DELETE FROM symbols WHERE file = ?1", [file])?;
+
+                // Insert new symbols
+                for sym in &symbols {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO symbols (file, fq_name, kind, span_start_line, span_end_line, line_count, hash, docstring, language) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        params![
+                            sym.file,
+                            sym.fq_name,
+                            sym.kind.as_str(),
+                            sym.span_start_line,
+                            sym.span_end_line,
+                            sym.line_count,
+                            sym.hash,
+                            sym.docstring,
+                            sym.language.as_str()
+                        ],
+                    )?;
+
+                    // Track if symbol changed
+                    if let Some(old_hash) = old_hashes.get(&sym.fq_name) {
+                        if old_hash != &sym.hash {
+                            symbols_touched.push(sym.fq_name.clone());
+                        }
+                    } else {
+                        // New symbol
+                        symbols_touched.push(sym.fq_name.clone());
+                    }
+                }
+            }
+        }
+
+        // Find conflicts with other beads
+        let mut conflicts = Vec::new();
+        for symbol in &symbols_touched {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT bs.bead_id FROM bead_symbols bs WHERE bs.symbol_ref = ?1 AND bs.bead_id != ?2"
+            )?;
+            let conflicting_beads: Vec<String> = stmt
+                .query_map(params![symbol, &input.bead_id], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if !conflicting_beads.is_empty() {
+                conflicts.push(ConflictInfo {
+                    symbol: symbol.clone(),
+                    other_bead_ids: conflicting_beads,
+                    suggested_follow_up: "Coordinate with other agents or review changes".to_string(),
+                });
+            }
+        }
+
+        // Notify stakeholders of breaking changes
+        let mut notifications_sent = 0;
+        if let Some(ref breaking_changes) = input.breaking_changes {
+            for bc in breaking_changes {
+                // Find stakeholders for this symbol
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT t.owner, bs.bead_id FROM bead_symbols bs JOIN tasks t ON bs.bead_id = t.bead_id WHERE bs.symbol_ref = ?1 AND bs.bead_id != ?2 AND t.owner IS NOT NULL"
+                )?;
+                let stakeholders: Vec<(String, String)> = stmt
+                    .query_map(params![&bc.symbol, &input.bead_id], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                for (owner, target_bead) in stakeholders {
+                    conn.execute(
+                        "INSERT INTO notifications (notification_type, from_agent, from_bead, target_agent, target_bead, target_symbol, change_kind, change_description, is_breaking, status, created_at) VALUES ('breaking_change', ?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'pending', ?8)",
+                        params![
+                            &input.agent_id,
+                            &input.bead_id,
+                            owner,
+                            target_bead,
+                            &bc.symbol,
+                            &bc.change_kind,
+                            &bc.description,
+                            now
+                        ],
+                    )?;
+                    notifications_sent += 1;
+                }
+            }
+        }
+
+        // Update bead_symbols with actually touched symbols
+        for symbol in &symbols_touched {
+            // Get symbol_id
+            let symbol_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM symbols WHERE fq_name = ?1",
+                    [symbol],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(sid) = symbol_id {
+                conn.execute(
+                    "INSERT OR REPLACE INTO bead_symbols (bead_id, symbol_id, symbol_ref, relation) VALUES (?1, ?2, ?3, 'modified')",
+                    params![&input.bead_id, sid, symbol],
+                )?;
+            }
+        }
+
+        // Compute current hash as start_hash for future drift detection
+        let workplan = Workplan {
+            modifies: Some(ModifiesSpec {
+                files: Some(input.diff_summary.files_changed.clone()),
+                symbols: None,
+                modules: None,
+            }),
+            creates: None,
+        };
+        let start_hash = compute_start_hash(&workplan, workspace_root);
+
+        Ok(ReportFootprintOutput {
+            success: true,
+            bead_id: input.bead_id.clone(),
+            symbols_touched,
+            conflicts,
+            notifications_sent,
+            start_hash,
+        })
+    })
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================

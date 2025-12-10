@@ -73,7 +73,7 @@ pub enum Commands {
         /// Total lines removed
         #[arg(long)]
         removed: Option<i32>,
-        /// Breaking changes (format: symbol:kind:description, comma-separated)
+        /// Breaking changes (format: symbol|kind|description, comma-separated)
         #[arg(long)]
         breaking: Option<String>,
     },

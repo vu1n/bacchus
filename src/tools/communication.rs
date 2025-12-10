@@ -326,9 +326,10 @@ pub fn request_human_decision(input: &RequestHumanDecisionInput) -> Result<Reque
 
     with_db(|conn| {
         let options_json = serde_json::to_string(&input.options).unwrap_or_default();
-        let affected_json = input.affected_symbols.as_ref()
+        // TODO: Store affected_symbols and urgency when schema supports them
+        let _affected_json = input.affected_symbols.as_ref()
             .map(|s| serde_json::to_string(s).unwrap_or_default());
-        let urgency = input.urgency.as_deref().unwrap_or("medium");
+        let _urgency = input.urgency.as_deref().unwrap_or("medium");
 
         conn.execute(
             "INSERT INTO notifications (notification_type, from_agent, from_bead, change_description, decision_options, status, created_at) VALUES ('human_decision', ?1, ?2, ?3, ?4, 'pending', ?5)",

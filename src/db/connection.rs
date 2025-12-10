@@ -10,17 +10,6 @@ use super::migrations::apply_migrations;
 /// Global database connection pool (single connection for now)
 static DB_POOL: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
 
-/// Database pool wrapper
-pub struct DbPool;
-
-impl DbPool {
-    /// Get a reference to the global connection
-    pub fn get() -> Result<std::sync::MutexGuard<'static, Option<Connection>>> {
-        let pool = DB_POOL.get_or_init(|| Mutex::new(None));
-        Ok(pool.lock().unwrap())
-    }
-}
-
 /// Initialize the database connection
 ///
 /// # Arguments
@@ -55,21 +44,13 @@ pub fn init_db(db_path: Option<&str>, silent: bool) -> Result<()> {
     Ok(())
 }
 
-/// Get the current database connection
-///
-/// # Panics
-/// Panics if database is not initialized
-pub fn get_db() -> std::sync::MutexGuard<'static, Option<Connection>> {
-    let pool = DB_POOL.get_or_init(|| Mutex::new(None));
-    pool.lock().unwrap()
-}
-
 /// Execute a function with the database connection
 pub fn with_db<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T>,
 {
-    let guard = get_db();
+    let pool = DB_POOL.get_or_init(|| Mutex::new(None));
+    let guard = pool.lock().unwrap();
     let conn = guard.as_ref().ok_or_else(|| {
         rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(1),
