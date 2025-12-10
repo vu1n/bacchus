@@ -25,6 +25,12 @@ pub enum Commands {
         bead_id: String,
         /// Your agent ID
         agent_id: String,
+        /// Auto-split if task exceeds token threshold
+        #[arg(long)]
+        auto_split: bool,
+        /// Token threshold for auto-split (default: 8000)
+        #[arg(long, default_value = "8000")]
+        max_tokens: i32,
     },
 
     /// Release a claimed task

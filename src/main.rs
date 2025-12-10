@@ -24,9 +24,14 @@ fn main() {
         // ====================================================================
         // Coordination Commands
         // ====================================================================
-        Commands::Claim { bead_id, agent_id } => {
-            let input = tools::ClaimTaskInput { bead_id, agent_id };
-            tools::claim_task(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+        Commands::Claim { bead_id, agent_id, auto_split, max_tokens } => {
+            let input = tools::ClaimTaskInput {
+                bead_id,
+                agent_id,
+                auto_split,
+                max_tokens,
+            };
+            tools::claim_task(&input, &workspace_root).map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
         Commands::Release { bead_id, agent_id, reason } => {

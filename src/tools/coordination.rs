@@ -24,7 +24,13 @@ const GOD_SYMBOL_LINE_LIMIT: i64 = 500;
 pub struct ClaimTaskInput {
     pub bead_id: String,
     pub agent_id: String,
+    #[serde(default)]
+    pub auto_split: bool,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: i32,
 }
+
+fn default_max_tokens() -> i32 { 8000 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClaimTaskOutput {
@@ -33,6 +39,30 @@ pub struct ClaimTaskOutput {
     pub owner: String,
     pub start_hash: Option<String>,
     pub message: String,
+    /// If auto-split triggered, contains the subtask IDs created
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtasks: Option<Vec<SubtaskInfo>>,
+    /// Estimation info for the task
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimation: Option<TaskEstimation>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SubtaskInfo {
+    pub bead_id: String,
+    pub title: Option<String>,
+    pub estimated_tokens: i32,
+    pub files: Vec<String>,
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TaskEstimation {
+    pub estimated_tokens: i32,
+    pub file_count: i32,
+    pub symbol_count: i32,
+    pub exceeds_threshold: bool,
+    pub suggested_split_count: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,7 +215,7 @@ pub struct StaleTaskInfo {
 // ============================================================================
 
 /// Claim a task for an agent to work on
-pub fn claim_task(input: &ClaimTaskInput) -> Result<ClaimTaskOutput> {
+pub fn claim_task(input: &ClaimTaskInput, _workspace_root: &Path) -> Result<ClaimTaskOutput> {
     let now = current_timestamp();
 
     with_db(|conn| {
@@ -206,20 +236,60 @@ pub fn claim_task(input: &ClaimTaskInput) -> Result<ClaimTaskOutput> {
                     owner: owner.clone(),
                     start_hash: None,
                     message: format!("Task already claimed by {}", owner),
+                    subtasks: None,
+                    estimation: None,
                 });
             }
         }
 
-        // Insert or update task
+        // Estimate task size based on associated symbols
+        let estimation = estimate_task_size(conn, &input.bead_id)?;
+
+        // Check if auto-split is needed
+        if input.auto_split && estimation.exceeds_threshold {
+            // Create subtasks
+            let subtasks = create_subtasks(
+                conn,
+                &input.bead_id,
+                &input.agent_id,
+                input.max_tokens,
+                now,
+            )?;
+
+            // Mark parent task as claimed but with subtasks
+            if existing.is_some() {
+                conn.execute(
+                    "UPDATE tasks SET owner = ?1, last_heartbeat = ?2, last_update = ?3, estimated_tokens = ?4, estimated_files = ?5, estimated_symbols = ?6 WHERE bead_id = ?7",
+                    params![&input.agent_id, now, now, estimation.estimated_tokens, estimation.file_count, estimation.symbol_count, &input.bead_id],
+                )?;
+            } else {
+                conn.execute(
+                    "INSERT INTO tasks (bead_id, owner, last_heartbeat, last_update, estimated_tokens, estimated_files, estimated_symbols) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![&input.bead_id, &input.agent_id, now, now, estimation.estimated_tokens, estimation.file_count, estimation.symbol_count],
+                )?;
+            }
+
+            return Ok(ClaimTaskOutput {
+                success: true,
+                bead_id: input.bead_id.clone(),
+                owner: input.agent_id.clone(),
+                start_hash: None,
+                message: format!("Task split into {} subtasks", subtasks.len()),
+                subtasks: Some(subtasks),
+                estimation: Some(estimation),
+            });
+        }
+
+        // Normal claim without split
         if existing.is_some() {
             conn.execute(
-                "UPDATE tasks SET owner = ?1, last_heartbeat = ?2, last_update = ?3 WHERE bead_id = ?4",
-                params![&input.agent_id, now, now, &input.bead_id],
+                "UPDATE tasks SET owner = ?1, last_heartbeat = ?2, last_update = ?3, estimated_tokens = ?4, estimated_files = ?5, estimated_symbols = ?6 WHERE bead_id = ?7",
+                params![&input.agent_id, now, now, estimation.estimated_tokens, estimation.file_count, estimation.symbol_count, &input.bead_id],
             )?;
         } else {
             conn.execute(
-                "INSERT INTO tasks (bead_id, owner, last_heartbeat, last_update) VALUES (?1, ?2, ?3, ?4)",
-                params![&input.bead_id, &input.agent_id, now, now],
+                "INSERT INTO tasks (bead_id, owner, last_heartbeat, last_update, estimated_tokens, estimated_files, estimated_symbols) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![&input.bead_id, &input.agent_id, now, now, estimation.estimated_tokens, estimation.file_count, estimation.symbol_count],
             )?;
         }
 
@@ -238,8 +308,160 @@ pub fn claim_task(input: &ClaimTaskInput) -> Result<ClaimTaskOutput> {
             owner: input.agent_id.clone(),
             start_hash,
             message: "Task claimed successfully".to_string(),
+            subtasks: None,
+            estimation: Some(estimation),
         })
     })
+}
+
+/// Estimate the size of a task based on its associated symbols
+fn estimate_task_size(conn: &rusqlite::Connection, bead_id: &str) -> Result<TaskEstimation> {
+    // Count files and symbols associated with this bead
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT s.file, s.fq_name, s.line_count FROM bead_symbols bs JOIN symbols s ON bs.symbol_id = s.id WHERE bs.bead_id = ?1"
+    )?;
+
+    let symbols: Vec<(String, String, i32)> = stmt
+        .query_map([bead_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let files: std::collections::HashSet<&str> = symbols.iter().map(|(f, _, _)| f.as_str()).collect();
+    let file_count = files.len() as i32;
+    let symbol_count = symbols.len() as i32;
+
+    // Estimate tokens: ~3.5 chars per token, ~40 chars per line average
+    let total_lines: i32 = symbols.iter().map(|(_, _, lc)| lc).sum();
+    let estimated_tokens = (total_lines * 40) / 4; // rough estimate
+
+    // If no symbols registered yet, use a default estimate
+    let (estimated_tokens, file_count, symbol_count) = if symbols.is_empty() {
+        (0, 0, 0)
+    } else {
+        (estimated_tokens, file_count, symbol_count)
+    };
+
+    let exceeds_threshold = estimated_tokens > 8000; // default threshold
+    let suggested_split_count = if exceeds_threshold {
+        (estimated_tokens / 6000).max(2) // aim for ~6k tokens per subtask
+    } else {
+        1
+    };
+
+    Ok(TaskEstimation {
+        estimated_tokens,
+        file_count,
+        symbol_count,
+        exceeds_threshold,
+        suggested_split_count,
+    })
+}
+
+/// Create subtasks by splitting work across files/symbols
+fn create_subtasks(
+    conn: &rusqlite::Connection,
+    parent_bead_id: &str,
+    agent_id: &str,
+    max_tokens: i32,
+    now: i64,
+) -> Result<Vec<SubtaskInfo>> {
+    // Get all symbols associated with the parent task, grouped by file
+    let mut stmt = conn.prepare(
+        "SELECT s.file, s.fq_name, s.line_count FROM bead_symbols bs JOIN symbols s ON bs.symbol_id = s.id WHERE bs.bead_id = ?1 ORDER BY s.file"
+    )?;
+
+    let symbols: Vec<(String, String, i32)> = stmt
+        .query_map([parent_bead_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if symbols.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Group by file
+    let mut files_map: std::collections::HashMap<String, Vec<(String, i32)>> = std::collections::HashMap::new();
+    for (file, symbol, lines) in symbols {
+        files_map.entry(file).or_default().push((symbol, lines));
+    }
+
+    // Create chunks that fit within max_tokens
+    let mut subtasks = Vec::new();
+    let mut current_chunk_files: Vec<String> = Vec::new();
+    let mut current_chunk_symbols: Vec<String> = Vec::new();
+    let mut current_tokens = 0;
+    let target_tokens = (max_tokens as f32 * 0.75) as i32; // leave some buffer
+
+    for (file, file_symbols) in files_map {
+        let file_lines: i32 = file_symbols.iter().map(|(_, l)| l).sum();
+        let file_tokens = (file_lines * 40) / 4;
+
+        // If adding this file would exceed target, create a new subtask
+        if current_tokens + file_tokens > target_tokens && !current_chunk_files.is_empty() {
+            let subtask_id = format!("{}.{}", parent_bead_id, subtasks.len() + 1);
+            subtasks.push(SubtaskInfo {
+                bead_id: subtask_id,
+                title: Some(format!("Subtask {} of {}", subtasks.len() + 1, parent_bead_id)),
+                estimated_tokens: current_tokens,
+                files: current_chunk_files.clone(),
+                symbols: current_chunk_symbols.clone(),
+            });
+            current_chunk_files.clear();
+            current_chunk_symbols.clear();
+            current_tokens = 0;
+        }
+
+        current_chunk_files.push(file.clone());
+        for (sym, _) in &file_symbols {
+            current_chunk_symbols.push(sym.clone());
+        }
+        current_tokens += file_tokens;
+    }
+
+    // Don't forget the last chunk
+    if !current_chunk_files.is_empty() {
+        let subtask_id = format!("{}.{}", parent_bead_id, subtasks.len() + 1);
+        subtasks.push(SubtaskInfo {
+            bead_id: subtask_id,
+            title: Some(format!("Subtask {} of {}", subtasks.len() + 1, parent_bead_id)),
+            estimated_tokens: current_tokens,
+            files: current_chunk_files,
+            symbols: current_chunk_symbols,
+        });
+    }
+
+    // Insert subtasks into database
+    for subtask in &subtasks {
+        conn.execute(
+            "INSERT INTO tasks (bead_id, parent_bead, title, owner, last_heartbeat, last_update, estimated_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &subtask.bead_id,
+                parent_bead_id,
+                &subtask.title,
+                agent_id,
+                now,
+                now,
+                subtask.estimated_tokens
+            ],
+        )?;
+
+        // Link symbols to subtask
+        for symbol in &subtask.symbols {
+            // Get symbol_id
+            let symbol_id: Option<i64> = conn
+                .query_row("SELECT id FROM symbols WHERE fq_name = ?1", [symbol], |row| row.get(0))
+                .ok();
+
+            if let Some(sid) = symbol_id {
+                conn.execute(
+                    "INSERT OR IGNORE INTO bead_symbols (bead_id, symbol_id, symbol_ref, relation) VALUES (?1, ?2, ?3, 'inherited')",
+                    params![&subtask.bead_id, sid, symbol],
+                )?;
+            }
+        }
+    }
+
+    Ok(subtasks)
 }
 
 /// Release a task, preserving context for handoff
@@ -352,6 +574,26 @@ pub fn update_workplan(input: &UpdateWorkplanInput, workspace_root: &Path) -> Re
 
         // Handle modifies
         if let Some(ref modifies) = input.workplan.modifies {
+            // Link all symbols from specified files
+            if let Some(ref files) = modifies.files {
+                for file in files {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, fq_name, line_count FROM symbols WHERE file = ?1"
+                    )?;
+                    let file_symbols: Vec<(i64, String, i64)> = stmt
+                        .query_map([file], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                        .filter_map(|r| r.ok())
+                        .collect();
+
+                    for (symbol_id, symbol_ref, _line_count) in file_symbols {
+                        conn.execute(
+                            "INSERT OR REPLACE INTO bead_symbols (bead_id, symbol_ref, symbol_id, relation, is_virtual) VALUES (?1, ?2, ?3, 'planned-modify', 0)",
+                            params![&input.bead_id, &symbol_ref, symbol_id],
+                        )?;
+                    }
+                }
+            }
+
             if let Some(ref symbols) = modifies.symbols {
                 for symbol_ref in symbols {
                     // Check if symbol exists
@@ -786,13 +1028,16 @@ mod tests {
     #[test]
     fn test_claim_task() {
         setup_test_db();
+        let workspace = std::path::PathBuf::from(".");
 
         let input = ClaimTaskInput {
             bead_id: "TEST-1".to_string(),
             agent_id: "agent-a".to_string(),
+            auto_split: false,
+            max_tokens: 8000,
         };
 
-        let result = claim_task(&input).unwrap();
+        let result = claim_task(&input, &workspace).unwrap();
         assert!(result.success);
         assert_eq!(result.owner, "agent-a");
     }
@@ -800,13 +1045,16 @@ mod tests {
     #[test]
     fn test_heartbeat() {
         setup_test_db();
+        let workspace = std::path::PathBuf::from(".");
 
         // First claim a task
         let claim = ClaimTaskInput {
             bead_id: "TEST-2".to_string(),
             agent_id: "agent-b".to_string(),
+            auto_split: false,
+            max_tokens: 8000,
         };
-        claim_task(&claim).unwrap();
+        claim_task(&claim, &workspace).unwrap();
 
         // Then heartbeat
         let input = HeartbeatInput {

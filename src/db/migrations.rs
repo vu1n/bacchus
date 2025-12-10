@@ -120,6 +120,22 @@ CREATE TABLE doc_sources (
 );
 "#,
     },
+    Migration {
+        version: 2,
+        name: "add_parent_bead_and_estimation",
+        sql: r#"
+-- Add parent_bead for subtask tracking
+ALTER TABLE tasks ADD COLUMN parent_bead TEXT REFERENCES tasks(bead_id);
+
+-- Add estimation fields for auto-split decisions
+ALTER TABLE tasks ADD COLUMN estimated_tokens INTEGER;
+ALTER TABLE tasks ADD COLUMN estimated_files INTEGER;
+ALTER TABLE tasks ADD COLUMN estimated_symbols INTEGER;
+
+-- Index for finding subtasks
+CREATE INDEX idx_tasks_parent ON tasks(parent_bead);
+"#,
+    },
 ];
 
 /// Get the current schema version from the database
@@ -189,7 +205,7 @@ mod tests {
         apply_migrations(&conn, true).unwrap();
 
         let version = get_current_version(&conn).unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2); // Update to latest migration version
 
         // Verify tables exist
         let count: i32 = conn
