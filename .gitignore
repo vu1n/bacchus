@@ -1,0 +1,15 @@
+# Rust
+/target
+Cargo.lock
+
+# Bacchus data
+.bacchus/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store

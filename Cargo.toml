@@ -1,0 +1,43 @@
+[package]
+name = "bacchus"
+version = "0.1.0"
+edition = "2021"
+description = "AST-aware coordination CLI for multi-agent work"
+license = "MIT"
+repository = "https://github.com/vu1n/bacchus"
+keywords = ["cli", "multi-agent", "coordination", "ast", "tree-sitter"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Tree-sitter
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-rust = "0.23"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
