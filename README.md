@@ -32,6 +32,12 @@ curl -sSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.sh
 
 This will download a pre-built binary if available, or build from source as a fallback.
 
+### Uninstall
+
+```bash
+curl -sSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/uninstall.sh | bash
+```
+
 ## Quick Start
 
 ```bash
