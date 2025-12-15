@@ -24,9 +24,13 @@ cargo build --release
 cp target/release/bacchus ~/.local/bin/
 ```
 
-### Pre-built Binaries
+### One-liner Install
 
-Coming soon.
+```bash
+curl -sSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.sh | bash
+```
+
+This will download a pre-built binary if available, or build from source as a fallback.
 
 ## Quick Start
 
