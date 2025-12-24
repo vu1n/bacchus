@@ -49,12 +49,27 @@ pub fn release_bead(
         "done" => {
             // Merge worktree branch to main, then cleanup
             if let Err(e) = worktree::merge_worktree(workspace_root, bead_id, "main") {
+                // Check if this is a merge conflict
+                let is_conflict = worktree::is_in_merge_conflict(workspace_root).unwrap_or(false);
+
+                let message = if is_conflict {
+                    format!(
+                        "Merge conflict detected. Options:\n\
+                         1. Resolve conflicts manually, then: bacchus resolve {}\n\
+                         2. Abort merge, keep working: bacchus abort {}\n\
+                         3. Discard all work: bacchus release {} --status failed",
+                        bead_id, bead_id, bead_id
+                    )
+                } else {
+                    format!("Failed to merge: {}", e)
+                };
+
                 return Ok(ReleaseOutput {
                     success: false,
                     bead_id: bead_id.to_string(),
                     status: status.to_string(),
                     merged: false,
-                    message: format!("Failed to merge: {}", e),
+                    message,
                 });
             }
             merged = true;

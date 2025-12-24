@@ -1,4 +1,6 @@
 //! Database connection management for Bacchus
+//!
+//! Override with BACCHUS_DB_PATH environment variable.
 
 use rusqlite::{Connection, Result};
 use std::fs;

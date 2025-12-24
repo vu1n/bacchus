@@ -34,6 +34,18 @@ pub enum Commands {
         status: String,
     },
 
+    /// Abort a failed merge for a bead
+    Abort {
+        /// The bead ID with a failed merge
+        bead_id: String,
+    },
+
+    /// Resolve a merge conflict after manual resolution
+    Resolve {
+        /// The bead ID with resolved conflicts
+        bead_id: String,
+    },
+
     /// Find stale claims and optionally clean them up
     Stale {
         /// Minutes without activity to consider stale
@@ -43,6 +55,9 @@ pub enum Commands {
         #[arg(long)]
         cleanup: bool,
     },
+
+    /// List all active claims and worktrees
+    List,
 
     // ========================================================================
     // Symbol Commands
@@ -65,6 +80,12 @@ pub enum Commands {
         /// Max results
         #[arg(short = 'n', long, default_value = "50")]
         limit: i32,
+        /// Full-text search query (searches name + docstring)
+        #[arg(long)]
+        search: Option<String>,
+        /// Enable fuzzy matching for typo tolerance
+        #[arg(long)]
+        fuzzy: bool,
     },
 
     /// Index a file or directory for symbol search

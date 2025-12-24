@@ -2,6 +2,7 @@
 
 mod beads;
 mod cli;
+mod config;
 mod db;
 mod indexer;
 mod tools;
@@ -14,13 +15,19 @@ use std::path::PathBuf;
 fn main() {
     let cli = Cli::parse();
 
-    // Initialize database
-    if let Err(e) = db::init_db(None, true) {
+    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Initialize database (check BACCHUS_DB_PATH env var first)
+    let db_path = std::env::var("BACCHUS_DB_PATH").ok();
+    let db_path_str = db_path.as_deref().unwrap_or_else(|| {
+        // Use default path relative to workspace
+        ".bacchus/bacchus.db"
+    });
+
+    if let Err(e) = db::init_db(Some(db_path_str), true) {
         eprintln!("Failed to initialize database: {}", e);
         std::process::exit(1);
     }
-
-    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     let result = match cli.command {
         // ====================================================================
@@ -40,6 +47,24 @@ fn main() {
                 ))
         }
 
+        Commands::Abort { bead_id } => {
+            tools::abort_merge(&bead_id, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                ))
+        }
+
+        Commands::Resolve { bead_id } => {
+            tools::resolve_merge(&bead_id, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                ))
+        }
+
         Commands::Stale { minutes, cleanup } => {
             tools::find_stale(minutes, cleanup, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
@@ -49,16 +74,22 @@ fn main() {
                 ))
         }
 
+        Commands::List => {
+            tools::list_claims().map(|r| serde_json::to_string_pretty(&r).unwrap())
+        }
+
         // ====================================================================
         // Symbol Commands
         // ====================================================================
-        Commands::Symbols { pattern, kind, file, lang, limit } => {
+        Commands::Symbols { pattern, kind, file, lang, limit, search, fuzzy } => {
             let input = tools::FindSymbolsInput {
                 pattern,
                 kind,
                 file,
                 language: lang,
                 limit: Some(limit),
+                search,
+                fuzzy,
             };
             tools::find_symbols(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
@@ -250,6 +281,17 @@ const WORKFLOW_DOC: &str = r#"
 
    # Failed - discard worktree, reset bead
    bacchus release <bead_id> --status failed
+   ```
+
+4. **Handle Merge Conflicts**
+   If release fails due to conflicts:
+   ```bash
+   # Option 1: Resolve manually then complete
+   # ... fix conflicts, git add resolved files ...
+   bacchus resolve <bead_id>
+
+   # Option 2: Abort and keep working
+   bacchus abort <bead_id>
    ```
 
 ## Stale Detection

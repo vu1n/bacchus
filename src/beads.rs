@@ -2,10 +2,12 @@
 //!
 //! Provides functions to interact with the beads issue tracking system.
 //! The beads database is stored at .beads/beads.db (SQLite) relative to the workspace root.
+//!
+//! Override with BEADS_DB_PATH environment variable.
 
 use rusqlite::{Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 // ============================================================================
@@ -33,9 +35,6 @@ pub enum BeadsError {
 
     #[error("Bead not found: {0}")]
     BeadNotFound(String),
-
-    #[error("Invalid status: {0}")]
-    InvalidStatus(String),
 }
 
 // ============================================================================
@@ -138,8 +137,12 @@ pub fn get_bead(workspace_root: &Path, bead_id: &str) -> Result<BeadInfo, BeadsE
 // ============================================================================
 
 /// Open a connection to the beads database
+///
+/// Checks BEADS_DB_PATH environment variable first, falls back to .beads/beads.db
 fn open_beads_db(workspace_root: &Path) -> Result<Connection, BeadsError> {
-    let db_path = workspace_root.join(".beads").join("beads.db");
+    let db_path = std::env::var("BEADS_DB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join(".beads").join("beads.db"));
 
     if !db_path.exists() {
         return Err(BeadsError::DatabaseNotFound(

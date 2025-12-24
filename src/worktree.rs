@@ -2,10 +2,19 @@
 //!
 //! This module manages git worktrees for beads, storing them in `.bacchus/worktrees/{bead_id}/`.
 //! Each worktree operates on a separate branch `bacchus/{bead_id}`.
+//!
+//! Override worktrees directory with BACCHUS_WORKTREES environment variable.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
+
+/// Get the worktrees directory, checking BACCHUS_WORKTREES env var first
+fn get_worktrees_dir(workspace_root: &Path) -> PathBuf {
+    std::env::var("BACCHUS_WORKTREES")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join(".bacchus/worktrees"))
+}
 
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
@@ -28,9 +37,9 @@ pub enum WorktreeError {
 }
 
 /// Create a new worktree for a bead
-/// Creates .bacchus/worktrees/{bead_id} on branch bacchus/{bead_id}
+/// Creates worktrees/{bead_id} on branch bacchus/{bead_id}
 pub fn create_worktree(workspace_root: &Path, bead_id: &str) -> Result<WorktreeInfo, WorktreeError> {
-    let worktrees_dir = workspace_root.join(".bacchus/worktrees");
+    let worktrees_dir = get_worktrees_dir(workspace_root);
     let worktree_path = worktrees_dir.join(bead_id);
     let branch_name = format!("bacchus/{}", bead_id);
 
@@ -73,7 +82,7 @@ pub fn create_worktree(workspace_root: &Path, bead_id: &str) -> Result<WorktreeI
 
 /// Remove a worktree (force=true discards uncommitted changes)
 pub fn remove_worktree(workspace_root: &Path, bead_id: &str, force: bool) -> Result<(), WorktreeError> {
-    let worktree_path = workspace_root.join(".bacchus/worktrees").join(bead_id);
+    let worktree_path = get_worktrees_dir(workspace_root).join(bead_id);
     let branch_name = format!("bacchus/{}", bead_id);
 
     // Check if worktree exists
@@ -106,74 +115,6 @@ pub fn remove_worktree(workspace_root: &Path, bead_id: &str, force: bool) -> Res
     delete_branch(workspace_root, &branch_name, force)?;
 
     Ok(())
-}
-
-/// List all active worktrees managed by bacchus
-pub fn list_worktrees(workspace_root: &Path) -> Result<Vec<WorktreeInfo>, WorktreeError> {
-    let output = Command::new("git")
-        .arg("worktree")
-        .arg("list")
-        .arg("--porcelain")
-        .current_dir(workspace_root)
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(WorktreeError::GitError(format!(
-            "Failed to list worktrees: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut worktrees = Vec::new();
-    let worktrees_prefix = workspace_root.join(".bacchus/worktrees");
-
-    let mut current_path: Option<PathBuf> = None;
-    let mut current_head: Option<String> = None;
-    let mut current_branch: Option<String> = None;
-
-    for line in stdout.lines() {
-        if line.is_empty() {
-            if let (Some(path), Some(head), Some(branch)) = (&current_path, &current_head, &current_branch) {
-                if path.starts_with(&worktrees_prefix) {
-                    if let Some(bead_id) = path.file_name().and_then(|n| n.to_str()) {
-                        worktrees.push(WorktreeInfo {
-                            bead_id: bead_id.to_string(),
-                            path: path.clone(),
-                            branch: branch.clone(),
-                            head_commit: head.clone(),
-                        });
-                    }
-                }
-            }
-            current_path = None;
-            current_head = None;
-            current_branch = None;
-        } else if let Some(path) = line.strip_prefix("worktree ") {
-            current_path = Some(PathBuf::from(path));
-        } else if let Some(head) = line.strip_prefix("HEAD ") {
-            current_head = Some(head.to_string());
-        } else if let Some(branch) = line.strip_prefix("branch ") {
-            current_branch = Some(branch.to_string());
-        }
-    }
-
-    // Handle last entry
-    if let (Some(path), Some(head), Some(branch)) = (current_path, current_head, current_branch) {
-        if path.starts_with(&worktrees_prefix) {
-            if let Some(bead_id) = path.file_name().and_then(|n| n.to_str()) {
-                worktrees.push(WorktreeInfo {
-                    bead_id: bead_id.to_string(),
-                    path,
-                    branch,
-                    head_commit: head,
-                });
-            }
-        }
-    }
-
-    Ok(worktrees)
 }
 
 /// Merge worktree branch to target (usually "main")
@@ -236,6 +177,128 @@ fn get_head_commit_in_path(path: &Path) -> Result<String, WorktreeError> {
     let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(commit)
 }
+
+// ============================================================================
+// Merge Conflict Handling
+// ============================================================================
+
+/// Check if the repository is in a merge conflict state
+pub fn is_in_merge_conflict(workspace_root: &Path) -> Result<bool, WorktreeError> {
+    let merge_head = workspace_root.join(".git/MERGE_HEAD");
+    Ok(merge_head.exists())
+}
+
+/// Get the branch name being merged (from MERGE_HEAD)
+pub fn get_merge_branch(workspace_root: &Path) -> Result<Option<String>, WorktreeError> {
+    let merge_head = workspace_root.join(".git/MERGE_HEAD");
+    if !merge_head.exists() {
+        return Ok(None);
+    }
+
+    // Get the branch name from the merge commit
+    let output = Command::new("git")
+        .args(["name-rev", "--name-only", "MERGE_HEAD"])
+        .current_dir(workspace_root)
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Remove remote prefix and ~N suffix if present (e.g., "remotes/origin/branch~1" -> "branch")
+    let cleaned = branch
+        .strip_prefix("remotes/origin/")
+        .unwrap_or(&branch)
+        .split('~')
+        .next()
+        .unwrap_or(&branch)
+        .to_string();
+
+    Ok(Some(cleaned))
+}
+
+/// Abort an in-progress merge
+pub fn abort_merge(workspace_root: &Path) -> Result<(), WorktreeError> {
+    let output = Command::new("git")
+        .args(["merge", "--abort"])
+        .current_dir(workspace_root)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WorktreeError::GitError(format!(
+            "Failed to abort merge: {}",
+            stderr
+        )));
+    }
+
+    Ok(())
+}
+
+/// Check for unresolved merge conflicts
+pub fn has_unresolved_conflicts(workspace_root: &Path) -> Result<bool, WorktreeError> {
+    // git ls-files -u lists unmerged files
+    let output = Command::new("git")
+        .args(["ls-files", "-u"])
+        .current_dir(workspace_root)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WorktreeError::GitError(format!(
+            "Failed to check conflicts: {}",
+            stderr
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(!stdout.trim().is_empty())
+}
+
+/// Complete a merge after conflicts have been resolved
+pub fn complete_merge(workspace_root: &Path) -> Result<(), WorktreeError> {
+    // First, check if there are still unresolved conflicts
+    if has_unresolved_conflicts(workspace_root)? {
+        return Err(WorktreeError::GitError(
+            "Cannot complete merge: unresolved conflicts remain".to_string(),
+        ));
+    }
+
+    // Stage all changes
+    let output = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(workspace_root)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WorktreeError::GitError(format!(
+            "Failed to stage changes: {}",
+            stderr
+        )));
+    }
+
+    // Commit using the MERGE_MSG (git will use it automatically)
+    let output = Command::new("git")
+        .args(["commit", "--no-edit"])
+        .current_dir(workspace_root)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WorktreeError::GitError(format!(
+            "Failed to complete merge: {}",
+            stderr
+        )));
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Branch Management
+// ============================================================================
 
 /// Delete a branch
 pub fn delete_branch(workspace_root: &Path, branch: &str, force: bool) -> Result<(), WorktreeError> {

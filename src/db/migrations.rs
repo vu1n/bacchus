@@ -161,6 +161,43 @@ CREATE TABLE claims (
 -- Keep symbols table as-is for code search
 "#,
     },
+    Migration {
+        version: 4,
+        name: "add_fts5_symbol_search",
+        sql: r#"
+-- Create FTS5 virtual table for full-text symbol search
+CREATE VIRTUAL TABLE symbols_fts USING fts5(
+    fq_name,
+    docstring,
+    content='symbols',
+    content_rowid='id'
+);
+
+-- Populate from existing data
+INSERT INTO symbols_fts(rowid, fq_name, docstring)
+SELECT id, fq_name, COALESCE(docstring, '') FROM symbols;
+
+-- Trigger to keep FTS in sync on INSERT
+CREATE TRIGGER symbols_fts_insert AFTER INSERT ON symbols BEGIN
+  INSERT INTO symbols_fts(rowid, fq_name, docstring)
+  VALUES (new.id, new.fq_name, COALESCE(new.docstring, ''));
+END;
+
+-- Trigger to keep FTS in sync on DELETE
+CREATE TRIGGER symbols_fts_delete AFTER DELETE ON symbols BEGIN
+  INSERT INTO symbols_fts(symbols_fts, rowid, fq_name, docstring)
+  VALUES('delete', old.id, old.fq_name, COALESCE(old.docstring, ''));
+END;
+
+-- Trigger to keep FTS in sync on UPDATE
+CREATE TRIGGER symbols_fts_update AFTER UPDATE ON symbols BEGIN
+  INSERT INTO symbols_fts(symbols_fts, rowid, fq_name, docstring)
+  VALUES('delete', old.id, old.fq_name, COALESCE(old.docstring, ''));
+  INSERT INTO symbols_fts(rowid, fq_name, docstring)
+  VALUES (new.id, new.fq_name, COALESCE(new.docstring, ''));
+END;
+"#,
+    },
 ];
 
 /// Get the current schema version from the database
@@ -230,7 +267,7 @@ mod tests {
         apply_migrations(&conn, true).unwrap();
 
         let version = get_current_version(&conn).unwrap();
-        assert_eq!(version, 3); // Update to latest migration version
+        assert_eq!(version, 4); // Update to latest migration version
 
         // Verify claims table exists
         let count: i32 = conn
