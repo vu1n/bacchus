@@ -23,7 +23,7 @@ pub struct NextOutput {
 
 pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
     // 1. Get ready beads from beads DB
-    let ready = beads::get_ready_beads(workspace_root).map_err(|e| {
+    let ready = beads::get_ready_beads().map_err(|e| {
         rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(1),
             Some(format!("Failed to get ready beads: {}", e)),
@@ -97,7 +97,7 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
     })?;
 
     // 6. Update bead status to in_progress
-    beads::update_bead_status(workspace_root, &bead.id, "in_progress").map_err(|e| {
+    beads::update_bead_status(&bead.id, "in_progress").map_err(|e| {
         rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(1),
             Some(format!("Failed to update bead status: {}", e)),

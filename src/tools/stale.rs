@@ -75,7 +75,7 @@ pub fn find_stale(
             }
 
             // Reset bead status to open for retry
-            if let Err(e) = beads::update_bead_status(workspace_root, &claim.bead_id, "open") {
+            if let Err(e) = beads::update_bead_status(&claim.bead_id, "open") {
                 eprintln!(
                     "Warning: Failed to reset bead status for {}: {}",
                     claim.bead_id, e

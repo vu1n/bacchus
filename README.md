@@ -53,6 +53,7 @@ bacchus release TASK-42 --status done
 | `next <agent_id>` | Get ready bead, create worktree, claim it |
 | `release <bead_id> --status done\|blocked\|failed` | Finish work |
 | `stale [--minutes N] [--cleanup]` | Find/cleanup abandoned claims |
+| `list` | List all active claims and worktrees |
 
 ### Symbols
 

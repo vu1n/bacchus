@@ -78,17 +78,17 @@ pub fn release_bead(
             worktree::remove_worktree(workspace_root, bead_id, false)?;
 
             // Update bead status
-            beads::update_bead_status(workspace_root, bead_id, "closed")?;
+            beads::update_bead_status(bead_id, "closed")?;
         }
         "blocked" => {
             // Keep worktree but release claim, mark bead as blocked
             // Don't remove worktree - might want to resume later
-            beads::update_bead_status(workspace_root, bead_id, "blocked")?;
+            beads::update_bead_status(bead_id, "blocked")?;
         }
         "failed" => {
             // Discard worktree (force), reset bead to open for retry
             worktree::remove_worktree(workspace_root, bead_id, true)?;
-            beads::update_bead_status(workspace_root, bead_id, "open")?;
+            beads::update_bead_status(bead_id, "open")?;
         }
         _ => {
             return Ok(ReleaseOutput {

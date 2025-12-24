@@ -76,6 +76,30 @@ bacchus stale --minutes 30
 bacchus stale --minutes 30 --cleanup
 ```
 
+## List Active Claims
+
+See all active claims and worktrees:
+
+```bash
+bacchus list
+```
+
+Output:
+```json
+{
+  "claims": [
+    {
+      "bead_id": "PROJ-42",
+      "agent_id": "agent-1",
+      "worktree_path": ".bacchus/worktrees/PROJ-42",
+      "branch_name": "bacchus/PROJ-42",
+      "age_minutes": 5
+    }
+  ],
+  "total": 1
+}
+```
+
 ## Code Search
 
 Index and search symbols:

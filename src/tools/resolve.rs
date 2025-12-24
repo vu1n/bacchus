@@ -85,7 +85,7 @@ pub fn resolve_merge(
     worktree::remove_worktree(workspace_root, bead_id, false)?;
 
     // 7. Update bead status
-    beads::update_bead_status(workspace_root, bead_id, "closed")?;
+    beads::update_bead_status(bead_id, "closed")?;
 
     // 8. Remove claim
     with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [bead_id]))?;

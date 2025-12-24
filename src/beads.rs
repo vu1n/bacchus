@@ -1,234 +1,166 @@
 //! Beads integration module
 //!
-//! Provides functions to interact with the beads issue tracking system.
-//! The beads database is stored at .beads/beads.db (SQLite) relative to the workspace root.
-//!
-//! Override with BEADS_DB_PATH environment variable.
+//! Provides functions to interact with the beads issue tracking system via the `bd` CLI.
+//! This ensures we use bd's business logic, views, and sync mechanisms.
 
-use rusqlite::{Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::process::Command;
 use thiserror::Error;
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/// Information about a bead (issue)
+/// Information about a bead (issue) - our internal representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeadInfo {
     pub id: String,
     pub title: String,
     pub description: Option<String>,
-    pub priority: String,
+    pub priority: i32,
     pub status: String,
+}
+
+/// Raw issue format from `bd --json` output
+#[derive(Debug, Deserialize)]
+struct BdIssue {
+    id: String,
+    title: String,
+    description: Option<String>,
+    status: String,
+    priority: i32,
+    // Other fields we don't need: issue_type, created_at, updated_at, etc.
+}
+
+impl From<BdIssue> for BeadInfo {
+    fn from(issue: BdIssue) -> Self {
+        BeadInfo {
+            id: issue.id,
+            title: issue.title,
+            description: issue.description,
+            priority: issue.priority,
+            status: issue.status,
+        }
+    }
 }
 
 /// Errors that can occur when interacting with beads
 #[derive(Debug, Error)]
 pub enum BeadsError {
-    #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    #[error("bd command failed: {0}")]
+    CommandFailed(String),
 
-    #[error("Beads database not found at path: {0}")]
-    DatabaseNotFound(String),
+    #[error("bd not found - is it installed?")]
+    BdNotFound,
+
+    #[error("Failed to parse bd output: {0}")]
+    ParseError(String),
 
     #[error("Bead not found: {0}")]
     BeadNotFound(String),
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-/// Find beads that are ready to work on (status = 'open', no blocking dependencies)
-pub fn get_ready_beads(workspace_root: &Path) -> Result<Vec<BeadInfo>, BeadsError> {
-    let conn = open_beads_db(workspace_root)?;
+/// Find beads that are ready to work on (via `bd ready --json`)
+pub fn get_ready_beads() -> Result<Vec<BeadInfo>, BeadsError> {
+    let output = Command::new("bd")
+        .args(["ready", "--json", "--quiet"])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BeadsError::BdNotFound
+            } else {
+                BeadsError::IoError(e)
+            }
+        })?;
 
-    // Query for open issues that have no blocking dependencies
-    let query = r#"
-        SELECT i.id, i.title, i.description, i.priority, i.status
-        FROM issues i
-        WHERE i.status = 'open'
-        AND NOT EXISTS (
-            SELECT 1 FROM dependencies d
-            JOIN issues blocker ON d.blocks_id = blocker.id
-            WHERE d.issue_id = i.id
-            AND blocker.status != 'done'
-            AND blocker.status != 'closed'
-        )
-        ORDER BY
-            CASE i.priority
-                WHEN 'P0' THEN 0
-                WHEN 'P1' THEN 1
-                WHEN 'P2' THEN 2
-                WHEN 'P3' THEN 3
-                ELSE 4
-            END,
-            i.id
-    "#;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BeadsError::CommandFailed(stderr.to_string()));
+    }
 
-    let mut stmt = conn.prepare(query)?;
-    let beads = stmt
-        .query_map([], |row| {
-            Ok(BeadInfo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                priority: row.get(3)?,
-                status: row.get(4)?,
-            })
-        })?
-        .collect::<SqlResult<Vec<_>>>()?;
+    let issues: Vec<BdIssue> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| BeadsError::ParseError(e.to_string()))?;
 
-    Ok(beads)
+    Ok(issues.into_iter().map(BeadInfo::from).collect())
 }
 
-/// Update a bead's status in the beads database
-pub fn update_bead_status(
-    workspace_root: &Path,
-    bead_id: &str,
-    status: &str,
-) -> Result<(), BeadsError> {
-    let conn = open_beads_db(workspace_root)?;
+/// Update a bead's status (via `bd update <id> --status <status>`)
+pub fn update_bead_status(bead_id: &str, status: &str) -> Result<(), BeadsError> {
+    let output = Command::new("bd")
+        .args(["update", bead_id, "--status", status, "--quiet"])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BeadsError::BdNotFound
+            } else {
+                BeadsError::IoError(e)
+            }
+        })?;
 
-    let updated = conn.execute(
-        "UPDATE issues SET status = ?1 WHERE id = ?2",
-        [status, bead_id],
-    )?;
-
-    if updated == 0 {
-        return Err(BeadsError::BeadNotFound(bead_id.to_string()));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("not found") || stderr.contains("no issue") {
+            return Err(BeadsError::BeadNotFound(bead_id.to_string()));
+        }
+        return Err(BeadsError::CommandFailed(stderr.to_string()));
     }
 
     Ok(())
 }
 
-/// Get details for a specific bead
-pub fn get_bead(workspace_root: &Path, bead_id: &str) -> Result<BeadInfo, BeadsError> {
-    let conn = open_beads_db(workspace_root)?;
-
-    let bead = conn
-        .query_row(
-            "SELECT id, title, description, priority, status FROM issues WHERE id = ?1",
-            [bead_id],
-            |row| {
-                Ok(BeadInfo {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    priority: row.get(3)?,
-                    status: row.get(4)?,
-                })
-            },
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                BeadsError::BeadNotFound(bead_id.to_string())
+/// Get details for a specific bead (via `bd show <id> --json`)
+pub fn get_bead(bead_id: &str) -> Result<BeadInfo, BeadsError> {
+    let output = Command::new("bd")
+        .args(["show", bead_id, "--json", "--quiet"])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BeadsError::BdNotFound
+            } else {
+                BeadsError::IoError(e)
             }
-            other => BeadsError::Database(other),
         })?;
 
-    Ok(bead)
-}
-
-// ============================================================================
-// Internal Helpers
-// ============================================================================
-
-/// Open a connection to the beads database
-///
-/// Checks BEADS_DB_PATH environment variable first, falls back to .beads/beads.db
-fn open_beads_db(workspace_root: &Path) -> Result<Connection, BeadsError> {
-    let db_path = std::env::var("BEADS_DB_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| workspace_root.join(".beads").join("beads.db"));
-
-    if !db_path.exists() {
-        return Err(BeadsError::DatabaseNotFound(
-            db_path.to_string_lossy().to_string(),
-        ));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("not found") || stderr.contains("no issue") {
+            return Err(BeadsError::BeadNotFound(bead_id.to_string()));
+        }
+        return Err(BeadsError::CommandFailed(stderr.to_string()));
     }
 
-    let conn = Connection::open(&db_path)?;
-    Ok(conn)
+    // bd show returns a single object, not an array
+    let issue: BdIssue = serde_json::from_slice(&output.stdout)
+        .map_err(|e| BeadsError::ParseError(e.to_string()))?;
+
+    Ok(BeadInfo::from(issue))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
-
-    fn setup_test_db(dir: &Path) -> SqlResult<()> {
-        let beads_dir = dir.join(".beads");
-        fs::create_dir_all(&beads_dir).unwrap();
-
-        let db_path = beads_dir.join("beads.db");
-        let conn = Connection::open(&db_path)?;
-
-        conn.execute(
-            "CREATE TABLE issues (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                description TEXT,
-                priority TEXT NOT NULL DEFAULT 'P2',
-                status TEXT NOT NULL DEFAULT 'open'
-            )",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE TABLE dependencies (
-                id INTEGER PRIMARY KEY,
-                issue_id TEXT NOT NULL,
-                blocks_id TEXT NOT NULL
-            )",
-            [],
-        )?;
-
-        conn.execute(
-            "INSERT INTO issues (id, title, priority, status) VALUES
-                ('BEAD-1', 'Ready task', 'P1', 'open'),
-                ('BEAD-2', 'Blocked task', 'P2', 'open'),
-                ('BEAD-3', 'Blocker', 'P1', 'in_progress')",
-            [],
-        )?;
-
-        conn.execute(
-            "INSERT INTO dependencies (issue_id, blocks_id) VALUES ('BEAD-2', 'BEAD-3')",
-            [],
-        )?;
-
-        Ok(())
-    }
 
     #[test]
-    fn test_get_ready_beads() {
-        let dir = tempdir().unwrap();
-        setup_test_db(dir.path()).unwrap();
+    fn test_bd_issue_to_bead_info() {
+        let bd_issue = BdIssue {
+            id: "TEST-1".to_string(),
+            title: "Test issue".to_string(),
+            description: Some("A description".to_string()),
+            status: "open".to_string(),
+            priority: 1,
+        };
 
-        let ready = get_ready_beads(dir.path()).unwrap();
-        assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].id, "BEAD-1");
-    }
-
-    #[test]
-    fn test_get_bead() {
-        let dir = tempdir().unwrap();
-        setup_test_db(dir.path()).unwrap();
-
-        let bead = get_bead(dir.path(), "BEAD-1").unwrap();
-        assert_eq!(bead.title, "Ready task");
-    }
-
-    #[test]
-    fn test_update_bead_status() {
-        let dir = tempdir().unwrap();
-        setup_test_db(dir.path()).unwrap();
-
-        update_bead_status(dir.path(), "BEAD-1", "in_progress").unwrap();
-        let bead = get_bead(dir.path(), "BEAD-1").unwrap();
-        assert_eq!(bead.status, "in_progress");
+        let bead: BeadInfo = bd_issue.into();
+        assert_eq!(bead.id, "TEST-1");
+        assert_eq!(bead.title, "Test issue");
+        assert_eq!(bead.priority, 1);
+        assert_eq!(bead.status, "open");
     }
 }
