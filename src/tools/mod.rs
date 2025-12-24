@@ -2,10 +2,12 @@
 //!
 //! Each tool corresponds to a CLI command.
 
-mod coordination;
+mod next;
+mod release;
+mod stale;
 mod symbols;
-mod communication;
 
-pub use coordination::*;
+pub use next::*;
+pub use release::*;
+pub use stale::*;
 pub use symbols::*;
-pub use communication::*;

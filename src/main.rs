@@ -1,9 +1,11 @@
-//! Bacchus - AST-aware coordination CLI for multi-agent work
+//! Bacchus - Worktree-based coordination CLI for multi-agent work
 
+mod beads;
 mod cli;
 mod db;
 mod indexer;
 mod tools;
+mod worktree;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -24,81 +26,27 @@ fn main() {
         // ====================================================================
         // Coordination Commands
         // ====================================================================
-        Commands::Claim { bead_id, agent_id, auto_split, max_tokens } => {
-            let input = tools::ClaimTaskInput {
-                bead_id,
-                agent_id,
-                auto_split,
-                max_tokens,
-            };
-            tools::claim_task(&input, &workspace_root).map(|r| serde_json::to_string_pretty(&r).unwrap())
+        Commands::Next { agent_id } => {
+            tools::next_task(&agent_id, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
-        Commands::Release { bead_id, agent_id, reason } => {
-            let input = tools::ReleaseTaskInput { bead_id, agent_id, reason };
-            tools::release_task(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+        Commands::Release { bead_id, status } => {
+            tools::release_bead(&bead_id, &status, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                ))
         }
 
-        Commands::Workplan {
-            bead_id,
-            agent_id,
-            modifies_files,
-            modifies_symbols,
-            modifies_modules,
-            creates_symbols,
-        } => {
-            let workplan = tools::Workplan {
-                modifies: if modifies_files.is_some() || modifies_symbols.is_some() || modifies_modules.is_some() {
-                    Some(tools::ModifiesSpec {
-                        files: modifies_files.map(|s| s.split(',').map(|s| s.trim().to_string()).collect()),
-                        symbols: modifies_symbols.map(|s| s.split(',').map(|s| s.trim().to_string()).collect()),
-                        modules: modifies_modules.map(|s| s.split(',').map(|s| s.trim().to_string()).collect()),
-                    })
-                } else {
-                    None
-                },
-                creates: creates_symbols.map(|s| tools::CreatesSpec {
-                    symbols: Some(s.split(',').map(|s| s.trim().to_string()).collect()),
-                }),
-            };
-            let input = tools::UpdateWorkplanInput { bead_id, agent_id, workplan };
-            tools::update_workplan(&input, &workspace_root).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Footprint { bead_id, agent_id, files, added, removed, breaking } => {
-            let diff_summary = tools::DiffSummary {
-                files_changed: files.split(',').map(|s| s.trim().to_string()).collect(),
-                lines_added: added,
-                lines_removed: removed,
-            };
-            // Breaking change format: symbol|kind|description (pipe-separated to avoid conflict with :: in symbols)
-            let breaking_changes: Option<Vec<tools::BreakingChange>> = breaking.map(|b| {
-                b.split(',').map(|change| {
-                    let parts: Vec<&str> = change.splitn(3, '|').collect();
-                    tools::BreakingChange {
-                        symbol: parts.first().unwrap_or(&"").to_string(),
-                        change_kind: parts.get(1).unwrap_or(&"").to_string(),
-                        description: parts.get(2).unwrap_or(&"").to_string(),
-                    }
-                }).collect()
-            });
-            let input = tools::ReportFootprintInput {
-                bead_id,
-                agent_id,
-                diff_summary,
-                breaking_changes,
-            };
-            tools::report_footprint(&input, &workspace_root).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Heartbeat { bead_id, agent_id } => {
-            let input = tools::HeartbeatInput { bead_id, agent_id };
-            tools::heartbeat(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Stale { minutes } => {
-            let input = tools::ListStaleTasksInput { threshold_minutes: Some(minutes) };
-            tools::list_stale_tasks(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+        Commands::Stale { minutes, cleanup } => {
+            tools::find_stale(minutes, cleanup, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                ))
         }
 
         // ====================================================================
@@ -115,14 +63,6 @@ fn main() {
             tools::find_symbols(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
-        Commands::Context { bead_id, tokens } => {
-            let input = tools::GetTaskContextInput {
-                bead_id,
-                token_budget: Some(tokens),
-            };
-            tools::get_task_context(&input, &workspace_root).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
         Commands::Index { path } => {
             match index_path(&path, &workspace_root) {
                 Ok(count) => Ok(serde_json::json!({
@@ -135,75 +75,6 @@ fn main() {
                     Some(e),
                 )),
             }
-        }
-
-        // ====================================================================
-        // Communication Commands
-        // ====================================================================
-        Commands::Notifications { agent_id, status, limit } => {
-            let input = tools::GetNotificationsInput {
-                agent_id,
-                status,
-                limit: Some(limit),
-            };
-            tools::get_notifications(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Resolve { notification_id, agent_id, action, notes } => {
-            let input = tools::ResolveNotificationInput {
-                notification_id,
-                agent_id,
-                action,
-                notes,
-            };
-            tools::resolve_notification(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Stakeholders { symbol, transitive } => {
-            let input = tools::QueryStakeholdersInput {
-                symbol,
-                include_transitive: Some(transitive),
-            };
-            tools::query_stakeholders(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Notify { symbol, agent_id, bead_id, kind, description, commit } => {
-            tools::notify_stakeholders(&symbol, &agent_id, &bead_id, &kind, &description, commit.as_deref())
-                .map(|count| serde_json::json!({ "notifications_sent": count }).to_string())
-        }
-
-        // ====================================================================
-        // Human Escalation Commands
-        // ====================================================================
-        Commands::Decide { agent_id, bead_id, question, options, context, symbols, urgency } => {
-            let input = tools::RequestHumanDecisionInput {
-                agent_id,
-                bead_id,
-                question,
-                options: options.split(',').map(|s| s.trim().to_string()).collect(),
-                context,
-                affected_symbols: symbols.map(|s| s.split(',').map(|s| s.trim().to_string()).collect()),
-                urgency: Some(urgency),
-            };
-            tools::request_human_decision(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Answer { notification_id, human_id, decision, notes } => {
-            let input = tools::SubmitHumanDecisionInput {
-                notification_id,
-                human_id,
-                decision,
-                notes,
-            };
-            tools::submit_human_decision(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
-
-        Commands::Pending { human, limit } => {
-            let input = tools::GetPendingDecisionsInput {
-                human_id: human,
-                limit: Some(limit),
-            };
-            tools::get_pending_decisions(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
         // ====================================================================
@@ -310,38 +181,45 @@ fn index_single_file(
 /// Get current status
 fn get_status() -> rusqlite::Result<serde_json::Value> {
     db::with_db(|conn| {
-        let total: i32 = conn.query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))?;
-        let claimed: i32 = conn.query_row("SELECT COUNT(*) FROM tasks WHERE owner IS NOT NULL", [], |r| r.get(0))?;
+        // Count claims
+        let claims_count: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM claims",
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
 
+        // Get active claims
         let mut stmt = conn.prepare(
-            "SELECT bead_id, owner, (strftime('%s', 'now') * 1000 - last_heartbeat) / 60000 as age FROM tasks WHERE owner IS NOT NULL"
+            "SELECT bead_id, agent_id, worktree_path, branch_name,
+                    (strftime('%s', 'now') * 1000 - claimed_at) / 60000 as age_minutes
+             FROM claims"
         )?;
-        let active: Vec<serde_json::Value> = stmt
+        let claims: Vec<serde_json::Value> = stmt
             .query_map([], |row| {
                 Ok(serde_json::json!({
                     "bead_id": row.get::<_, String>(0)?,
-                    "owner": row.get::<_, String>(1)?,
-                    "heartbeat_age_minutes": row.get::<_, i64>(2)?
+                    "agent_id": row.get::<_, String>(1)?,
+                    "worktree_path": row.get::<_, String>(2)?,
+                    "branch": row.get::<_, String>(3)?,
+                    "age_minutes": row.get::<_, i64>(4)?
                 }))
             })?
             .filter_map(|r| r.ok())
             .collect();
 
-        let pending_notifications: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM notifications WHERE status = 'pending'",
+        // Count symbols indexed
+        let symbols_count: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM symbols",
             [],
             |r| r.get(0),
-        )?;
+        ).unwrap_or(0);
 
         Ok(serde_json::json!({
-            "tasks": {
-                "total": total,
-                "claimed": claimed,
-                "active": active
+            "claims": {
+                "count": claims_count,
+                "active": claims
             },
-            "notifications": {
-                "pending": pending_notifications
-            }
+            "symbols_indexed": symbols_count
         }))
     })
 }
@@ -351,47 +229,49 @@ const WORKFLOW_DOC: &str = r#"
 
 ## Agent Workflow
 
-1. **Start Work**
+1. **Get Work**
    ```bash
-   bacchus claim <bead_id> <agent_id>
+   bacchus next <agent_id>
+   ```
+   - Finds ready bead from beads DB (open, no blockers)
+   - Creates worktree at .bacchus/worktrees/{bead_id}/
+   - Claims bead, updates status to in_progress
+
+2. **Do Work**
+   Work in the worktree. All changes are isolated on branch bacchus/{bead_id}.
+
+3. **Release When Done**
+   ```bash
+   # Success - merge to main and cleanup
+   bacchus release <bead_id> --status done
+
+   # Blocked - keep worktree, release claim
+   bacchus release <bead_id> --status blocked
+
+   # Failed - discard worktree, reset bead
+   bacchus release <bead_id> --status failed
    ```
 
-2. **Declare Intent**
-   ```bash
-   bacchus workplan <bead_id> <agent_id> \
-     --modifies-symbols "Foo::bar,Baz::qux" \
-     --creates-symbols "NewClass::method"
-   ```
+## Stale Detection
 
-3. **Keep Alive** (every 5 minutes)
-   ```bash
-   bacchus heartbeat <bead_id> <agent_id>
-   ```
-
-4. **Report Changes**
-   ```bash
-   bacchus footprint <bead_id> <agent_id> \
-     --files "src/foo.ts,src/bar.ts" \
-     --added 50 --removed 10
-   ```
-
-5. **Release When Done**
-   ```bash
-   bacchus release <bead_id> <agent_id>
-   ```
-
-## Handling Conflicts
-
-- Check overlaps in workplan response
-- Query stakeholders before breaking changes
-- Use notifications to coordinate
-
-## Human Escalation
-
-When stuck on a decision:
+Find abandoned claims:
 ```bash
-bacchus decide <agent_id> <bead_id> "Which approach?" \
-  --options "Option A,Option B,Option C" \
-  --urgency high
+bacchus stale --minutes 30
+
+# Auto-cleanup stale claims
+bacchus stale --minutes 30 --cleanup
+```
+
+## Code Search
+
+```bash
+bacchus index src/
+bacchus symbols --pattern "User*" --kind class
+```
+
+## Status
+
+```bash
+bacchus status
 ```
 "#;

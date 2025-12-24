@@ -136,6 +136,31 @@ ALTER TABLE tasks ADD COLUMN estimated_symbols INTEGER;
 CREATE INDEX idx_tasks_parent ON tasks(parent_bead);
 "#,
     },
+    Migration {
+        version: 3,
+        name: "simplify_schema_claims_only",
+        sql: r#"
+-- Drop old tables we no longer need
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS symbol_calls;
+DROP TABLE IF EXISTS doc_fragments;
+DROP TABLE IF EXISTS doc_sources;
+DROP TABLE IF EXISTS bead_symbols;
+DROP TABLE IF EXISTS tasks;
+
+-- Create simplified claims table
+CREATE TABLE claims (
+  bead_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  worktree_path TEXT NOT NULL,
+  branch_name TEXT NOT NULL,
+  start_commit TEXT NOT NULL,
+  claimed_at INTEGER NOT NULL
+);
+
+-- Keep symbols table as-is for code search
+"#,
+    },
 ];
 
 /// Get the current schema version from the database
@@ -205,11 +230,11 @@ mod tests {
         apply_migrations(&conn, true).unwrap();
 
         let version = get_current_version(&conn).unwrap();
-        assert_eq!(version, 2); // Update to latest migration version
+        assert_eq!(version, 3); // Update to latest migration version
 
-        // Verify tables exist
+        // Verify claims table exists
         let count: i32 = conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='claims'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
     }

@@ -4,6 +4,7 @@ set -e
 REPO="vu1n/bacchus"
 INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
+SKILL_DIR="$HOME/.claude/skills/bacchus"
 
 # Colors
 RED='\033[0;31m'
@@ -93,6 +94,62 @@ build_from_source() {
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 }
 
+# Install Claude Code skill
+install_skill() {
+    info "Installing Claude Code skill..."
+
+    mkdir -p "$SKILL_DIR"
+
+    # Download SKILL.md from repo
+    local skill_url="https://raw.githubusercontent.com/${REPO}/main/skills/SKILL.md"
+
+    if curl -sLf -o "${SKILL_DIR}/SKILL.md" "$skill_url"; then
+        info "Skill installed to: ${SKILL_DIR}/SKILL.md"
+    else
+        warn "Could not download skill file, creating from template..."
+        cat > "${SKILL_DIR}/SKILL.md" << 'SKILL_EOF'
+---
+name: bacchus
+description: Multi-agent coordination CLI for codebases. Use when orchestrating parallel agents, claiming tasks, detecting symbol conflicts, or notifying stakeholders of breaking changes. Invoke when user mentions coordination, parallel agents, multiple agents, task claiming, or conflict detection.
+---
+
+# Bacchus - Worktree-Based Agent Coordination
+
+Lightweight coordination for parallel agent work. Uses git worktrees for isolation and integrates with beads for task management.
+
+## Core Workflow
+
+```
+next → work in worktree → release
+```
+
+### Get Work
+```bash
+bacchus next <agent_id>
+```
+
+### Release
+```bash
+bacchus release <bead_id> --status done|blocked|failed
+```
+
+### Stale Detection
+```bash
+bacchus stale --minutes 30 --cleanup
+```
+
+## Code Search
+```bash
+bacchus index src/
+bacchus symbols --pattern "User*"
+```
+
+Run `bacchus workflow` for full documentation.
+SKILL_EOF
+        info "Skill template installed"
+    fi
+}
+
 # Main installation
 main() {
     local os arch
@@ -111,7 +168,7 @@ main() {
 
     # Verify installation
     if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        info "Installed to: ${INSTALL_DIR}/${BINARY_NAME}"
+        info "Binary installed to: ${INSTALL_DIR}/${BINARY_NAME}"
 
         # Check if in PATH
         if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
@@ -121,6 +178,9 @@ main() {
             echo ""
             echo "Add this to your ~/.bashrc or ~/.zshrc"
         fi
+
+        # Install Claude Code skill
+        install_skill
 
         info "Installation complete!"
         "${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || true
