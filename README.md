@@ -1,63 +1,47 @@
 # Bacchus
 
-AST-aware coordination CLI for multi-agent work on codebases.
+Worktree-based coordination CLI for multi-agent work on codebases.
 
-Bacchus helps AI agents coordinate when working on the same codebase by tracking:
-- **Task ownership** - who's working on what
-- **Symbol conflicts** - detecting when agents modify overlapping code
-- **Breaking changes** - notifying stakeholders of API changes
-- **Human escalation** - routing decisions that need human input
+Bacchus helps AI agents coordinate when working on the same codebase by:
+- **Worktree isolation** - each agent works in its own git worktree
+- **Beads integration** - automatically picks ready tasks and updates status
+- **Stale detection** - finds and cleans up abandoned work
 
 ## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.sh | bash
+```
+
+This installs the binary and Claude Code skill.
 
 ### From Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/vu1n/bacchus.git
 cd bacchus
-
-# Build release binary
 cargo build --release
-
-# Install to PATH (optional)
 cp target/release/bacchus ~/.local/bin/
 ```
-
-### One-liner Install
-
-```bash
-curl -sSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.sh | bash
-```
-
-This will download a pre-built binary if available, or build from source as a fallback.
 
 ### Uninstall
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/uninstall.sh | bash
 ```
 
 ## Quick Start
 
 ```bash
-# Initialize bacchus in your project
-mkdir -p .bacchus
+# Get next ready task (creates worktree, claims it)
+bacchus next agent-1
 
-# Index your codebase
-bacchus index src
+# Work in the isolated worktree
+cd .bacchus/worktrees/TASK-42
+# ... make changes, commit ...
 
-# Claim a task
-bacchus claim TASK-1 agent-a
-
-# Declare what you plan to modify
-bacchus workplan TASK-1 agent-a --modifies-symbols "MyClass::method"
-
-# Keep your task alive (run every 5 minutes)
-bacchus heartbeat TASK-1 agent-a
-
-# Release when done
-bacchus release TASK-1 agent-a
+# Release when done (merges to main, cleans up)
+bacchus release TASK-42 --status done
 ```
 
 ## Commands
@@ -66,84 +50,111 @@ bacchus release TASK-1 agent-a
 
 | Command | Description |
 |---------|-------------|
-| `claim <bead_id> <agent_id>` | Claim ownership of a task |
-| `release <bead_id> <agent_id>` | Release a claimed task |
-| `workplan <bead_id> <agent_id> [opts]` | Declare symbols you plan to modify |
-| `footprint <bead_id> <agent_id> --files <files>` | Report actual changes made |
-| `heartbeat <bead_id> <agent_id>` | Keep task alive, get notifications |
-| `stale [--minutes N]` | Find abandoned tasks |
+| `next <agent_id>` | Get ready bead, create worktree, claim it |
+| `release <bead_id> --status done\|blocked\|failed` | Finish work |
+| `stale [--minutes N] [--cleanup]` | Find/cleanup abandoned claims |
 
 ### Symbols
 
 | Command | Description |
 |---------|-------------|
-| `index <path>` | Index files/directories for symbol tracking |
+| `index <path>` | Index files for symbol search |
 | `symbols [--pattern X] [--kind Y]` | Search for symbols |
-| `context <bead_id>` | Get code context for a task |
-
-### Communication
-
-| Command | Description |
-|---------|-------------|
-| `notifications <agent_id>` | Get pending notifications |
-| `resolve <id> <agent_id> <action>` | Acknowledge/resolve a notification |
-| `stakeholders <symbol>` | Find who cares about a symbol |
-| `notify <symbol> <agent_id> <bead_id> <kind> <desc>` | Notify stakeholders of a change |
-
-### Human Escalation
-
-| Command | Description |
-|---------|-------------|
-| `decide <agent_id> <bead_id> <question> --options "A,B,C"` | Request human decision |
-| `answer <id> <human_id> <decision>` | Submit a human decision |
-| `pending` | Get pending human decisions |
 
 ### Info
 
 | Command | Description |
 |---------|-------------|
-| `status` | Show current tasks and notifications |
+| `status` | Show current claims |
 | `workflow` | Print protocol documentation |
 
-## Output Format
+## Workflow
 
-All commands output JSON to stdout:
+```
+next → work in worktree → release
+```
+
+### 1. Get Work
 
 ```bash
-$ bacchus claim TASK-1 agent-a
+bacchus next agent-1
+```
+
+Output:
+```json
 {
   "success": true,
-  "bead_id": "TASK-1",
-  "owner": "agent-a",
-  "message": "Task claimed successfully"
+  "bead_id": "TASK-42",
+  "title": "Implement auth",
+  "worktree_path": ".bacchus/worktrees/TASK-42",
+  "branch": "bacchus/TASK-42"
 }
+```
+
+### 2. Do Work
+
+Work in the worktree. All changes are isolated on branch `bacchus/{bead_id}`.
+
+```bash
+cd .bacchus/worktrees/TASK-42
+# make changes
+git add . && git commit -m "Implement auth"
+```
+
+### 3. Release
+
+```bash
+# Success - merge to main, cleanup worktree, close bead
+bacchus release TASK-42 --status done
+
+# Blocked - keep worktree, mark bead blocked
+bacchus release TASK-42 --status blocked
+
+# Failed - discard worktree, reset bead to open
+bacchus release TASK-42 --status failed
+```
+
+## Stale Detection
+
+Find and cleanup abandoned claims:
+
+```bash
+# List stale claims (>30 min old)
+bacchus stale --minutes 30
+
+# Auto-cleanup
+bacchus stale --minutes 30 --cleanup
+```
+
+## Relationship to Beads
+
+```
+beads    → What work needs to be done (issues, deps, status)
+bacchus  → Who's doing what right now (claims, worktrees)
+```
+
+Bacchus reads from beads to find ready work and updates bead status on claim/release.
+
+## Directory Structure
+
+```
+project/
+├── .bacchus/
+│   ├── bacchus.db          # Claims database
+│   └── worktrees/
+│       ├── TASK-42/        # Agent 1's isolated worktree
+│       └── TASK-43/        # Agent 2's isolated worktree
+└── .beads/
+    └── beads.db            # Task database
 ```
 
 ## Supported Languages
 
-Bacchus uses native tree-sitter for fast AST parsing:
-
+Symbol indexing supports:
 - TypeScript / JavaScript
 - Python
 - Go
 - Rust
-
-## Agent Workflow
-
-```
-1. claim        - Take ownership of a task
-2. workplan     - Declare what you'll modify (enables conflict detection)
-3. heartbeat    - Keep alive every 5 min (check for notifications)
-4. footprint    - Report changes when done
-5. release      - Hand back the task
-```
-
-## Performance
-
-- **Binary size**: ~6MB
-- **Startup time**: ~5ms
-- **Index 100 files**: ~200ms
-- **Symbol query**: <1ms
 
 ## License
 
