@@ -76,13 +76,13 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
         )
     })?;
 
-    // 5. Record claim in bacchus DB
+    // 5. Record claim in bacchus DB (with rollback on failure)
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    with_db(|conn| {
+    let claim_result = with_db(|conn| {
         conn.execute(
             "INSERT INTO claims (bead_id, agent_id, worktree_path, branch_name, start_commit, claimed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -94,15 +94,26 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
                 now
             ],
         )
-    })?;
+    });
 
-    // 6. Update bead status to in_progress
-    beads::update_bead_status(&bead.id, "in_progress").map_err(|e| {
-        rusqlite::Error::SqliteFailure(
+    if let Err(e) = claim_result {
+        // Rollback: remove orphaned worktree
+        let _ = worktree::remove_worktree(workspace_root, &bead.id, true);
+        return Err(e);
+    }
+
+    // 6. Update bead status to in_progress (with rollback on failure)
+    let status_result = beads::update_bead_status(&bead.id, "in_progress");
+
+    if let Err(e) = status_result {
+        // Rollback: remove worktree and claim
+        let _ = worktree::remove_worktree(workspace_root, &bead.id, true);
+        let _ = with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [&bead.id]));
+        return Err(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(1),
             Some(format!("Failed to update bead status: {}", e)),
-        )
-    })?;
+        ));
+    }
 
     Ok(NextOutput {
         success: true,

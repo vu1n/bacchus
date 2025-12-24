@@ -130,6 +130,75 @@ bacchus  → Who's doing what right now (claims, worktrees)
 
 Bacchus reads from beads to find ready work and updates bead status on claim/release. Use beads for any workflow. Add bacchus when multiple agents work in parallel to ensure isolation via worktrees.
 
+## Merge Conflict Handling
+
+When `release --status done` encounters a conflict:
+
+```bash
+# Option 1: Resolve manually, then complete
+# (fix conflicts in files, git add them)
+bacchus resolve PROJ-42
+
+# Option 2: Abort merge, keep working
+bacchus abort PROJ-42
+
+# Option 3: Discard all work
+bacchus release PROJ-42 --status failed
+```
+
+## Orchestrator Pattern
+
+Main agent has broad context (project overview, all tasks). Sub-agents have focused context (single task + worktree).
+
+### Using Claude Code Task Tool (Primary)
+
+1. **Claim task**:
+   ```bash
+   bacchus next worker-1
+   # Returns: { bead_id, title, description, worktree_path }
+   ```
+
+2. **Spawn sub-agent**:
+   ```
+   Task tool:
+     subagent_type: "general-purpose"
+     prompt: |
+       Work in {worktree_path} on task {bead_id}: {title}
+
+       {description}
+
+       Commit changes when done.
+     run_in_background: true
+   ```
+
+3. **Monitor**: `TaskOutput(task_id)`
+
+4. **Release**: `bacchus release {bead_id} --status done|failed`
+
+5. **Repeat** as needed - scale up/down based on workload
+
+### Why Sequential Claiming Works
+
+```
+bacchus next worker-1  → claims BEAD-1, marks in_progress
+bacchus next worker-2  → BEAD-1 taken, gets BEAD-2
+bacchus next worker-3  → BEAD-1,2 taken, gets BEAD-3
+```
+
+No race conditions. Each `next` call atomically claims the highest-priority ready bead.
+
+### Using Terminal Multiplexer (Human Monitoring)
+
+For visual debugging with zellij or tmux:
+
+```bash
+# Each pane runs an isolated agent
+zellij run -- claude --print "Work on BEAD-1 in .bacchus/worktrees/BEAD-1"
+zellij run -- claude --print "Work on BEAD-2 in .bacchus/worktrees/BEAD-2"
+```
+
+Each pane shows real-time agent output. Useful for debugging but main agent can't easily read structured results.
+
 ## Directory Structure
 
 ```
