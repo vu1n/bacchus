@@ -8,4 +8,4 @@ mod types;
 
 pub use parser::Parser;
 pub use extractor::extract_symbols;
-pub use types::Language;
+pub use types::{ExtractedSymbol, Language};

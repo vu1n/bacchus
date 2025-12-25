@@ -161,45 +161,62 @@ fn main() {
     db::close_db();
 }
 
-/// Index a file or directory
+/// Index a file or directory (parallelized with rayon)
 fn index_path(path: &str, workspace_root: &PathBuf) -> Result<usize, String> {
+    use rayon::prelude::*;
     use walkdir::WalkDir;
 
     let target = workspace_root.join(path);
-    let mut parser = indexer::Parser::new().map_err(|e| e.to_string())?;
-    let mut count = 0;
 
     if target.is_file() {
-        if let Err(e) = index_single_file(&mut parser, &target, workspace_root) {
-            return Err(e);
-        }
-        count = 1;
-    } else if target.is_dir() {
-        for entry in WalkDir::new(&target)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let ext = entry.path().extension().and_then(|e| e.to_str()).unwrap_or("");
-            if indexer::Language::from_extension(ext).is_some() {
-                if index_single_file(&mut parser, entry.path(), workspace_root).is_ok() {
-                    count += 1;
-                }
-            }
-        }
-    } else {
+        // Single file - no parallelization needed
+        let mut parser = indexer::Parser::new().map_err(|e| e.to_string())?;
+        let symbols = parse_file(&mut parser, &target, workspace_root)?;
+        store_symbols(&symbols)?;
+        return Ok(1);
+    }
+
+    if !target.is_dir() {
         return Err(format!("Path not found: {}", path));
     }
 
-    Ok(count)
+    // Collect all indexable files first
+    let files: Vec<PathBuf> = WalkDir::new(&target)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            let ext = e.path().extension().and_then(|e| e.to_str()).unwrap_or("");
+            indexer::Language::from_extension(ext).is_some()
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    // Parse files in parallel (each thread gets its own parser)
+    let all_symbols: Vec<indexer::ExtractedSymbol> = files
+        .par_iter()
+        .filter_map(|file_path| {
+            // Create parser per thread (tree-sitter parsers aren't thread-safe)
+            let mut parser = indexer::Parser::new().ok()?;
+            parse_file(&mut parser, file_path, workspace_root).ok()
+        })
+        .flatten()
+        .collect();
+
+    let file_count = files.len();
+
+    // Batch insert all symbols (single DB transaction)
+    store_symbols(&all_symbols)?;
+
+    Ok(file_count)
 }
 
-/// Index a single file
-fn index_single_file(
+/// Parse a single file and extract symbols
+fn parse_file(
     parser: &mut indexer::Parser,
     file_path: &std::path::Path,
     workspace_root: &PathBuf,
-) -> Result<(), String> {
+) -> Result<Vec<indexer::ExtractedSymbol>, String> {
     let content = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
     let relative_path = file_path
         .strip_prefix(workspace_root)
@@ -208,11 +225,13 @@ fn index_single_file(
         .to_string();
 
     let (tree, language) = parser.parse_file(&content, &relative_path).map_err(|e| e.to_string())?;
-    let symbols = indexer::extract_symbols(&tree, &relative_path, &content, language);
+    Ok(indexer::extract_symbols(&tree, &relative_path, &content, language))
+}
 
-    // Store symbols in database
+/// Store symbols in database (batched in single transaction)
+fn store_symbols(symbols: &[indexer::ExtractedSymbol]) -> Result<(), String> {
     db::with_db(|conn| {
-        for sym in &symbols {
+        for sym in symbols {
             conn.execute(
                 "INSERT OR REPLACE INTO symbols (file, fq_name, kind, span_start_line, span_end_line, line_count, hash, docstring, language) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
@@ -229,9 +248,7 @@ fn index_single_file(
             )?;
         }
         Ok(())
-    }).map_err(|e: rusqlite::Error| e.to_string())?;
-
-    Ok(())
+    }).map_err(|e: rusqlite::Error| e.to_string())
 }
 
 /// Get current status
