@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod indexer;
 mod tools;
+mod updater;
 mod worktree;
 
 use clap::Parser;
@@ -118,6 +119,30 @@ fn main() {
         Commands::Workflow => {
             println!("{}", WORKFLOW_DOC);
             Ok(String::new())
+        }
+
+        // ====================================================================
+        // Update Commands
+        // ====================================================================
+        Commands::SelfUpdate => {
+            updater::self_update().map(|v| {
+                serde_json::json!({
+                    "success": true,
+                    "updated_to": v
+                }).to_string()
+            }).map_err(|e| rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
+        }
+
+        Commands::CheckUpdate => {
+            updater::check_for_updates().map(|info| {
+                serde_json::to_string_pretty(&info).unwrap()
+            }).map_err(|e| rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e.to_string()),
+            ))
         }
     };
 

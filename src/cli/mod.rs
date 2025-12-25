@@ -103,4 +103,10 @@ pub enum Commands {
 
     /// Print workflow documentation
     Workflow,
+
+    /// Update bacchus to the latest version
+    SelfUpdate,
+
+    /// Check if a newer version is available
+    CheckUpdate,
 }

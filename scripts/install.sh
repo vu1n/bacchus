@@ -54,14 +54,24 @@ try_download_binary() {
 
     local binary_name="bacchus-${os}-${arch}"
     local download_url="https://github.com/${REPO}/releases/download/${latest_tag}/${binary_name}"
+    local temp_binary="${INSTALL_DIR}/${BINARY_NAME}.tmp"
 
     info "Downloading from: $download_url"
 
-    if curl -sLf -o "${INSTALL_DIR}/${BINARY_NAME}" "$download_url"; then
-        chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
-        return 0
+    # Download to temp file first
+    if curl -sLf -o "$temp_binary" "$download_url"; then
+        chmod +x "$temp_binary"
+
+        # Atomic replace
+        if mv "$temp_binary" "${INSTALL_DIR}/${BINARY_NAME}"; then
+            info "Binary installed successfully"
+            return 0
+        else
+            error "Failed to move binary to ${INSTALL_DIR}/${BINARY_NAME}"
+        fi
     else
         warn "Binary not available for ${os}-${arch}"
+        rm -f "$temp_binary"  # Clean up partial download
         return 1
     fi
 }
@@ -90,8 +100,16 @@ build_from_source() {
     cargo build --release
 
     info "Installing binary..."
-    cp "target/release/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+    local temp_binary="${INSTALL_DIR}/${BINARY_NAME}.tmp"
+    cp "target/release/${BINARY_NAME}" "$temp_binary"
+    chmod +x "$temp_binary"
+
+    # Atomic replace
+    if mv "$temp_binary" "${INSTALL_DIR}/${BINARY_NAME}"; then
+        info "Binary installed successfully"
+    else
+        error "Failed to move binary to ${INSTALL_DIR}/${BINARY_NAME}"
+    fi
 }
 
 # Install Claude Code skill

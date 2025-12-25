@@ -34,6 +34,11 @@ hex = "0.4"
 thiserror = "2"
 walkdir = "2"
 
+# HTTP for self-update
+ureq = { version = "2", features = ["json"] }
+flate2 = "1"
+tar = "0.4"
+
 # Fuzzy matching
 strsim = "0.11"
 
