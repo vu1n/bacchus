@@ -236,6 +236,8 @@ fn index_single_file(
 
 /// Get current status
 fn get_status() -> rusqlite::Result<serde_json::Value> {
+    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
     db::with_db(|conn| {
         // Count claims
         let claims_count: i32 = conn.query_row(
@@ -244,24 +246,29 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             |r| r.get(0),
         ).unwrap_or(0);
 
-        // Get active claims
+        // Get active claims with worktree paths
         let mut stmt = conn.prepare(
             "SELECT bead_id, agent_id, worktree_path, branch_name,
                     (strftime('%s', 'now') * 1000 - claimed_at) / 60000 as age_minutes
              FROM claims"
         )?;
-        let claims: Vec<serde_json::Value> = stmt
+        let claims: Vec<(serde_json::Value, String)> = stmt
             .query_map([], |row| {
-                Ok(serde_json::json!({
+                let worktree_path: String = row.get(2)?;
+                Ok((serde_json::json!({
                     "bead_id": row.get::<_, String>(0)?,
                     "agent_id": row.get::<_, String>(1)?,
-                    "worktree_path": row.get::<_, String>(2)?,
+                    "worktree_path": &worktree_path,
                     "branch": row.get::<_, String>(3)?,
                     "age_minutes": row.get::<_, i64>(4)?
-                }))
+                }), worktree_path))
             })?
             .filter_map(|r| r.ok())
             .collect();
+
+        let claim_values: Vec<serde_json::Value> = claims.iter().map(|(v, _)| v.clone()).collect();
+        let claimed_worktrees: std::collections::HashSet<String> =
+            claims.iter().map(|(_, p)| p.clone()).collect();
 
         // Count symbols indexed
         let symbols_count: i32 = conn.query_row(
@@ -270,12 +277,50 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             |r| r.get(0),
         ).unwrap_or(0);
 
+        // Get ready beads count from beads
+        let ready_count = beads::get_ready_beads()
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        // Check for orphaned worktrees (worktrees on disk without claims)
+        let worktrees_dir = std::env::var("BACCHUS_WORKTREES")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| workspace_root.join(".bacchus/worktrees"));
+
+        let mut orphaned_worktrees: Vec<String> = Vec::new();
+        if worktrees_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&worktrees_dir) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let path_str = path.to_string_lossy().to_string();
+                        if !claimed_worktrees.contains(&path_str) {
+                            orphaned_worktrees.push(
+                                path.file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| path_str)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for broken claims (claims where worktree doesn't exist)
+        let broken_claims: Vec<String> = claims.iter()
+            .filter(|(_, path)| !PathBuf::from(path).exists())
+            .filter_map(|(v, _)| v.get("bead_id").and_then(|b| b.as_str()).map(String::from))
+            .collect();
+
         Ok(serde_json::json!({
             "claims": {
                 "count": claims_count,
-                "active": claims
+                "active": claim_values
             },
-            "symbols_indexed": symbols_count
+            "symbols_indexed": symbols_count,
+            "ready_beads": ready_count,
+            "orphaned_worktrees": orphaned_worktrees,
+            "broken_claims": broken_claims
         }))
     })
 }
