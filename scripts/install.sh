@@ -120,6 +120,7 @@ install_skill() {
 
     # Download SKILL.md from repo
     local skill_url="https://raw.githubusercontent.com/${REPO}/main/skills/SKILL.md"
+    local planner_url="https://raw.githubusercontent.com/${REPO}/main/skills/beads-planner.md"
 
     if curl -sLf -o "${SKILL_DIR}/SKILL.md" "$skill_url"; then
         info "Skill installed to: ${SKILL_DIR}/SKILL.md"
@@ -165,6 +166,13 @@ bacchus symbols --pattern "User*"
 Run `bacchus workflow` for full documentation.
 SKILL_EOF
         info "Skill template installed"
+    fi
+
+    # Install planner skill
+    if curl -sLf -o "${SKILL_DIR}/beads-planner.md" "$planner_url"; then
+        info "Planner skill installed to: ${SKILL_DIR}/beads-planner.md"
+    else
+        warn "Could not download beads-planner.md"
     fi
 }
 

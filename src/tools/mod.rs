@@ -2,18 +2,21 @@
 //!
 //! Each tool corresponds to a CLI command.
 
-mod abort;
-mod list;
-mod next;
-mod release;
-mod resolve;
-mod stale;
-mod symbols;
+pub mod context;
+pub mod list;
+pub mod next;
+pub mod release;
+pub mod resolve;
+pub mod abort;
+pub mod stale;
+pub mod symbols;
 
-pub use abort::*;
-pub use list::*;
-pub use next::*;
-pub use release::*;
-pub use resolve::*;
-pub use stale::*;
-pub use symbols::*;
+pub use context::generate_context;
+pub use list::list_claims;
+pub use next::next_task;
+pub use release::release_bead;
+pub use resolve::resolve_merge;
+pub use abort::abort_merge;
+pub use stale::find_stale;
+pub use symbols::{find_symbols, FindSymbolsInput};
+

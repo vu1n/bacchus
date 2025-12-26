@@ -67,6 +67,7 @@ bacchus release TASK-42 --status done
 | Command | Description |
 |---------|-------------|
 | `status` | Show current claims |
+| `context [--bead-id X]` | Generate markdown context for agent (Global or Task) |
 | `workflow` | Print protocol documentation |
 
 ## Workflow

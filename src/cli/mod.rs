@@ -104,6 +104,13 @@ pub enum Commands {
     /// Print workflow documentation
     Workflow,
 
+    /// Generate context for the current agent (global or task-specific)
+    Context {
+        /// Force context for a specific bead ID
+        #[arg(long)]
+        bead_id: Option<String>,
+    },
+
     /// Update bacchus to the latest version
     SelfUpdate,
 

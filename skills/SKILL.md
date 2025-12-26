@@ -121,6 +121,17 @@ bacchus status
 
 Shows active claims, worktree locations, and indexed symbol count.
 
+## Context
+
+Generate a markdown summary of the current environment to ground the agent:
+
+```bash
+bacchus context
+```
+
+- **Global Mode** (at root): Shows all active claims and ready work.
+- **Task Mode** (in worktree): Shows specific objectives for the current task.
+
 ## Relationship to Beads
 
 ```

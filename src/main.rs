@@ -16,14 +16,20 @@ use std::path::PathBuf;
 fn main() {
     let cli = Cli::parse();
 
-    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Determine workspace root by traversing up
+    let workspace_root = find_workspace_root().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
 
     // Initialize database (check BACCHUS_DB_PATH env var first)
     let db_path = std::env::var("BACCHUS_DB_PATH").ok();
-    let db_path_str = db_path.as_deref().unwrap_or_else(|| {
-        // Use default path relative to workspace
-        ".bacchus/bacchus.db"
-    });
+    let db_path_buf = if let Some(p) = db_path {
+        PathBuf::from(p)
+    } else {
+        workspace_root.join(".bacchus/bacchus.db")
+    };
+    
+    let db_path_str = db_path_buf.to_str().unwrap_or(".bacchus/bacchus.db");
 
     if let Err(e) = db::init_db(Some(db_path_str), true) {
         eprintln!("Failed to initialize database: {}", e);
@@ -136,6 +142,14 @@ fn main() {
             ))
         }
 
+        Commands::Context { bead_id } => {
+            tools::generate_context(bead_id, &workspace_root)
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e),
+                ))
+        }
+
         Commands::CheckUpdate => {
             updater::check_for_updates().map(|info| {
                 serde_json::to_string_pretty(&info).unwrap()
@@ -209,6 +223,33 @@ fn index_path(path: &str, workspace_root: &PathBuf) -> Result<usize, String> {
     store_symbols(&all_symbols)?;
 
     Ok(file_count)
+}
+
+/// Find workspace root by looking for .bacchus or .git directories walking up
+fn find_workspace_root() -> Option<PathBuf> {
+    let mut current = std::env::current_dir().ok()?;
+    loop {
+        if current.join(".bacchus").exists() || current.join(".beads").exists() {
+            return Some(current);
+        }
+        
+        // If we hit .git, we are likely at root, UNLESS it's a worktree .git file
+        let git_path = current.join(".git");
+        if git_path.exists() {
+            if git_path.is_dir() {
+                return Some(current);
+            }
+            // If .git is a file, it's a submodule or worktree. 
+            // If worktree, we should keep going up to find the real root.
+            // But we might be in a submodule which IS a root for its own context?
+            // For bacchus, we care about where .bacchus is.
+        }
+
+        if !current.pop() {
+            break;
+        }
+    }
+    None
 }
 
 /// Parse a single file and extract symbols
