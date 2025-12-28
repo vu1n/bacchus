@@ -136,8 +136,11 @@ build_from_source() {
 }
 
 # Install Claude Code plugin (includes hooks, commands, skills)
+# Usage: install_plugin [tag]
+#   tag: Git tag to download from (e.g., v0.4.0). Defaults to 'main' if not provided.
 install_plugin() {
-    info "Installing Claude Code plugin..."
+    local tag="${1:-main}"
+    info "Installing Claude Code plugin (from $tag)..."
 
     # Remove old skill directory if exists (migrating to plugin)
     if [ -d "$SKILL_DIR" ]; then
@@ -148,8 +151,8 @@ install_plugin() {
     # Create plugin directory
     mkdir -p "$PLUGIN_DIR"
 
-    # Download plugin files from repo
-    local base_url="https://raw.githubusercontent.com/${REPO}/main/plugin"
+    # Download plugin files from repo at the specified tag
+    local base_url="https://raw.githubusercontent.com/${REPO}/${tag}/plugin"
 
     # Plugin config
     mkdir -p "${PLUGIN_DIR}/.claude-plugin"
@@ -184,16 +187,30 @@ install_plugin() {
     info "Available commands: /bacchus-agent, /bacchus-orchestrate, /bacchus-cancel"
 }
 
+# Get latest release tag from GitHub
+get_latest_tag() {
+    curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
 # Main installation
 main() {
     # Check dependencies first
     check_dependencies
 
-    local os arch
+    local os arch release_tag
     os=$(detect_os)
     arch=$(detect_arch)
 
     info "Detected: ${os}-${arch}"
+
+    # Get latest release tag (used for both binary and plugin)
+    release_tag=$(get_latest_tag)
+    if [ -z "$release_tag" ]; then
+        warn "Could not determine latest release, using main branch"
+        release_tag="main"
+    else
+        info "Latest release: $release_tag"
+    fi
 
     # Create install directory
     mkdir -p "$INSTALL_DIR"
@@ -216,8 +233,8 @@ main() {
             echo "Add this to your ~/.bashrc or ~/.zshrc"
         fi
 
-        # Install Claude Code plugin
-        install_plugin
+        # Install Claude Code plugin from the same release tag
+        install_plugin "$release_tag"
 
         info "Installation complete!"
         info "Restart Claude Code to activate the plugin"
