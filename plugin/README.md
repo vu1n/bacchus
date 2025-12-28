@@ -16,11 +16,10 @@ Restart Claude Code after installation.
 
 ## Prerequisites
 
-- [bacchus CLI](https://github.com/vu1n/bacchus) v0.3.0+ installed and in PATH
-- [beads CLI](https://github.com/anthropics/beads) installed (`bd` command)
-- `jq` for JSON parsing in hooks
+- [bacchus CLI](https://github.com/vu1n/bacchus) v0.4.0+ installed and in PATH
+- [beads CLI](https://github.com/vu1n/beads) installed (`bd` command)
 
-Note: The stop hook gracefully degrades if dependencies are missing.
+Note: The stop hook gracefully degrades (approves exit) if dependencies are missing or error.
 
 ## How It Works
 
@@ -84,20 +83,23 @@ Cancel active session and allow normal exit.
 
 ## Session Management
 
-The plugin includes a session helper script:
+Use the bacchus CLI for session management:
 
 ```bash
 # Start agent session
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh start agent BACH-xxx
+bacchus session start agent --bead-id BACH-xxx
 
 # Start orchestrator session
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh start orchestrator 5
+bacchus session start orchestrator --max-concurrent 5
 
 # Stop session
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh stop
+bacchus session stop
 
 # Check status
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh status
+bacchus session status
+
+# Check for stop hook (returns JSON decision)
+bacchus session check
 ```
 
 Session file location: `.bacchus/session.json` in workspace root.
@@ -158,22 +160,23 @@ bd close $bead_id  # If ready to close
 
 Or force exit:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh stop
+bacchus session stop
 ```
 
 ### Check session state
 
 ```bash
+bacchus session status
+# Or directly:
 cat .bacchus/session.json
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh status
 ```
 
 ### Clear stale session
 
 ```bash
+bacchus session stop
+# Or manually:
 rm .bacchus/session.json
-# Or
-${CLAUDE_PLUGIN_ROOT}/scripts/session.sh stop
 ```
 
 ## Uninstall
@@ -192,16 +195,19 @@ This removes:
 Test the hook locally:
 ```bash
 # No session → approves
-echo '{}' | CLAUDE_PROJECT_DIR=$(pwd) ./hooks/stop-router.sh
+bacchus session check
 
 # Create test session
-./scripts/session.sh start agent BACH-xxx
+bacchus session start agent --bead-id BACH-xxx
 
-# Test with session → blocks
+# Check with session → blocks (if bead not closed)
+bacchus session check
+
+# Test via shell hook
 echo '{}' | CLAUDE_PROJECT_DIR=$(pwd) ./hooks/stop-router.sh
 
 # Cleanup
-./scripts/session.sh stop
+bacchus session stop
 ```
 
 ## Related

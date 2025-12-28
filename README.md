@@ -5,6 +5,7 @@ Worktree-based coordination CLI for multi-agent work on codebases.
 Bacchus helps AI agents coordinate when working on the same codebase by:
 - **Worktree isolation** - each agent works in its own git worktree
 - **Beads integration** - automatically picks ready tasks and updates status
+- **Session management** - stop hooks keep agents working until tasks complete
 - **Stale detection** - finds and cleans up abandoned work
 
 ## Installation
@@ -13,7 +14,14 @@ Bacchus helps AI agents coordinate when working on the same codebase by:
 curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.sh | bash
 ```
 
-This installs the binary and Claude Code skill.
+This installs:
+- `bacchus` binary to `~/.local/bin/`
+- Claude Code plugin to `~/.claude/plugins/bacchus/`
+
+### Prerequisites
+
+- [beads](https://github.com/vu1n/beads) - Task tracking (`bd` command)
+- git
 
 ### From Source
 
@@ -36,6 +44,9 @@ curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/uninstall
 # Get next ready task (creates worktree, claims it)
 bacchus next agent-1
 
+# Or claim a specific task
+bacchus claim TASK-42 agent-1
+
 # Work in the isolated worktree
 cd .bacchus/worktrees/TASK-42
 # ... make changes, commit ...
@@ -50,10 +61,23 @@ bacchus release TASK-42 --status done
 
 | Command | Description |
 |---------|-------------|
-| `next <agent_id>` | Get ready bead, create worktree, claim it |
+| `next <agent_id>` | Get next ready bead, create worktree, claim it |
+| `claim <bead_id> <agent_id> [--force]` | Claim specific bead (must be ready unless --force) |
 | `release <bead_id> --status done\|blocked\|failed` | Finish work |
 | `stale [--minutes N] [--cleanup]` | Find/cleanup abandoned claims |
-| `list` | List all active claims and worktrees |
+| `list` | List all active claims |
+| `resolve <bead_id>` | Complete merge after resolving conflicts |
+| `abort <bead_id>` | Abort merge, keep working |
+
+### Session Management
+
+| Command | Description |
+|---------|-------------|
+| `session start agent --bead-id <id>` | Start agent session (enables stop hook) |
+| `session start orchestrator [--max-concurrent N]` | Start orchestrator session |
+| `session stop` | Clear session, allow exit |
+| `session status` | Show current session state |
+| `session check` | Check if exit should be blocked (for hooks) |
 
 ### Symbols
 
@@ -66,20 +90,52 @@ bacchus release TASK-42 --status done
 
 | Command | Description |
 |---------|-------------|
-| `status` | Show current claims |
-| `context [--bead-id X]` | Generate markdown context for agent (Global or Task) |
+| `status` | Show claims, orphaned worktrees, broken claims |
+| `context [--bead-id X]` | Generate markdown context for agent |
 | `workflow` | Print protocol documentation |
+
+## Claude Code Plugin
+
+The plugin provides stop hooks that keep agents working until tasks complete:
+
+### Agent Mode
+
+```
+/bacchus-agent TASK-42
+```
+
+Starts an agent session. The stop hook blocks exit until the bead is closed.
+
+### Orchestrator Mode
+
+```
+/bacchus-orchestrate --max_concurrent 3
+```
+
+Spawns agents for ready beads and monitors progress. Blocks exit while work remains.
+
+### Cancel Session
+
+```
+/bacchus-cancel
+```
+
+Clears session and allows normal exit.
 
 ## Workflow
 
 ```
-next → work in worktree → release
+claim/next → work in worktree → release
 ```
 
 ### 1. Get Work
 
 ```bash
+# Option A: Next ready bead
 bacchus next agent-1
+
+# Option B: Specific bead
+bacchus claim TASK-42 agent-1
 ```
 
 Output:
@@ -116,6 +172,26 @@ bacchus release TASK-42 --status blocked
 bacchus release TASK-42 --status failed
 ```
 
+## Session Management
+
+Sessions enable stop hooks that prevent premature exit:
+
+```bash
+# Start agent session (blocks until bead closed)
+bacchus session start agent --bead-id TASK-42
+
+# Start orchestrator session (blocks while work remains)
+bacchus session start orchestrator --max-concurrent 3
+
+# Check session state
+bacchus session status
+
+# Clear session to exit
+bacchus session stop
+```
+
+Session state is stored in `.bacchus/session.json`.
+
 ## Stale Detection
 
 Find and cleanup abandoned claims:
@@ -132,7 +208,7 @@ bacchus stale --minutes 30 --cleanup
 
 ```
 beads    → What work needs to be done (issues, deps, status)
-bacchus  → Who's doing what right now (claims, worktrees)
+bacchus  → Who's doing what right now (claims, worktrees, sessions)
 ```
 
 Bacchus reads from beads to find ready work and updates bead status on claim/release.
@@ -143,16 +219,36 @@ Bacchus reads from beads to find ready work and updates bead status on claim/rel
 project/
 ├── .bacchus/
 │   ├── bacchus.db          # Claims database
+│   ├── session.json        # Active session state
 │   └── worktrees/
 │       ├── TASK-42/        # Agent 1's isolated worktree
 │       └── TASK-43/        # Agent 2's isolated worktree
 └── .beads/
-    └── beads.db            # Task database
+    └── issues.jsonl        # Task database
 ```
 
-## Supported Languages
+## Stop Hook Architecture
 
-Symbol indexing supports:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ORCHESTRATOR MODE                         │
+│  Spawns agents for ready beads                              │
+│  Blocks while: ready beads exist OR agents active           │
+│  Approves when: all work done or blocked                    │
+├─────────────────────────────────────────────────────────────┤
+│   ┌─────────┐   ┌─────────┐   ┌─────────┐                  │
+│   │ Agent 1 │   │ Agent 2 │   │ Agent 3 │                  │
+│   │ TASK-A  │   │ TASK-B  │   │ TASK-C  │                  │
+│   └─────────┘   └─────────┘   └─────────┘                  │
+│                                                              │
+│  AGENT MODE                                                  │
+│  Blocks while: assigned bead not closed                     │
+│  Approves when: bd show <bead_id> → status == "closed"     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Supported Languages (Symbol Indexing)
+
 - TypeScript / JavaScript
 - Python
 - Go
