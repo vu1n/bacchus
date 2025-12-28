@@ -182,17 +182,18 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let ready_beads = beads::get_ready_beads().unwrap_or_default();
     let ready_count = ready_beads.len();
 
+    // Get in_progress beads (may include orphaned work without claims)
+    let in_progress_beads = beads::get_in_progress_beads().unwrap_or_default();
+    let in_progress_count = in_progress_beads.len();
+
     // Get active claims count
     let active_count = with_db(|conn| {
         conn.query_row("SELECT COUNT(*) FROM claims", [], |r| r.get::<_, i32>(0))
     })
     .unwrap_or(0) as usize;
 
-    // Get overall stats by checking all beads
-    // For simplicity, we'll use the ready count as an indicator
-    // A more complete implementation would query bd status
-
     if ready_count > 0 && active_count < max_concurrent as usize {
+        // Ready work available and capacity to spawn
         let slots = max_concurrent as usize - active_count;
         let to_spawn = ready_count.min(slots);
         let bead_ids: Vec<_> = ready_beads.iter().take(to_spawn).map(|b| b.id.as_str()).collect();
@@ -208,6 +209,7 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             ),
         }
     } else if active_count > 0 {
+        // Active claims - wait for agents to complete
         HookCheckOutput {
             decision: "block".to_string(),
             reason: format!(
@@ -215,8 +217,19 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
                 active_count
             ),
         }
+    } else if in_progress_count > 0 {
+        // In-progress beads without claims - orphaned work, block to investigate
+        let bead_ids: Vec<_> = in_progress_beads.iter().map(|b| b.id.as_str()).collect();
+        HookCheckOutput {
+            decision: "block".to_string(),
+            reason: format!(
+                "{} bead(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent>' or reset with 'bd update <id> --status open'.",
+                in_progress_count,
+                bead_ids.join(", ")
+            ),
+        }
     } else if ready_count == 0 {
-        // No ready beads and no active agents - either all done or all blocked
+        // No ready, no in_progress, no claims - all done or all blocked
         let _ = stop_session();
         HookCheckOutput {
             decision: "approve".to_string(),

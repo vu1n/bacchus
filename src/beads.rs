@@ -73,6 +73,30 @@ pub fn is_bead_ready(bead_id: &str) -> Result<bool, BeadsError> {
     Ok(ready.iter().any(|b| b.id == bead_id))
 }
 
+/// Get beads that are in progress (via `bd list --status=in_progress --json`)
+pub fn get_in_progress_beads() -> Result<Vec<BeadInfo>, BeadsError> {
+    let output = Command::new("bd")
+        .args(["list", "--status=in_progress", "--json", "--quiet"])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BeadsError::BdNotFound
+            } else {
+                BeadsError::IoError(e)
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BeadsError::CommandFailed(stderr.to_string()));
+    }
+
+    let issues: Vec<BdIssue> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| BeadsError::ParseError(e.to_string()))?;
+
+    Ok(issues.into_iter().map(BeadInfo::from).collect())
+}
+
 /// Find beads that are ready to work on (via `bd ready --json`)
 pub fn get_ready_beads() -> Result<Vec<BeadInfo>, BeadsError> {
     let output = Command::new("bd")

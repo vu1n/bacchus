@@ -15,4 +15,15 @@ fi
 cat > /dev/null
 
 # Delegate to bacchus session check (handles all logic in Rust with serde)
-bacchus session check
+# Capture output and exit code; fail-open if bacchus errors
+output=$(bacchus session check 2>&1)
+exit_code=$?
+
+if [ $exit_code -ne 0 ]; then
+    # bacchus failed - approve exit (fail-open) but include error info
+    echo "{\"decision\": \"approve\", \"reason\": \"bacchus error: ${output//\"/\\\"}\"}"
+    exit 0
+fi
+
+# Output the result from bacchus
+echo "$output"

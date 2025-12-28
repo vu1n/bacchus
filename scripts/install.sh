@@ -17,6 +17,28 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# Check dependencies
+check_dependencies() {
+    local missing=0
+
+    # bd (beads CLI) is required for bead management
+    if ! command -v bd &> /dev/null; then
+        warn "bd (beads CLI) not found. Bacchus requires beads for task tracking."
+        warn "Install beads: https://github.com/vu1n/beads"
+        missing=1
+    fi
+
+    # git is required for worktree operations
+    if ! command -v git &> /dev/null; then
+        error "git is required for bacchus worktree operations"
+    fi
+
+    if [ $missing -eq 1 ]; then
+        warn "Some dependencies missing. Bacchus may not work correctly."
+        echo ""
+    fi
+}
+
 # Detect OS
 detect_os() {
     case "$(uname -s)" in
@@ -164,6 +186,9 @@ install_plugin() {
 
 # Main installation
 main() {
+    # Check dependencies first
+    check_dependencies
+
     local os arch
     os=$(detect_os)
     arch=$(detect_arch)
