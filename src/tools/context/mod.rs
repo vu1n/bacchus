@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::worktree;
+
 mod global;
 mod task;
 
@@ -8,7 +10,7 @@ pub fn generate_context(bead_id_opt: Option<String>, workspace_root: &Path) -> R
     let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
     
     // Check if we are inside the .bacchus/worktrees directory of the workspace
-    let worktrees_dir = workspace_root.join(".bacchus").join("worktrees");
+    let worktrees_dir = worktree::get_worktrees_dir(workspace_root);
     let is_worktree = current_dir.starts_with(&worktrees_dir);
     
     // Determine the target bead_id

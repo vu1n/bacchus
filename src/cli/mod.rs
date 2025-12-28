@@ -25,6 +25,17 @@ pub enum Commands {
         agent_id: String,
     },
 
+    /// Claim a specific bead by ID, create worktree
+    Claim {
+        /// The bead ID to claim
+        bead_id: String,
+        /// Your agent ID
+        agent_id: String,
+        /// Force claim even if bead is not ready (blocked/in_progress)
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Release a claimed bead
     Release {
         /// The bead ID to release
@@ -116,4 +127,34 @@ pub enum Commands {
 
     /// Check if a newer version is available
     CheckUpdate,
+
+    /// Manage session state for stop hooks
+    Session {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionCommands {
+    /// Start a session (agent or orchestrator mode)
+    Start {
+        /// Mode: agent or orchestrator
+        mode: String,
+        /// Bead ID (required for agent mode)
+        #[arg(long)]
+        bead_id: Option<String>,
+        /// Max concurrent agents (for orchestrator mode)
+        #[arg(long, default_value = "3")]
+        max_concurrent: i32,
+    },
+
+    /// Stop the current session
+    Stop,
+
+    /// Show current session status
+    Status,
+
+    /// Check if session should block exit (for stop hook)
+    Check,
 }

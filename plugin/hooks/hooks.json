@@ -1,0 +1,35 @@
+{
+  "description": "Bacchus stop hooks for persistent agent and orchestrator modes. Uses command-based hook by default. Set BACCHUS_USE_PROMPT_HOOK=1 for LLM-based decisions.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-router.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-router.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "_alternatives": {
+    "_comment": "To use prompt-based hooks instead, replace the command hooks with:",
+    "Stop_prompt": {
+      "type": "prompt",
+      "prompt": "You are a Bacchus stop hook evaluator. Check BACCHUS_MODE env var. If 'agent': run 'bd show $BACCHUS_BEAD_ID --json' and block if status != closed. If 'orchestrator': run 'bd ready --json' and 'bacchus list', block if ready work exists or agents running. Respond with JSON: {\"decision\": \"approve\"|\"block\", \"reason\": \"...\"}",
+      "timeout": 30
+    }
+  }
+}

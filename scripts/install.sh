@@ -5,6 +5,7 @@ REPO="vu1n/bacchus"
 INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
 SKILL_DIR="$HOME/.claude/skills/bacchus"
+PLUGIN_DIR="$HOME/.claude/plugins/bacchus"
 
 # Colors
 RED='\033[0;31m'
@@ -112,68 +113,53 @@ build_from_source() {
     fi
 }
 
-# Install Claude Code skill
-install_skill() {
-    info "Installing Claude Code skill..."
+# Install Claude Code plugin (includes hooks, commands, skills)
+install_plugin() {
+    info "Installing Claude Code plugin..."
 
-    mkdir -p "$SKILL_DIR"
-
-    # Download SKILL.md from repo
-    local skill_url="https://raw.githubusercontent.com/${REPO}/main/skills/SKILL.md"
-    local planner_url="https://raw.githubusercontent.com/${REPO}/main/skills/beads-planner.md"
-
-    if curl -sLf -o "${SKILL_DIR}/SKILL.md" "$skill_url"; then
-        info "Skill installed to: ${SKILL_DIR}/SKILL.md"
-    else
-        warn "Could not download skill file, creating from template..."
-        cat > "${SKILL_DIR}/SKILL.md" << 'SKILL_EOF'
----
-name: bacchus
-description: Multi-agent coordination CLI for codebases. Use when orchestrating parallel agents, claiming tasks, detecting symbol conflicts, or notifying stakeholders of breaking changes. Invoke when user mentions coordination, parallel agents, multiple agents, task claiming, or conflict detection.
----
-
-# Bacchus - Worktree-Based Agent Coordination
-
-Lightweight coordination for parallel agent work. Uses git worktrees for isolation and integrates with beads for task management.
-
-## Core Workflow
-
-```
-next → work in worktree → release
-```
-
-### Get Work
-```bash
-bacchus next <agent_id>
-```
-
-### Release
-```bash
-bacchus release <bead_id> --status done|blocked|failed
-```
-
-### Stale Detection
-```bash
-bacchus stale --minutes 30 --cleanup
-```
-
-## Code Search
-```bash
-bacchus index src/
-bacchus symbols --pattern "User*"
-```
-
-Run `bacchus workflow` for full documentation.
-SKILL_EOF
-        info "Skill template installed"
+    # Remove old skill directory if exists (migrating to plugin)
+    if [ -d "$SKILL_DIR" ]; then
+        warn "Removing old skill directory (migrating to plugin)..."
+        rm -rf "$SKILL_DIR"
     fi
 
-    # Install planner skill
-    if curl -sLf -o "${SKILL_DIR}/beads-planner.md" "$planner_url"; then
-        info "Planner skill installed to: ${SKILL_DIR}/beads-planner.md"
-    else
-        warn "Could not download beads-planner.md"
-    fi
+    # Create plugin directory
+    mkdir -p "$PLUGIN_DIR"
+
+    # Download plugin files from repo
+    local base_url="https://raw.githubusercontent.com/${REPO}/main/plugin"
+
+    # Plugin config
+    mkdir -p "${PLUGIN_DIR}/.claude-plugin"
+    curl -sLf -o "${PLUGIN_DIR}/.claude-plugin/config.json" "${base_url}/.claude-plugin/config.json" || warn "Could not download config.json"
+
+    # Hooks
+    mkdir -p "${PLUGIN_DIR}/hooks"
+    curl -sLf -o "${PLUGIN_DIR}/hooks/hooks.json" "${base_url}/hooks/hooks.json" || warn "Could not download hooks.json"
+    curl -sLf -o "${PLUGIN_DIR}/hooks/stop-router.sh" "${base_url}/hooks/stop-router.sh" || warn "Could not download stop-router.sh"
+    chmod +x "${PLUGIN_DIR}/hooks/stop-router.sh" 2>/dev/null || true
+
+    # Scripts
+    mkdir -p "${PLUGIN_DIR}/scripts"
+    curl -sLf -o "${PLUGIN_DIR}/scripts/session.sh" "${base_url}/scripts/session.sh" || warn "Could not download session.sh"
+    chmod +x "${PLUGIN_DIR}/scripts/session.sh" 2>/dev/null || true
+
+    # Commands
+    mkdir -p "${PLUGIN_DIR}/commands"
+    curl -sLf -o "${PLUGIN_DIR}/commands/agent.md" "${base_url}/commands/agent.md" || warn "Could not download agent.md"
+    curl -sLf -o "${PLUGIN_DIR}/commands/orchestrate.md" "${base_url}/commands/orchestrate.md" || warn "Could not download orchestrate.md"
+    curl -sLf -o "${PLUGIN_DIR}/commands/cancel.md" "${base_url}/commands/cancel.md" || warn "Could not download cancel.md"
+
+    # Skills
+    mkdir -p "${PLUGIN_DIR}/skills"
+    curl -sLf -o "${PLUGIN_DIR}/skills/planner.md" "${base_url}/skills/planner.md" || warn "Could not download planner.md"
+    curl -sLf -o "${PLUGIN_DIR}/skills/context.md" "${base_url}/skills/context.md" || warn "Could not download context.md"
+
+    # README
+    curl -sLf -o "${PLUGIN_DIR}/README.md" "${base_url}/README.md" || warn "Could not download README.md"
+
+    info "Plugin installed to: ${PLUGIN_DIR}"
+    info "Available commands: /bacchus-agent, /bacchus-orchestrate, /bacchus-cancel"
 }
 
 # Main installation
@@ -205,10 +191,11 @@ main() {
             echo "Add this to your ~/.bashrc or ~/.zshrc"
         fi
 
-        # Install Claude Code skill
-        install_skill
+        # Install Claude Code plugin
+        install_plugin
 
         info "Installation complete!"
+        info "Restart Claude Code to activate the plugin"
         "${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || true
     else
         error "Installation failed"

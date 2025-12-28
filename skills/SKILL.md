@@ -16,19 +16,27 @@ curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.s
 ## Core Workflow
 
 ```
-next → work in worktree → release
+next/claim → work in worktree → release
 ```
 
 ### 1. Get Work
 
+**Option A: Claim next ready bead**
 ```bash
 bacchus next agent-1
 ```
+Queries beads DB for ready tasks and claims the highest-priority one.
 
-This command:
-- Queries beads DB for ready tasks (open, no blockers)
-- Creates isolated worktree at `.bacchus/worktrees/{bead_id}/`
-- Claims the bead, updates status to `in_progress`
+**Option B: Claim a specific bead**
+```bash
+bacchus claim PROJ-42 agent-1
+```
+Claims a specific bead by ID (useful when assigning specific tasks to agents).
+
+Both commands:
+- Create isolated worktree at `.bacchus/worktrees/{bead_id}/`
+- Record the claim in bacchus DB
+- Update bead status to `in_progress`
 
 Output:
 ```json

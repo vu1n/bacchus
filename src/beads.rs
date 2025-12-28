@@ -67,6 +67,12 @@ pub enum BeadsError {
 // Public API
 // ============================================================================
 
+/// Check if a specific bead is ready to work on (in ready list)
+pub fn is_bead_ready(bead_id: &str) -> Result<bool, BeadsError> {
+    let ready = get_ready_beads()?;
+    Ok(ready.iter().any(|b| b.id == bead_id))
+}
+
 /// Find beads that are ready to work on (via `bd ready --json`)
 pub fn get_ready_beads() -> Result<Vec<BeadInfo>, BeadsError> {
     let output = Command::new("bd")
@@ -136,11 +142,15 @@ pub fn get_bead(bead_id: &str) -> Result<BeadInfo, BeadsError> {
         return Err(BeadsError::CommandFailed(stderr.to_string()));
     }
 
-    // bd show returns a single object, not an array
-    let issue: BdIssue = serde_json::from_slice(&output.stdout)
+    // bd show returns an array (even for single bead)
+    let issues: Vec<BdIssue> = serde_json::from_slice(&output.stdout)
         .map_err(|e| BeadsError::ParseError(e.to_string()))?;
 
-    Ok(BeadInfo::from(issue))
+    issues
+        .into_iter()
+        .next()
+        .map(BeadInfo::from)
+        .ok_or_else(|| BeadsError::BeadNotFound(bead_id.to_string()))
 }
 
 #[cfg(test)]

@@ -10,10 +10,12 @@ use std::process::Command;
 use thiserror::Error;
 
 /// Get the worktrees directory, checking BACCHUS_WORKTREES env var first
-fn get_worktrees_dir(workspace_root: &Path) -> PathBuf {
-    std::env::var("BACCHUS_WORKTREES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| workspace_root.join(".bacchus/worktrees"))
+pub(crate) fn get_worktrees_dir(workspace_root: &Path) -> PathBuf {
+    match std::env::var("BACCHUS_WORKTREES").ok().map(PathBuf::from) {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => workspace_root.join(path),
+        None => workspace_root.join(".bacchus/worktrees"),
+    }
 }
 
 #[derive(Debug, Clone)]

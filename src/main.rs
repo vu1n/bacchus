@@ -10,7 +10,7 @@ mod updater;
 mod worktree;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, SessionCommands};
 use std::path::PathBuf;
 
 fn main() {
@@ -42,6 +42,11 @@ fn main() {
         // ====================================================================
         Commands::Next { agent_id } => {
             tools::next_task(&agent_id, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+        }
+
+        Commands::Claim { bead_id, agent_id, force } => {
+            tools::claim_task(&bead_id, &agent_id, force, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
@@ -157,6 +162,42 @@ fn main() {
                 rusqlite::ffi::Error::new(1),
                 Some(e.to_string()),
             ))
+        }
+
+        // ====================================================================
+        // Session Commands (for stop hooks)
+        // ====================================================================
+        Commands::Session { command } => {
+            match command {
+                SessionCommands::Start { mode, bead_id, max_concurrent } => {
+                    tools::start_session(&mode, bead_id.as_deref(), max_concurrent)
+                        .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                SessionCommands::Stop => {
+                    tools::stop_session()
+                        .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                SessionCommands::Status => {
+                    tools::session_status()
+                        .map(|v| serde_json::to_string_pretty(&v).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                SessionCommands::Check => {
+                    let result = tools::check_session();
+                    Ok(serde_json::to_string_pretty(&result).unwrap())
+                }
+            }
         }
     };
 
@@ -438,6 +479,16 @@ bacchus stale --minutes 30 --cleanup
 bacchus index src/
 bacchus symbols --pattern "User*" --kind class
 ```
+
+## Context
+
+```bash
+bacchus context
+bacchus context --bead-id <bead_id>
+```
+
+- Run from repo root for global context.
+- Run inside a worktree for task context.
 
 ## Status
 

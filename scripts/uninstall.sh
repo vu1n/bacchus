@@ -3,6 +3,8 @@ set -e
 
 INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
+SKILL_DIR="$HOME/.claude/skills/bacchus"
+PLUGIN_DIR="$HOME/.claude/plugins/bacchus"
 
 # Colors
 RED='\033[0;31m'
@@ -23,6 +25,34 @@ remove_binary() {
         info "Removed: $binary_path"
     else
         warn "Binary not found: $binary_path"
+    fi
+}
+
+# Remove Claude Code plugin and skills
+remove_plugin() {
+    # Remove plugin
+    if [ -d "$PLUGIN_DIR" ]; then
+        rm -rf "$PLUGIN_DIR"
+        info "Removed plugin: $PLUGIN_DIR"
+    fi
+
+    # Remove old skill directory (legacy)
+    if [ -d "$SKILL_DIR" ]; then
+        rm -rf "$SKILL_DIR"
+        info "Removed skills: $SKILL_DIR"
+    fi
+}
+
+# Remove session files from .bacchus directories
+cleanup_sessions() {
+    local session_files
+    session_files=$(find "$HOME" -maxdepth 5 -path "*/.bacchus/session.json" 2>/dev/null || true)
+
+    if [ -n "$session_files" ]; then
+        echo "$session_files" | while read -r file; do
+            rm -f "$file"
+            info "Removed session: $file"
+        done
     fi
 }
 
@@ -61,9 +91,11 @@ main() {
     echo ""
 
     remove_binary
+    remove_plugin
+    cleanup_sessions
 
     echo ""
-    read -p "Also remove .bacchus data directories? [y/N] " -n 1 -r
+    read -p "Also remove .bacchus data directories (worktrees, database)? [y/N] " -n 1 -r
     echo ""
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -72,6 +104,7 @@ main() {
 
     echo ""
     info "Uninstall complete!"
+    info "Restart Claude Code to complete plugin removal"
 }
 
 main "$@"
