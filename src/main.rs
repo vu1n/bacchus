@@ -267,20 +267,32 @@ fn index_path(path: &str, workspace_root: &PathBuf) -> Result<usize, String> {
 }
 
 /// Find workspace root by looking for .bacchus or .git directories walking up
+///
+/// Priority:
+/// 1. CLAUDE_PROJECT_DIR env var (set by Claude Code for plugins/hooks)
+/// 2. Walk up from CWD looking for .bacchus, .beads, or .git
 fn find_workspace_root() -> Option<PathBuf> {
+    // First check CLAUDE_PROJECT_DIR (set by Claude Code for hooks/plugins)
+    if let Ok(project_dir) = std::env::var("CLAUDE_PROJECT_DIR") {
+        let path = PathBuf::from(&project_dir);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
     let mut current = std::env::current_dir().ok()?;
     loop {
         if current.join(".bacchus").exists() || current.join(".beads").exists() {
             return Some(current);
         }
-        
+
         // If we hit .git, we are likely at root, UNLESS it's a worktree .git file
         let git_path = current.join(".git");
         if git_path.exists() {
             if git_path.is_dir() {
                 return Some(current);
             }
-            // If .git is a file, it's a submodule or worktree. 
+            // If .git is a file, it's a submodule or worktree.
             // If worktree, we should keep going up to find the real root.
             // But we might be in a submodule which IS a root for its own context?
             // For bacchus, we care about where .bacchus is.

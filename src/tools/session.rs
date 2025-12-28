@@ -25,11 +25,30 @@ pub struct HookCheckOutput {
     pub reason: String,
 }
 
-/// Find workspace root (where .bacchus or .beads exists)
+/// Find workspace root for session management
+///
+/// Priority:
+/// 1. CLAUDE_PROJECT_DIR env var (set by Claude Code for plugins/hooks)
+/// 2. Walk up from CWD looking for .bacchus, .beads, or .git
 fn find_workspace_root() -> Option<std::path::PathBuf> {
+    // First check CLAUDE_PROJECT_DIR (set by Claude Code for hooks/plugins)
+    if let Ok(project_dir) = std::env::var("CLAUDE_PROJECT_DIR") {
+        let path = std::path::PathBuf::from(&project_dir);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Walk up from current directory
     let mut current = std::env::current_dir().ok()?;
     loop {
+        // Check for bacchus/beads markers first
         if current.join(".bacchus").exists() || current.join(".beads").exists() {
+            return Some(current);
+        }
+        // Fall back to .git as project root indicator
+        let git_path = current.join(".git");
+        if git_path.exists() && git_path.is_dir() {
             return Some(current);
         }
         if !current.pop() {
