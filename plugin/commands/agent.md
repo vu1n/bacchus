@@ -33,16 +33,24 @@ bd show {{bead_id}}
 
 ## Work in the Worktree
 
-After claiming, work in the isolated worktree:
+After claiming, work in the isolated worktree at `.bacchus/worktrees/{{bead_id}}/`.
+
+> **Warning**: Do NOT `cd` into the worktree. Use `git -C` or absolute paths instead. The worktree is ephemeral and gets deleted on release - if your cwd points there, the shell breaks.
 
 ```bash
-cd .bacchus/worktrees/{{bead_id}}/
+# Use -C flag for git operations
+git -C .bacchus/worktrees/{{bead_id}} status
+git -C .bacchus/worktrees/{{bead_id}} add .
+git -C .bacchus/worktrees/{{bead_id}} commit -m "message"
+
+# For other commands, use absolute paths
+cat .bacchus/worktrees/{{bead_id}}/src/file.rs
 ```
 
 ## Your Mission
 
 1. **Understand the task** from the bead details
-2. **Implement the solution** in the worktree
+2. **Implement the solution** in the worktree (use `-C` flag)
 3. **Commit your changes** as you go
 4. **Close the bead** when complete: `bd close {{bead_id}}`
 5. **Release the worktree**: `bacchus release {{bead_id}} --status done`

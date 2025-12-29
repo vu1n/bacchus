@@ -51,12 +51,18 @@ Output:
 
 ### 2. Do Work
 
-Work in the worktree directory. All changes are isolated on branch `bacchus/{bead_id}`.
+Work in the worktree. All changes are isolated on branch `bacchus/{bead_id}`.
+
+> **Warning**: Never `cd` into a worktree from your main session. Worktrees are ephemeral and get deleted on release. Use `git -C` instead:
 
 ```bash
-cd .bacchus/worktrees/PROJ-42
-# make changes, commit normally
-git add . && git commit -m "Implement auth"
+# Use -C flag to operate in worktree without changing cwd
+git -C .bacchus/worktrees/PROJ-42 status
+git -C .bacchus/worktrees/PROJ-42 add .
+git -C .bacchus/worktrees/PROJ-42 commit -m "Implement auth"
+
+# Or spawn a sub-agent (Task tool) that works in the worktree
+# Sub-agents are isolated - their cwd dying doesn't affect parent
 ```
 
 ### 3. Release

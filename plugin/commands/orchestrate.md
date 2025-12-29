@@ -48,9 +48,13 @@ Task tool:
     bacchus session start agent --bead-id "{bead_id}"
     bacchus claim "{bead_id}" agent-{unique_id}
 
-    Then read the bead and work in the worktree:
+    Then read the bead details:
     bd show {bead_id}
-    cd .bacchus/worktrees/{bead_id}/
+
+    Work in the worktree using -C flag (do NOT cd into it):
+    git -C .bacchus/worktrees/{bead_id} status
+    git -C .bacchus/worktrees/{bead_id} add .
+    git -C .bacchus/worktrees/{bead_id} commit -m "message"
 
     When complete:
     bd close {bead_id}

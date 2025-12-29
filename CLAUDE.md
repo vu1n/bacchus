@@ -239,6 +239,31 @@ CREATE TABLE symbols (
 - **Claim validates readiness**: Must be in ready list unless `--force`
 - **Merge conflicts**: Return structured error, user can resolve/abort
 
+## Critical: Worktree CWD Footgun
+
+**Never change the main session's working directory to a worktree.**
+
+Worktrees are ephemeral - they get deleted on `bacchus release`. If your shell's cwd points to a deleted worktree, all subsequent bash commands will fail with "no such file or directory".
+
+```bash
+# BAD - changes cwd to ephemeral directory
+cd .bacchus/worktrees/TASK-42
+git status
+# ... worktree gets deleted ...
+# Shell is now broken!
+
+# GOOD - use -C flag or absolute paths
+git -C .bacchus/worktrees/TASK-42 status
+git -C .bacchus/worktrees/TASK-42 add .
+git -C .bacchus/worktrees/TASK-42 commit -m "msg"
+```
+
+**Mitigations:**
+1. Always use `git -C <worktree>` instead of `cd <worktree> && git`
+2. Sub-agents spawned via Task tool are isolated - their cwd dying doesn't affect parent
+3. Before session end/summary, verify cwd is the main repo root
+4. Run `git worktree prune` to clean stale worktree refs
+
 ## Dependencies
 
 - **Required**: `bd` (beads CLI), `git`

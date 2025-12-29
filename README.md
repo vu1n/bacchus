@@ -47,8 +47,8 @@ bacchus next agent-1
 # Or claim a specific task
 bacchus claim TASK-42 agent-1
 
-# Work in the isolated worktree
-cd .bacchus/worktrees/TASK-42
+# Work in the isolated worktree (use -C flag, don't cd)
+git -C .bacchus/worktrees/TASK-42 status
 # ... make changes, commit ...
 
 # Release when done (merges to main, cleans up)
@@ -153,10 +153,12 @@ Output:
 
 Work in the worktree. All changes are isolated on branch `bacchus/{bead_id}`.
 
+> **Warning**: Never `cd` into a worktree. Use `git -C` instead - worktrees are ephemeral and get deleted on release.
+
 ```bash
-cd .bacchus/worktrees/TASK-42
-# make changes
-git add . && git commit -m "Implement auth"
+git -C .bacchus/worktrees/TASK-42 status
+git -C .bacchus/worktrees/TASK-42 add .
+git -C .bacchus/worktrees/TASK-42 commit -m "Implement auth"
 ```
 
 ### 3. Release
