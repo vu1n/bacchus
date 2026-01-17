@@ -1,9 +1,9 @@
-//! Release task tool - merges or discards worktree, updates bead status
+//! Release task tool - merges or discards worktree, updates task status
 //!
-//! Handles completing, blocking, or failing a claimed bead.
+//! Handles completing, blocking, or failing a claimed task.
 
-use crate::beads;
 use crate::db::with_db;
+use crate::tasks;
 use crate::worktree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -11,14 +11,14 @@ use std::path::Path;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReleaseOutput {
     pub success: bool,
-    pub bead_id: String,
+    pub task_id: String,
     pub status: String,
     pub merged: bool,
     pub message: String,
 }
 
 pub fn release_bead(
-    bead_id: &str,
+    task_id: &str,
     status: &str,
     workspace_root: &Path,
 ) -> Result<ReleaseOutput, Box<dyn std::error::Error>> {
@@ -27,7 +27,7 @@ pub fn release_bead(
         Ok(conn
             .query_row(
                 "SELECT 1 FROM claims WHERE bead_id = ?1",
-                [bead_id],
+                [task_id],
                 |_| Ok(true),
             )
             .unwrap_or(false))
@@ -36,10 +36,10 @@ pub fn release_bead(
     if !claim_exists {
         return Ok(ReleaseOutput {
             success: false,
-            bead_id: bead_id.to_string(),
+            task_id: task_id.to_string(),
             status: status.to_string(),
             merged: false,
-            message: format!("No claim found for {}", bead_id),
+            message: format!("No claim found for {}", task_id),
         });
     }
 
@@ -48,7 +48,7 @@ pub fn release_bead(
     match status {
         "done" => {
             // Merge worktree branch to main, then cleanup
-            if let Err(e) = worktree::merge_worktree(workspace_root, bead_id, "main") {
+            if let Err(e) = worktree::merge_worktree(workspace_root, task_id, "main") {
                 // Check if this is a merge conflict
                 let is_conflict = worktree::is_in_merge_conflict(workspace_root).unwrap_or(false);
 
@@ -58,7 +58,7 @@ pub fn release_bead(
                          1. Resolve conflicts manually, then: bacchus resolve {}\n\
                          2. Abort merge, keep working: bacchus abort {}\n\
                          3. Discard all work: bacchus release {} --status failed",
-                        bead_id, bead_id, bead_id
+                        task_id, task_id, task_id
                     )
                 } else {
                     format!("Failed to merge: {}", e)
@@ -66,7 +66,7 @@ pub fn release_bead(
 
                 return Ok(ReleaseOutput {
                     success: false,
-                    bead_id: bead_id.to_string(),
+                    task_id: task_id.to_string(),
                     status: status.to_string(),
                     merged: false,
                     message,
@@ -75,25 +75,25 @@ pub fn release_bead(
             merged = true;
 
             // Remove worktree (non-force since we merged)
-            worktree::remove_worktree(workspace_root, bead_id, false)?;
+            worktree::remove_worktree(workspace_root, task_id, false)?;
 
-            // Update bead status
-            beads::update_bead_status(bead_id, "closed")?;
+            // Update task status
+            tasks::update_task_status(workspace_root, task_id, "closed")?;
         }
         "blocked" => {
-            // Keep worktree but release claim, mark bead as blocked
+            // Keep worktree but release claim, mark task as blocked
             // Don't remove worktree - might want to resume later
-            beads::update_bead_status(bead_id, "blocked")?;
+            tasks::update_task_status(workspace_root, task_id, "blocked")?;
         }
         "failed" => {
-            // Discard worktree (force), reset bead to open for retry
-            worktree::remove_worktree(workspace_root, bead_id, true)?;
-            beads::update_bead_status(bead_id, "open")?;
+            // Discard worktree (force), reset task to open for retry
+            worktree::remove_worktree(workspace_root, task_id, true)?;
+            tasks::update_task_status(workspace_root, task_id, "open")?;
         }
         _ => {
             return Ok(ReleaseOutput {
                 success: false,
-                bead_id: bead_id.to_string(),
+                task_id: task_id.to_string(),
                 status: status.to_string(),
                 merged: false,
                 message: format!("Invalid status: {}. Use done, blocked, or failed", status),
@@ -101,14 +101,19 @@ pub fn release_bead(
         }
     }
 
+    // Clear active footprints for this task
+    if let Err(e) = tasks::clear_active_footprints(task_id) {
+        eprintln!("Warning: Failed to clear footprints for {}: {}", task_id, e);
+    }
+
     // Remove claim from DB
-    with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [bead_id]))?;
+    with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [task_id]))?;
 
     Ok(ReleaseOutput {
         success: true,
-        bead_id: bead_id.to_string(),
+        task_id: task_id.to_string(),
         status: status.to_string(),
         merged,
-        message: format!("Released {} with status {}", bead_id, status),
+        message: format!("Released {} with status {}", task_id, status),
     })
 }

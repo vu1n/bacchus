@@ -1,7 +1,7 @@
 //! Git worktree management for isolated agent work
 //!
-//! This module manages git worktrees for beads, storing them in `.bacchus/worktrees/{bead_id}/`.
-//! Each worktree operates on a separate branch `bacchus/{bead_id}`.
+//! This module manages git worktrees for tasks, storing them in `.bacchus/worktrees/{task_id}/`.
+//! Each worktree operates on a separate branch `bacchus/{task_id}`.
 //!
 //! Override worktrees directory with BACCHUS_WORKTREES environment variable.
 
@@ -19,8 +19,9 @@ pub(crate) fn get_worktrees_dir(workspace_root: &Path) -> PathBuf {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WorktreeInfo {
-    pub bead_id: String,
+    pub task_id: String,
     pub path: PathBuf,
     pub branch: String,
     pub head_commit: String,
@@ -38,22 +39,22 @@ pub enum WorktreeError {
     IoError(#[from] std::io::Error),
 }
 
-/// Create a new worktree for a bead
-/// Creates worktrees/{bead_id} on branch bacchus/{bead_id}
-pub fn create_worktree(workspace_root: &Path, bead_id: &str) -> Result<WorktreeInfo, WorktreeError> {
+/// Create a new worktree for a task
+/// Creates worktrees/{task_id} on branch bacchus/{task_id}
+pub fn create_worktree(workspace_root: &Path, task_id: &str) -> Result<WorktreeInfo, WorktreeError> {
     let worktrees_dir = get_worktrees_dir(workspace_root);
-    let worktree_path = worktrees_dir.join(bead_id);
-    let branch_name = format!("bacchus/{}", bead_id);
+    let worktree_path = worktrees_dir.join(task_id);
+    let branch_name = format!("bacchus/{}", task_id);
 
     // Ensure .bacchus/worktrees/ directory exists
     std::fs::create_dir_all(&worktrees_dir)?;
 
     // Check if worktree already exists
     if worktree_path.exists() {
-        return Err(WorktreeError::AlreadyExists(bead_id.to_string()));
+        return Err(WorktreeError::AlreadyExists(task_id.to_string()));
     }
 
-    // Run: git worktree add .bacchus/worktrees/{bead_id} -b bacchus/{bead_id}
+    // Run: git worktree add .bacchus/worktrees/{task_id} -b bacchus/{task_id}
     let output = Command::new("git")
         .arg("worktree")
         .arg("add")
@@ -75,7 +76,7 @@ pub fn create_worktree(workspace_root: &Path, bead_id: &str) -> Result<WorktreeI
     let head_commit = get_head_commit_in_path(&worktree_path)?;
 
     Ok(WorktreeInfo {
-        bead_id: bead_id.to_string(),
+        task_id: task_id.to_string(),
         path: worktree_path,
         branch: branch_name,
         head_commit,
@@ -83,16 +84,16 @@ pub fn create_worktree(workspace_root: &Path, bead_id: &str) -> Result<WorktreeI
 }
 
 /// Remove a worktree (force=true discards uncommitted changes)
-pub fn remove_worktree(workspace_root: &Path, bead_id: &str, force: bool) -> Result<(), WorktreeError> {
-    let worktree_path = get_worktrees_dir(workspace_root).join(bead_id);
-    let branch_name = format!("bacchus/{}", bead_id);
+pub fn remove_worktree(workspace_root: &Path, task_id: &str, force: bool) -> Result<(), WorktreeError> {
+    let worktree_path = get_worktrees_dir(workspace_root).join(task_id);
+    let branch_name = format!("bacchus/{}", task_id);
 
     // Check if worktree exists
     if !worktree_path.exists() {
-        return Err(WorktreeError::NotFound(bead_id.to_string()));
+        return Err(WorktreeError::NotFound(task_id.to_string()));
     }
 
-    // Run: git worktree remove .bacchus/worktrees/{bead_id} [--force]
+    // Run: git worktree remove .bacchus/worktrees/{task_id} [--force]
     let mut cmd = Command::new("git");
     cmd.arg("worktree")
         .arg("remove")
@@ -113,15 +114,15 @@ pub fn remove_worktree(workspace_root: &Path, bead_id: &str, force: bool) -> Res
         )));
     }
 
-    // Delete branch: git branch -d/-D bacchus/{bead_id}
+    // Delete branch: git branch -d/-D bacchus/{task_id}
     delete_branch(workspace_root, &branch_name, force)?;
 
     Ok(())
 }
 
 /// Merge worktree branch to target (usually "main")
-pub fn merge_worktree(workspace_root: &Path, bead_id: &str, target_branch: &str) -> Result<(), WorktreeError> {
-    let branch_name = format!("bacchus/{}", bead_id);
+pub fn merge_worktree(workspace_root: &Path, task_id: &str, target_branch: &str) -> Result<(), WorktreeError> {
+    let branch_name = format!("bacchus/{}", task_id);
 
     // Checkout target branch
     let output = Command::new("git")
@@ -157,6 +158,7 @@ pub fn merge_worktree(workspace_root: &Path, bead_id: &str, target_branch: &str)
 }
 
 /// Get current HEAD commit hash
+#[allow(dead_code)]
 pub fn get_head_commit(workspace_root: &Path) -> Result<String, WorktreeError> {
     get_head_commit_in_path(workspace_root)
 }
@@ -376,10 +378,10 @@ mod tests {
     #[test]
     fn test_create_worktree() {
         let (_temp, repo_path) = init_test_repo();
-        let info = create_worktree(&repo_path, "test-bead").unwrap();
+        let info = create_worktree(&repo_path, "test-task").unwrap();
 
-        assert_eq!(info.bead_id, "test-bead");
-        assert_eq!(info.branch, "bacchus/test-bead");
+        assert_eq!(info.task_id, "test-task");
+        assert_eq!(info.branch, "bacchus/test-task");
         assert!(info.path.exists());
     }
 

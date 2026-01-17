@@ -2,8 +2,8 @@
 //!
 //! Manages .bacchus/session.json for persistent session state.
 
-use crate::beads;
 use crate::db::with_db;
+use crate::tasks;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -12,7 +12,7 @@ use std::fs;
 pub struct Session {
     pub mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bead_id: Option<String>,
+    pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrent: Option<i32>,
     pub started_at: String,
@@ -29,7 +29,7 @@ pub struct HookCheckOutput {
 ///
 /// Priority:
 /// 1. CLAUDE_PROJECT_DIR env var (set by Claude Code for plugins/hooks)
-/// 2. Walk up from CWD looking for .bacchus, .beads, or .git
+/// 2. Walk up from CWD looking for .bacchus or .git
 fn find_workspace_root() -> Option<std::path::PathBuf> {
     // First check CLAUDE_PROJECT_DIR (set by Claude Code for hooks/plugins)
     if let Ok(project_dir) = std::env::var("CLAUDE_PROJECT_DIR") {
@@ -42,8 +42,8 @@ fn find_workspace_root() -> Option<std::path::PathBuf> {
     // Walk up from current directory
     let mut current = std::env::current_dir().ok()?;
     loop {
-        // Check for bacchus/beads markers first
-        if current.join(".bacchus").exists() || current.join(".beads").exists() {
+        // Check for bacchus marker first
+        if current.join(".bacchus").exists() {
             return Some(current);
         }
         // Fall back to .git as project root indicator
@@ -63,24 +63,24 @@ fn session_path() -> Option<std::path::PathBuf> {
 }
 
 /// Start a session
-pub fn start_session(mode: &str, bead_id: Option<&str>, max_concurrent: i32) -> Result<String, String> {
+pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32) -> Result<String, String> {
     let root = find_workspace_root().ok_or("No workspace root found")?;
     let bacchus_dir = root.join(".bacchus");
     fs::create_dir_all(&bacchus_dir).map_err(|e| e.to_string())?;
 
     let session = match mode {
         "agent" => {
-            let bead_id = bead_id.ok_or("bead_id required for agent mode")?;
+            let task_id = task_id.ok_or("task_id required for agent mode")?;
             Session {
                 mode: "agent".to_string(),
-                bead_id: Some(bead_id.to_string()),
+                task_id: Some(task_id.to_string()),
                 max_concurrent: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
         "orchestrator" => Session {
             mode: "orchestrator".to_string(),
-            bead_id: None,
+            task_id: None,
             max_concurrent: Some(max_concurrent),
             started_at: chrono::Utc::now().to_rfc3339(),
         },
@@ -159,37 +159,46 @@ pub fn check_session() -> HookCheckOutput {
 }
 
 fn check_agent_session(session: &Session) -> HookCheckOutput {
-    let bead_id = match &session.bead_id {
+    let task_id = match &session.task_id {
         Some(id) => id,
         None => return HookCheckOutput {
             decision: "approve".to_string(),
-            reason: "No bead ID in session".to_string(),
+            reason: "No task ID in session".to_string(),
         },
     };
 
-    // Check bead status
-    match beads::get_bead(bead_id) {
-        Ok(bead) => {
-            if bead.status == "closed" {
+    // Get workspace root for task lookup
+    let workspace_root = match find_workspace_root() {
+        Some(root) => root,
+        None => return HookCheckOutput {
+            decision: "approve".to_string(),
+            reason: "Cannot find workspace root".to_string(),
+        },
+    };
+
+    // Check task status
+    match tasks::get_task(&workspace_root, task_id) {
+        Ok(task) => {
+            if task.status == "closed" {
                 // Auto-clear session
                 let _ = stop_session();
                 HookCheckOutput {
                     decision: "approve".to_string(),
-                    reason: format!("Bead {} is closed. Session cleared.", bead_id),
+                    reason: format!("Task {} is closed. Session cleared.", task_id),
                 }
             } else {
                 HookCheckOutput {
                     decision: "block".to_string(),
                     reason: format!(
-                        "Bead {} status is '{}'. Continue working until complete, then run 'bd close {}'.",
-                        bead_id, bead.status, bead_id
+                        "Task {} status is '{}'. Continue working until complete, then run 'bacchus release {} --status done'.",
+                        task_id, task.status, task_id
                     ),
                 }
             }
         }
         Err(e) => HookCheckOutput {
             decision: "approve".to_string(),
-            reason: format!("Cannot check bead status: {}", e),
+            reason: format!("Cannot check task status: {}", e),
         },
     }
 }
@@ -197,13 +206,22 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
 fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let max_concurrent = session.max_concurrent.unwrap_or(3);
 
-    // Get project stats
-    let ready_beads = beads::get_ready_beads().unwrap_or_default();
-    let ready_count = ready_beads.len();
+    // Get workspace root for task lookup
+    let workspace_root = match find_workspace_root() {
+        Some(root) => root,
+        None => return HookCheckOutput {
+            decision: "approve".to_string(),
+            reason: "Cannot find workspace root".to_string(),
+        },
+    };
 
-    // Get in_progress beads (may include orphaned work without claims)
-    let in_progress_beads = beads::get_in_progress_beads().unwrap_or_default();
-    let in_progress_count = in_progress_beads.len();
+    // Get project stats
+    let ready_tasks = tasks::get_ready_tasks(&workspace_root).unwrap_or_default();
+    let ready_count = ready_tasks.len();
+
+    // Get in_progress tasks (may include orphaned work without claims)
+    let in_progress_tasks = tasks::get_in_progress_tasks(&workspace_root).unwrap_or_default();
+    let in_progress_count = in_progress_tasks.len();
 
     // Get active claims count
     let active_count = with_db(|conn| {
@@ -215,14 +233,14 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         // Ready work available and capacity to spawn
         let slots = max_concurrent as usize - active_count;
         let to_spawn = ready_count.min(slots);
-        let bead_ids: Vec<_> = ready_beads.iter().take(to_spawn).map(|b| b.id.as_str()).collect();
+        let task_ids: Vec<_> = ready_tasks.iter().take(to_spawn).map(|t| t.id.as_str()).collect();
 
         HookCheckOutput {
             decision: "block".to_string(),
             reason: format!(
-                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus claim <bead_id> <agent_id>' to claim.",
+                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus claim <task_id> <agent_id>' to claim.",
                 to_spawn,
-                bead_ids.join(", "),
+                task_ids.join(", "),
                 active_count,
                 max_concurrent
             ),
@@ -237,14 +255,14 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             ),
         }
     } else if in_progress_count > 0 {
-        // In-progress beads without claims - orphaned work, block to investigate
-        let bead_ids: Vec<_> = in_progress_beads.iter().map(|b| b.id.as_str()).collect();
+        // In-progress tasks without claims - orphaned work, block to investigate
+        let task_ids: Vec<_> = in_progress_tasks.iter().map(|t| t.id.as_str()).collect();
         HookCheckOutput {
             decision: "block".to_string(),
             reason: format!(
-                "{} bead(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent>' or reset with 'bd update <id> --status open'.",
+                "{} task(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent>' or edit tasks.yaml to reset status.",
                 in_progress_count,
-                bead_ids.join(", ")
+                task_ids.join(", ")
             ),
         }
     } else if ready_count == 0 {

@@ -5,12 +5,19 @@
 //! - Claim recording and cleanup
 //! - Stale detection
 //!
-//! Note: Tests requiring `bd` (beads CLI) are skipped if bd is not available.
+//! Note: Tests run against the pre-built binary to avoid Cargo lock contention.
+//! Run `cargo build` before running integration tests.
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
+
+/// Get the path to the bacchus binary (pre-built to avoid Cargo lock contention)
+fn bacchus_bin() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.join("target/debug/bacchus")
+}
 
 /// Initialize a test git repository with an initial commit
 fn init_test_repo() -> (TempDir, PathBuf) {
@@ -50,15 +57,6 @@ fn init_test_repo() -> (TempDir, PathBuf) {
         .unwrap();
 
     (temp, repo_path)
-}
-
-/// Check if bd CLI is available
-fn bd_available() -> bool {
-    Command::new("bd")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 // ============================================================================
@@ -251,9 +249,8 @@ mod db_tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Run bacchus to init DB (use env var to point to test DB)
-        let output = Command::new("cargo")
-            .args(["run", "--", "status"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["status"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -268,9 +265,8 @@ mod db_tests {
         let db_path = init_test_db(&temp);
 
         // Verify status shows empty claims
-        let output = Command::new("cargo")
-            .args(["run", "--", "status"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["status"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -284,9 +280,8 @@ mod db_tests {
         let temp = TempDir::new().unwrap();
         let db_path = init_test_db(&temp);
 
-        let output = Command::new("cargo")
-            .args(["run", "--", "list"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["list"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -301,9 +296,8 @@ mod db_tests {
         let temp = TempDir::new().unwrap();
         let db_path = init_test_db(&temp);
 
-        let output = Command::new("cargo")
-            .args(["run", "--", "stale", "--minutes", "1"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["stale", "--minutes", "1"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -351,10 +345,9 @@ export class Greeter {
         .unwrap();
 
         // Index the file
-        let output = Command::new("cargo")
-            .args(["run", "--", "index"])
+        let output = Command::new(bacchus_bin())
+            .args(["index"])
             .arg(&test_file)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -364,9 +357,8 @@ export class Greeter {
         assert!(stdout.contains("files_indexed"));
 
         // Search for the function
-        let output = Command::new("cargo")
-            .args(["run", "--", "symbols", "--pattern", "greet"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["symbols", "--pattern", "greet"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -376,9 +368,8 @@ export class Greeter {
         assert!(stdout.contains("greet") || stdout.contains("symbols"));
 
         // Search for the class
-        let output = Command::new("cargo")
-            .args(["run", "--", "symbols", "--pattern", "Greeter", "--kind", "class"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["symbols", "--pattern", "Greeter", "--kind", "class"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -396,9 +387,8 @@ mod cli_tests {
 
     #[test]
     fn test_help() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "--help"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["--help"])
             .output()
             .unwrap();
 
@@ -412,9 +402,8 @@ mod cli_tests {
         let temp = TempDir::new().unwrap();
         let db_path = temp.path().join("test.db");
 
-        let output = Command::new("cargo")
-            .args(["run", "--", "workflow"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["workflow"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -428,9 +417,8 @@ mod cli_tests {
 
     #[test]
     fn test_version() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "--version"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["--version"])
             .output()
             .unwrap();
 
@@ -441,7 +429,7 @@ mod cli_tests {
 }
 
 // ============================================================================
-// Full Workflow Tests (require bd)
+// Full Workflow Tests
 // ============================================================================
 
 mod workflow_tests {
@@ -449,33 +437,25 @@ mod workflow_tests {
 
     #[test]
     fn test_next_without_ready_beads() {
-        if !bd_available() {
-            eprintln!("Skipping test: bd not available");
-            return;
-        }
-
-        let temp = TempDir::new().unwrap();
+        let (temp, repo_path) = init_test_repo();
         let db_path = temp.path().join("test.db");
 
-        // Run next - should report no ready beads or bd error
-        let output = Command::new("cargo")
-            .args(["run", "--", "next", "test-agent"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        // Run next - should report no ready tasks (no tasks.yaml exists)
+        let output = Command::new(bacchus_bin())
+            .args(["next", "test-agent"])
+            .current_dir(&repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Should indicate no ready beads or bd error
+        // Should indicate no ready tasks or tasks file not found
         assert!(
-            stdout.contains("No ready beads") ||
-            stdout.contains("success") ||
-            stderr.contains("bd") ||
-            stderr.contains("beads") ||
-            stderr.contains("Failed"),
-            "Unexpected output: stdout={}, stderr={}", stdout, stderr
+            stdout.contains("No ready tasks") ||
+            stdout.contains("success\": false") ||
+            stdout.contains("Tasks file not found"),
+            "Unexpected output: {}", stdout
         );
     }
 
@@ -485,17 +465,15 @@ mod workflow_tests {
         let db_path = temp.path().join("test.db");
 
         // Init DB first
-        Command::new("cargo")
-            .args(["run", "--", "status"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        Command::new(bacchus_bin())
+            .args(["status"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
 
         // Try to release non-existent claim
-        let output = Command::new("cargo")
-            .args(["run", "--", "release", "nonexistent-bead", "--status", "done"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["release", "nonexistent-task", "--status", "done"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -513,17 +491,15 @@ mod workflow_tests {
         let db_path = temp.path().join("test.db");
 
         // Init DB first
-        Command::new("cargo")
-            .args(["run", "--", "status"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        Command::new(bacchus_bin())
+            .args(["status"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
 
         // Try to abort when not in merge
-        let output = Command::new("cargo")
-            .args(["run", "--", "abort", "test-bead"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["abort", "test-task"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
@@ -550,9 +526,8 @@ mod error_tests {
 
     #[test]
     fn test_invalid_subcommand() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "invalid-command"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["invalid-command"])
             .output()
             .unwrap();
 
@@ -561,9 +536,8 @@ mod error_tests {
 
     #[test]
     fn test_missing_arguments() {
-        let output = Command::new("cargo")
-            .args(["run", "--", "next"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["next"])
             .output()
             .unwrap();
 
@@ -579,17 +553,15 @@ mod error_tests {
         let db_path = temp.path().join("test.db");
 
         // Init DB
-        Command::new("cargo")
-            .args(["run", "--", "status"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        Command::new(bacchus_bin())
+            .args(["status"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
 
         // Try invalid status
-        let output = Command::new("cargo")
-            .args(["run", "--", "release", "test", "--status", "invalid"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+        let output = Command::new(bacchus_bin())
+            .args(["release", "test", "--status", "invalid"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();

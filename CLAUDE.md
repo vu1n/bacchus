@@ -2,11 +2,11 @@
 
 ## Overview
 
-Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. It integrates with [beads](https://github.com/vu1n/beads) for task tracking and provides isolated git worktrees for parallel agent work.
+Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. It provides isolated git worktrees for parallel agent work with built-in task management via `.bacchus/tasks.yaml`.
 
 **Key concepts:**
-- **beads** = What needs to be done (issues, dependencies, status)
-- **bacchus** = Who's doing what right now (claims, worktrees, sessions)
+- **tasks** = What needs to be done (defined in `.bacchus/tasks.yaml`)
+- **claims** = Who's doing what right now (worktrees, sessions)
 
 ## Architecture
 
@@ -21,19 +21,21 @@ Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. 
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     bacchus CLI (Rust)                       │
+│  ├── Task management (list/show/validate/init)              │
 │  ├── Session management (start/stop/status/check)           │
 │  ├── Coordination (next/claim/release/stale)                │
 │  ├── Symbol indexing (index/symbols)                        │
 │  └── Context generation                                      │
 └─────────────────────────────────────────────────────────────┘
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌─────────────┐    ┌──────────────────┐    ┌─────────────┐
-│ .bacchus/   │    │ beads CLI (bd)   │    │ git         │
-│ ├── db      │    │ Task management  │    │ Worktrees   │
-│ ├── session │    │ Dependencies     │    │ Branches    │
-│ └── worktrees    │ Status tracking  │    │ Merges      │
-└─────────────┘    └──────────────────┘    └─────────────┘
+         │                              │
+         ▼                              ▼
+┌──────────────────────┐    ┌─────────────────────┐
+│ .bacchus/            │    │ git                 │
+│ ├── tasks.yaml       │    │ Worktrees           │
+│ ├── bacchus.db       │    │ Branches            │
+│ ├── session.json     │    │ Merges              │
+│ └── worktrees/       │    └─────────────────────┘
+└──────────────────────┘
 ```
 
 ## Source Code Structure
@@ -42,17 +44,18 @@ Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. 
 src/
 ├── main.rs              # CLI entry point, command routing
 ├── cli/mod.rs           # Clap command definitions
-├── beads.rs             # beads CLI integration (bd commands)
+├── tasks.rs             # YAML-based task management
 ├── worktree.rs          # Git worktree operations
 ├── db/                  # SQLite database (claims, symbols)
 ├── indexer/             # Tree-sitter symbol extraction
 ├── updater.rs           # Self-update functionality
 └── tools/
     ├── mod.rs           # Tool exports
+    ├── task_commands.rs # Task list/show/validate/init
     ├── session.rs       # Session management for stop hooks
-    ├── claim.rs         # Claim specific bead
-    ├── next.rs          # Claim next ready bead
-    ├── release.rs       # Release bead (merge/cleanup)
+    ├── claim.rs         # Claim specific task
+    ├── next.rs          # Claim next ready task
+    ├── release.rs       # Release task (merge/cleanup)
     ├── stale.rs         # Find/cleanup abandoned claims
     ├── list.rs          # List active claims
     ├── abort.rs         # Abort merge conflict
@@ -63,6 +66,37 @@ src/
 
 ## Key Modules
 
+### Task Management (`src/tasks.rs`)
+
+Manages tasks via `.bacchus/tasks.yaml`:
+
+```rust
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: i32,           // Lower = higher priority (default: 5)
+    pub status: String,          // open | in_progress | blocked | closed
+    pub depends_on: Vec<String>, // Task IDs that must be closed first
+    pub footprint: TaskFootprint,
+}
+
+pub struct TaskFootprint {
+    pub modifies: Vec<String>,   // Symbols this task will change
+    pub creates: Vec<String>,    // New files to create
+}
+
+// Key functions:
+pub fn load_tasks(workspace_root) -> Result<Vec<Task>>
+pub fn get_ready_tasks(workspace_root) -> Result<Vec<Task>>
+pub fn update_task_status(workspace_root, task_id, status) -> Result<()>
+```
+
+**Ready calculation**: A task is ready when:
+1. `status == "open"`
+2. All tasks in `depends_on` have `status == "closed"`
+3. No footprint collision with in-progress tasks
+
 ### Session Management (`src/tools/session.rs`)
 
 Manages `.bacchus/session.json` for stop hook integration:
@@ -70,13 +104,13 @@ Manages `.bacchus/session.json` for stop hook integration:
 ```rust
 pub struct Session {
     pub mode: String,           // "agent" | "orchestrator"
-    pub bead_id: Option<String>, // For agent mode
+    pub task_id: Option<String>, // For agent mode
     pub max_concurrent: Option<i32>, // For orchestrator mode
     pub started_at: String,
 }
 
 // Key functions:
-pub fn start_session(mode, bead_id, max_concurrent) -> Result<String>
+pub fn start_session(mode, task_id, max_concurrent) -> Result<String>
 pub fn stop_session() -> Result<String>
 pub fn session_status() -> Result<Value>
 pub fn check_session() -> HookCheckOutput  // For stop hook
@@ -84,48 +118,45 @@ pub fn check_session() -> HookCheckOutput  // For stop hook
 
 **Workspace root detection priority:**
 1. `CLAUDE_PROJECT_DIR` env var (set by Claude Code for hooks)
-2. Walk up from CWD looking for `.bacchus`, `.beads`, or `.git`
-
-### Beads Integration (`src/beads.rs`)
-
-Wraps the `bd` CLI for task management:
-
-```rust
-pub fn get_ready_beads() -> Result<Vec<BeadInfo>>      // bd ready --json
-pub fn get_in_progress_beads() -> Result<Vec<BeadInfo>> // bd list --status=in_progress
-pub fn get_bead(bead_id) -> Result<BeadInfo>           // bd show <id> --json
-pub fn update_bead_status(bead_id, status) -> Result<()>
-pub fn is_bead_ready(bead_id) -> Result<bool>
-```
+2. Walk up from CWD looking for `.bacchus` or `.git`
 
 ### Worktree Operations (`src/worktree.rs`)
 
 Git worktree management:
 
 ```rust
-pub fn create_worktree(bead_id, workspace_root) -> Result<WorktreeInfo>
-pub fn remove_worktree(worktree_path, workspace_root) -> Result<()>
-pub fn merge_worktree(bead_id, workspace_root) -> Result<MergeResult>
+pub fn create_worktree(task_id, workspace_root) -> Result<WorktreeInfo>
+pub fn remove_worktree(task_id, workspace_root, force) -> Result<()>
+pub fn merge_worktree(task_id, workspace_root, target_branch) -> Result<()>
 ```
 
-## Plugin Structure
+## Task YAML Format
 
-```
-plugin/
-├── .claude-plugin/config.json  # Plugin manifest
-├── hooks/
-│   ├── hooks.json              # Hook registration
-│   ├── stop-router.sh          # Delegates to bacchus session check
-│   └── stop-prompt.md          # Alternative prompt-based hook
-├── commands/
-│   ├── agent.md                # /bacchus-agent command
-│   ├── orchestrate.md          # /bacchus-orchestrate command
-│   └── cancel.md               # /bacchus-cancel command
-├── skills/
-│   ├── planner.md              # Task breakdown skill
-│   └── context.md              # Context generation skill
-└── scripts/
-    └── session.sh              # Shell helper (fallback)
+```yaml
+version: 1
+
+tasks:
+  - id: AUTH-001
+    title: "Implement user authentication"
+    description: "Add JWT-based auth to the API"
+    priority: 1                    # Lower = higher priority (default: 5)
+    status: open                   # open | in_progress | blocked | closed
+    depends_on: []                 # Task IDs that must be closed first
+    footprint:
+      modifies:                    # Symbols this task will change
+        - "src/auth/handler.rs::AuthHandler"
+        - "src/auth/jwt.rs::*"     # Glob: all symbols in file
+      creates:                     # New files (virtual footprint)
+        - "src/auth/middleware.rs"
+
+  - id: RATE-002
+    title: "Add rate limiting"
+    priority: 2
+    status: open
+    depends_on: [AUTH-001]         # Blocked until AUTH-001 is closed
+    footprint:
+      modifies: ["src/middleware/mod.rs::*"]
+      creates: ["src/middleware/rate_limit.rs"]
 ```
 
 ## Stop Hook Flow
@@ -142,12 +173,12 @@ bacchus session check
         ├─► No session → approve
         │
         ├─► Agent mode:
-        │   └─► bd show <bead_id>
+        │   └─► Check task status
         │       ├─► closed → approve (clear session)
         │       └─► not closed → block
         │
         └─► Orchestrator mode:
-            ├─► ready beads + capacity → block (spawn agents)
+            ├─► ready tasks + capacity → block (spawn agents)
             ├─► active claims → block (wait)
             ├─► in_progress without claims → block (orphaned)
             └─► all done/blocked → approve (clear session)
@@ -166,8 +197,13 @@ cargo test            # Run tests
 ### Local Testing
 
 ```bash
+# Test task commands
+./target/debug/bacchus task init
+./target/debug/bacchus task list
+./target/debug/bacchus task list --ready
+
 # Test session commands
-./target/debug/bacchus session start agent --bead-id "TEST-123"
+./target/debug/bacchus session start agent --task-id "TEST-123"
 ./target/debug/bacchus session status
 ./target/debug/bacchus session check
 ./target/debug/bacchus session stop
@@ -200,11 +236,23 @@ The install script downloads from the release matching the latest tag.
 
 ```sql
 CREATE TABLE claims (
-    bead_id TEXT PRIMARY KEY,
+    bead_id TEXT PRIMARY KEY,    -- Note: column named bead_id for historical reasons
     agent_id TEXT NOT NULL,
     worktree_path TEXT NOT NULL,
     branch_name TEXT NOT NULL,
     claimed_at INTEGER NOT NULL  -- Unix timestamp in ms
+);
+```
+
+### Active Footprints Table (bacchus.db)
+
+```sql
+CREATE TABLE active_footprints (
+    task_id TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    pattern_type TEXT NOT NULL,    -- 'modifies' | 'creates'
+    resolved_symbols TEXT,         -- JSON array of matched fq_names
+    PRIMARY KEY (task_id, pattern)
 );
 ```
 
@@ -266,6 +314,6 @@ git -C .bacchus/worktrees/TASK-42 commit -m "msg"
 
 ## Dependencies
 
-- **Required**: `bd` (beads CLI), `git`
+- **Required**: `git`
 - **Build**: Rust toolchain, tree-sitter
 - **Runtime**: SQLite (bundled via rusqlite)

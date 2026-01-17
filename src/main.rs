@@ -1,16 +1,16 @@
 //! Bacchus - Worktree-based coordination CLI for multi-agent work
 
-mod beads;
 mod cli;
 mod config;
 mod db;
 mod indexer;
+mod tasks;
 mod tools;
 mod updater;
 mod worktree;
 
 use clap::Parser;
-use cli::{Cli, Commands, SessionCommands};
+use cli::{Cli, Commands, SessionCommands, TaskCommands};
 use std::path::PathBuf;
 
 fn main() {
@@ -45,22 +45,13 @@ fn main() {
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
-        Commands::Claim { bead_id, agent_id, force } => {
-            tools::claim_task(&bead_id, &agent_id, force, &workspace_root)
+        Commands::Claim { task_id, agent_id, force } => {
+            tools::claim_task(&task_id, &agent_id, force, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
 
-        Commands::Release { bead_id, status } => {
-            tools::release_bead(&bead_id, &status, &workspace_root)
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e.to_string()),
-                ))
-        }
-
-        Commands::Abort { bead_id } => {
-            tools::abort_merge(&bead_id, &workspace_root)
+        Commands::Release { task_id, status } => {
+            tools::release_bead(&task_id, &status, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
                 .map_err(|e| rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
@@ -68,8 +59,17 @@ fn main() {
                 ))
         }
 
-        Commands::Resolve { bead_id } => {
-            tools::resolve_merge(&bead_id, &workspace_root)
+        Commands::Abort { task_id } => {
+            tools::abort_merge(&task_id, &workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                ))
+        }
+
+        Commands::Resolve { task_id } => {
+            tools::resolve_merge(&task_id, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
                 .map_err(|e| rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
@@ -147,8 +147,8 @@ fn main() {
             ))
         }
 
-        Commands::Context { bead_id } => {
-            tools::generate_context(bead_id, &workspace_root)
+        Commands::Context { task_id } => {
+            tools::generate_context(task_id, &workspace_root)
                 .map_err(|e| rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
                     Some(e),
@@ -169,8 +169,8 @@ fn main() {
         // ====================================================================
         Commands::Session { command } => {
             match command {
-                SessionCommands::Start { mode, bead_id, max_concurrent } => {
-                    tools::start_session(&mode, bead_id.as_deref(), max_concurrent)
+                SessionCommands::Start { mode, task_id, max_concurrent } => {
+                    tools::start_session(&mode, task_id.as_deref(), max_concurrent)
                         .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
                         .map_err(|e| rusqlite::Error::SqliteFailure(
                             rusqlite::ffi::Error::new(1),
@@ -196,6 +196,57 @@ fn main() {
                 SessionCommands::Check => {
                     let result = tools::check_session();
                     Ok(serde_json::to_string_pretty(&result).unwrap())
+                }
+            }
+        }
+
+        // ====================================================================
+        // Task Commands (built-in task management)
+        // ====================================================================
+        Commands::Task { command } => {
+            match command {
+                TaskCommands::List { status, ready } => {
+                    tools::list_tasks(&workspace_root, status.as_deref(), ready)
+                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                TaskCommands::Show { id } => {
+                    tools::show_task(&workspace_root, &id)
+                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                TaskCommands::Add { id, title, description, priority, deps } => {
+                    let deps_vec = deps
+                        .map(|d| d.split(',').map(|s| s.trim().to_string()).collect())
+                        .unwrap_or_default();
+                    tools::add_task(&workspace_root, &id, &title, description.as_deref(), priority, deps_vec)
+                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                TaskCommands::Validate => {
+                    tools::validate_tasks(&workspace_root)
+                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
+                TaskCommands::Init => {
+                    tools::init_tasks(&workspace_root)
+                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
                 }
             }
         }
@@ -270,7 +321,7 @@ fn index_path(path: &str, workspace_root: &PathBuf) -> Result<usize, String> {
 ///
 /// Priority:
 /// 1. CLAUDE_PROJECT_DIR env var (set by Claude Code for plugins/hooks)
-/// 2. Walk up from CWD looking for .bacchus, .beads, or .git
+/// 2. Walk up from CWD looking for .bacchus or .git
 fn find_workspace_root() -> Option<PathBuf> {
     // First check CLAUDE_PROJECT_DIR (set by Claude Code for hooks/plugins)
     if let Ok(project_dir) = std::env::var("CLAUDE_PROJECT_DIR") {
@@ -282,7 +333,7 @@ fn find_workspace_root() -> Option<PathBuf> {
 
     let mut current = std::env::current_dir().ok()?;
     loop {
-        if current.join(".bacchus").exists() || current.join(".beads").exists() {
+        if current.join(".bacchus").exists() {
             return Some(current);
         }
 
@@ -349,6 +400,12 @@ fn store_symbols(symbols: &[indexer::ExtractedSymbol]) -> Result<(), String> {
 fn get_status() -> rusqlite::Result<serde_json::Value> {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    // Get ready tasks count BEFORE with_db to avoid deadlock
+    // (get_ready_tasks calls get_active_footprints which also uses with_db)
+    let ready_count = tasks::get_ready_tasks(&workspace_root)
+        .map(|v| v.len())
+        .unwrap_or(0);
+
     db::with_db(|conn| {
         // Count claims
         let claims_count: i32 = conn.query_row(
@@ -367,7 +424,7 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             .query_map([], |row| {
                 let worktree_path: String = row.get(2)?;
                 Ok((serde_json::json!({
-                    "bead_id": row.get::<_, String>(0)?,
+                    "task_id": row.get::<_, String>(0)?,
                     "agent_id": row.get::<_, String>(1)?,
                     "worktree_path": &worktree_path,
                     "branch": row.get::<_, String>(3)?,
@@ -387,11 +444,6 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             [],
             |r| r.get(0),
         ).unwrap_or(0);
-
-        // Get ready beads count from beads
-        let ready_count = beads::get_ready_beads()
-            .map(|v| v.len())
-            .unwrap_or(0);
 
         // Check for orphaned worktrees (worktrees on disk without claims)
         let worktrees_dir = std::env::var("BACCHUS_WORKTREES")
@@ -420,7 +472,7 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
         // Check for broken claims (claims where worktree doesn't exist)
         let broken_claims: Vec<String> = claims.iter()
             .filter(|(_, path)| !PathBuf::from(path).exists())
-            .filter_map(|(v, _)| v.get("bead_id").and_then(|b| b.as_str()).map(String::from))
+            .filter_map(|(v, _)| v.get("task_id").and_then(|b| b.as_str()).map(String::from))
             .collect();
 
         Ok(serde_json::json!({
@@ -429,7 +481,7 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
                 "active": claim_values
             },
             "symbols_indexed": symbols_count,
-            "ready_beads": ready_count,
+            "ready_tasks": ready_count,
             "orphaned_worktrees": orphaned_worktrees,
             "broken_claims": broken_claims
         }))
@@ -439,29 +491,50 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
 const WORKFLOW_DOC: &str = r#"
 # Bacchus Coordination Protocol
 
+## Task Management
+
+Tasks are defined in `.bacchus/tasks.yaml`:
+
+```bash
+# Initialize tasks.yaml template
+bacchus task init
+
+# List all tasks
+bacchus task list
+
+# List ready tasks only
+bacchus task list --ready
+
+# Show task details
+bacchus task show <task_id>
+
+# Validate tasks against symbol index
+bacchus task validate
+```
+
 ## Agent Workflow
 
 1. **Get Work**
    ```bash
    bacchus next <agent_id>
    ```
-   - Finds ready bead from beads DB (open, no blockers)
-   - Creates worktree at .bacchus/worktrees/{bead_id}/
-   - Claims bead, updates status to in_progress
+   - Finds ready task from tasks.yaml (open, dependencies satisfied, no footprint conflicts)
+   - Creates worktree at .bacchus/worktrees/{task_id}/
+   - Claims task, updates status to in_progress
 
 2. **Do Work**
-   Work in the worktree. All changes are isolated on branch bacchus/{bead_id}.
+   Work in the worktree. All changes are isolated on branch bacchus/{task_id}.
 
 3. **Release When Done**
    ```bash
    # Success - merge to main and cleanup
-   bacchus release <bead_id> --status done
+   bacchus release <task_id> --status done
 
    # Blocked - keep worktree, release claim
-   bacchus release <bead_id> --status blocked
+   bacchus release <task_id> --status blocked
 
-   # Failed - discard worktree, reset bead
-   bacchus release <bead_id> --status failed
+   # Failed - discard worktree, reset task
+   bacchus release <task_id> --status failed
    ```
 
 4. **Handle Merge Conflicts**
@@ -469,11 +542,29 @@ const WORKFLOW_DOC: &str = r#"
    ```bash
    # Option 1: Resolve manually then complete
    # ... fix conflicts, git add resolved files ...
-   bacchus resolve <bead_id>
+   bacchus resolve <task_id>
 
    # Option 2: Abort and keep working
-   bacchus abort <bead_id>
+   bacchus abort <task_id>
    ```
+
+## Collision Detection
+
+Tasks can define footprints to prevent parallel agents from modifying the same code:
+
+```yaml
+tasks:
+  - id: AUTH-001
+    title: Implement authentication
+    footprint:
+      modifies:
+        - "src/auth/handler.rs::AuthHandler"
+        - "src/auth/jwt.rs::*"  # All symbols in file
+      creates:
+        - "src/auth/middleware.rs"
+```
+
+Tasks with overlapping footprints won't both be marked as ready.
 
 ## Stale Detection
 
@@ -496,7 +587,7 @@ bacchus symbols --pattern "User*" --kind class
 
 ```bash
 bacchus context
-bacchus context --bead-id <bead_id>
+bacchus context --task-id <task_id>
 ```
 
 - Run from repo root for global context.

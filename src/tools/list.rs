@@ -12,7 +12,7 @@ pub struct ListOutput {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClaimInfo {
-    pub bead_id: String,
+    pub task_id: String,
     pub agent_id: String,
     pub worktree_path: String,
     pub branch_name: String,
@@ -32,7 +32,7 @@ pub fn list_claims() -> Result<ListOutput> {
         let claims: Vec<ClaimInfo> = stmt
             .query_map([], |row| {
                 Ok(ClaimInfo {
-                    bead_id: row.get(0)?,
+                    task_id: row.get(0)?,
                     agent_id: row.get(1)?,
                     worktree_path: row.get(2)?,
                     branch_name: row.get(3)?,

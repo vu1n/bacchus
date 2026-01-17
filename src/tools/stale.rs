@@ -2,8 +2,8 @@
 //!
 //! Detects claims older than a threshold and can clean them up.
 
-use crate::beads;
 use crate::db::with_db;
+use crate::tasks;
 use crate::worktree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StaleClaim {
-    pub bead_id: String,
+    pub task_id: String,
     pub agent_id: String,
     pub worktree_path: String,
     pub claimed_at: i64,
@@ -48,7 +48,7 @@ pub fn find_stale(
             .query_map([cutoff], |row| {
                 let claimed_at: i64 = row.get(3)?;
                 Ok(StaleClaim {
-                    bead_id: row.get(0)?,
+                    task_id: row.get(0)?,
                     agent_id: row.get(1)?,
                     worktree_path: row.get(2)?,
                     claimed_at,
@@ -66,26 +66,34 @@ pub fn find_stale(
     if cleanup {
         for claim in &stale_claims {
             // Remove worktree (force to discard any changes)
-            if let Err(e) = worktree::remove_worktree(workspace_root, &claim.bead_id, true) {
+            if let Err(e) = worktree::remove_worktree(workspace_root, &claim.task_id, true) {
                 eprintln!(
                     "Warning: Failed to remove worktree for {}: {}",
-                    claim.bead_id, e
+                    claim.task_id, e
                 );
                 // Continue anyway - worktree might not exist
             }
 
-            // Reset bead status to open for retry
-            if let Err(e) = beads::update_bead_status(&claim.bead_id, "open") {
+            // Clear active footprints for this task
+            if let Err(e) = tasks::clear_active_footprints(&claim.task_id) {
                 eprintln!(
-                    "Warning: Failed to reset bead status for {}: {}",
-                    claim.bead_id, e
+                    "Warning: Failed to clear footprints for {}: {}",
+                    claim.task_id, e
+                );
+            }
+
+            // Reset task status to open for retry
+            if let Err(e) = tasks::update_task_status(workspace_root, &claim.task_id, "open") {
+                eprintln!(
+                    "Warning: Failed to reset task status for {}: {}",
+                    claim.task_id, e
                 );
             }
 
             // Remove claim from DB
-            let _ = with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [&claim.bead_id]));
+            let _ = with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [&claim.task_id]));
 
-            cleaned_up.push(claim.bead_id.clone());
+            cleaned_up.push(claim.task_id.clone());
         }
     }
 

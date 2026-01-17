@@ -1,4 +1,4 @@
-//! Abort tool - abort a failed merge for a bead
+//! Abort tool - abort a failed merge for a task
 //!
 //! Restores the repository to pre-merge state when a merge conflict occurs.
 
@@ -10,12 +10,12 @@ use std::path::Path;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AbortOutput {
     pub success: bool,
-    pub bead_id: String,
+    pub task_id: String,
     pub message: String,
 }
 
 pub fn abort_merge(
-    bead_id: &str,
+    task_id: &str,
     workspace_root: &Path,
 ) -> Result<AbortOutput, Box<dyn std::error::Error>> {
     // 1. Check claim exists
@@ -23,7 +23,7 @@ pub fn abort_merge(
         Ok(conn
             .query_row(
                 "SELECT 1 FROM claims WHERE bead_id = ?1",
-                [bead_id],
+                [task_id],
                 |_| Ok(true),
             )
             .unwrap_or(false))
@@ -32,8 +32,8 @@ pub fn abort_merge(
     if !claim_exists {
         return Ok(AbortOutput {
             success: false,
-            bead_id: bead_id.to_string(),
-            message: format!("No claim found for {}", bead_id),
+            task_id: task_id.to_string(),
+            message: format!("No claim found for {}", task_id),
         });
     }
 
@@ -41,22 +41,22 @@ pub fn abort_merge(
     if !worktree::is_in_merge_conflict(workspace_root)? {
         return Ok(AbortOutput {
             success: false,
-            bead_id: bead_id.to_string(),
+            task_id: task_id.to_string(),
             message: "Not in a merge conflict state. Nothing to abort.".to_string(),
         });
     }
 
-    // 3. Verify the merge is for this bead's branch
+    // 3. Verify the merge is for this task's branch
     let merge_branch = worktree::get_merge_branch(workspace_root)?;
-    let expected = format!("bacchus/{}", bead_id);
+    let expected = format!("bacchus/{}", task_id);
 
     if let Some(ref branch) = merge_branch {
         if branch != &expected {
             return Ok(AbortOutput {
                 success: false,
-                bead_id: bead_id.to_string(),
+                task_id: task_id.to_string(),
                 message: format!(
-                    "Current merge conflict is for '{}', not '{}'. Abort the correct bead.",
+                    "Current merge conflict is for '{}', not '{}'. Abort the correct task.",
                     branch, expected
                 ),
             });
@@ -68,10 +68,10 @@ pub fn abort_merge(
 
     Ok(AbortOutput {
         success: true,
-        bead_id: bead_id.to_string(),
+        task_id: task_id.to_string(),
         message: format!(
             "Aborted merge for {}. Worktree preserved at .bacchus/worktrees/{}. Continue working or release with --status failed.",
-            bead_id, bead_id
+            task_id, task_id
         ),
     })
 }

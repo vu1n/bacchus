@@ -1,11 +1,11 @@
 use crate::db;
-use crate::beads;
+use crate::tasks;
 use std::path::Path;
 
-pub fn generate_global_context(_workspace_root: &Path) -> Result<String, String> {
+pub fn generate_global_context(workspace_root: &Path) -> Result<String, String> {
     let mut out = String::new();
     out.push_str("# Project Orchestration Context\n\n");
-    out.push_str("You are the **Orchestrator Agent**. Your goal is to coordinate work using `beads` and `bacchus`.\n\n");
+    out.push_str("You are the **Orchestrator Agent**. Your goal is to coordinate work using `bacchus`.\n\n");
 
     // 1. Active Claims (Who is doing what?)
     out.push_str("## Active Claims\n");
@@ -19,27 +19,28 @@ pub fn generate_global_context(_workspace_root: &Path) -> Result<String, String>
 
     if claims.is_empty() {
         out.push_str("_No active claims._\n");
-    } else {        out.push_str("| Bead ID | Agent |\n|---|---|\n");
-        for (bead, agent) in claims {
-            out.push_str(&format!("| {} | {} |\n", bead, agent));
+    } else {
+        out.push_str("| Task ID | Agent |\n|---|---|\n");
+        for (task, agent) in claims {
+            out.push_str(&format!("| {} | {} |\n", task, agent));
         }
     }
 
     // 2. Ready Work (What can be assigned?)
     out.push_str("\n## Ready for Assignment\n");
-    let ready_beads = beads::get_ready_beads().map_err(|e| e.to_string())?;
-    
-    if ready_beads.is_empty() {
-        out.push_str("_No ready beads. Use `beads-planner` to create new work._\n");
+    let ready_tasks = tasks::get_ready_tasks(workspace_root).map_err(|e| e.to_string())?;
+
+    if ready_tasks.is_empty() {
+        out.push_str("_No ready tasks. Edit `.bacchus/tasks.yaml` to add work._\n");
     } else {
-        out.push_str("| Bead ID | Title |\n|---|---|\n");
-        for bead in ready_beads.iter().take(10) {
-            let id = &bead.id;
-            let title = &bead.title;
+        out.push_str("| Task ID | Title |\n|---|---|\n");
+        for task in ready_tasks.iter().take(10) {
+            let id = &task.id;
+            let title = &task.title;
             out.push_str(&format!("| {} | {} |\n", id, title));
         }
-        if ready_beads.len() > 10 {
-            out.push_str(&format!("_...and {} more._\n", ready_beads.len() - 10));
+        if ready_tasks.len() > 10 {
+            out.push_str(&format!("_...and {} more._\n", ready_tasks.len() - 10));
         }
     }
 

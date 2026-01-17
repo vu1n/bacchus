@@ -27,9 +27,6 @@ pub enum UpdateError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("No binary found for platform {0}-{1}")]
-    BinaryNotFound(String, String),
-
     #[error("Already on latest version: {0}")]
     AlreadyLatest(String),
 }

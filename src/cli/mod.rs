@@ -19,42 +19,42 @@ pub enum Commands {
     // Coordination Commands (worktree-based)
     // ========================================================================
 
-    /// Get next ready bead, create worktree, claim it
+    /// Get next ready task, create worktree, claim it
     Next {
         /// Your agent ID
         agent_id: String,
     },
 
-    /// Claim a specific bead by ID, create worktree
+    /// Claim a specific task by ID, create worktree
     Claim {
-        /// The bead ID to claim
-        bead_id: String,
+        /// The task ID to claim
+        task_id: String,
         /// Your agent ID
         agent_id: String,
-        /// Force claim even if bead is not ready (blocked/in_progress)
+        /// Force claim even if task is not ready (blocked/in_progress)
         #[arg(long)]
         force: bool,
     },
 
-    /// Release a claimed bead
+    /// Release a claimed task
     Release {
-        /// The bead ID to release
-        bead_id: String,
+        /// The task ID to release
+        task_id: String,
         /// Release status: done (merge), blocked (keep), or failed (discard)
         #[arg(long, default_value = "done")]
         status: String,
     },
 
-    /// Abort a failed merge for a bead
+    /// Abort a failed merge for a task
     Abort {
-        /// The bead ID with a failed merge
-        bead_id: String,
+        /// The task ID with a failed merge
+        task_id: String,
     },
 
     /// Resolve a merge conflict after manual resolution
     Resolve {
-        /// The bead ID with resolved conflicts
-        bead_id: String,
+        /// The task ID with resolved conflicts
+        task_id: String,
     },
 
     /// Find stale claims and optionally clean them up
@@ -62,7 +62,7 @@ pub enum Commands {
         /// Minutes without activity to consider stale
         #[arg(short, long, default_value = "15")]
         minutes: i64,
-        /// Clean up stale claims (remove worktrees, reset beads)
+        /// Clean up stale claims (remove worktrees, reset tasks)
         #[arg(long)]
         cleanup: bool,
     },
@@ -117,9 +117,9 @@ pub enum Commands {
 
     /// Generate context for the current agent (global or task-specific)
     Context {
-        /// Force context for a specific bead ID
+        /// Force context for a specific task ID
         #[arg(long)]
-        bead_id: Option<String>,
+        task_id: Option<String>,
     },
 
     /// Update bacchus to the latest version
@@ -133,6 +133,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: SessionCommands,
     },
+
+    /// Manage tasks (built-in task management)
+    Task {
+        #[command(subcommand)]
+        command: TaskCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -141,9 +147,9 @@ pub enum SessionCommands {
     Start {
         /// Mode: agent or orchestrator
         mode: String,
-        /// Bead ID (required for agent mode)
+        /// Task ID (required for agent mode)
         #[arg(long)]
-        bead_id: Option<String>,
+        task_id: Option<String>,
         /// Max concurrent agents (for orchestrator mode)
         #[arg(long, default_value = "3")]
         max_concurrent: i32,
@@ -157,4 +163,48 @@ pub enum SessionCommands {
 
     /// Check if session should block exit (for stop hook)
     Check,
+}
+
+#[derive(Subcommand)]
+pub enum TaskCommands {
+    /// List tasks with optional filters
+    List {
+        /// Filter by status (open, in_progress, blocked, closed)
+        #[arg(long)]
+        status: Option<String>,
+        /// Show only ready tasks (open with satisfied dependencies)
+        #[arg(long)]
+        ready: bool,
+    },
+
+    /// Show details for a specific task
+    Show {
+        /// The task ID to show
+        id: String,
+    },
+
+    /// Add a new task
+    Add {
+        /// Task ID (e.g., AUTH-001)
+        #[arg(long)]
+        id: String,
+        /// Task title
+        #[arg(long)]
+        title: String,
+        /// Task description
+        #[arg(long)]
+        description: Option<String>,
+        /// Priority (lower = higher priority, default: 5)
+        #[arg(long)]
+        priority: Option<i32>,
+        /// Comma-separated list of task IDs this depends on
+        #[arg(long)]
+        deps: Option<String>,
+    },
+
+    /// Validate tasks against the symbol index
+    Validate,
+
+    /// Initialize a tasks.yaml template
+    Init,
 }

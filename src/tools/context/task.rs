@@ -2,11 +2,11 @@ use crate::db;
 use std::path::Path;
 use rusqlite::OptionalExtension;
 
-pub fn generate_task_context(bead_id: &str, _workspace_root: &Path) -> Result<String, String> {
+pub fn generate_task_context(task_id: &str, _workspace_root: &Path) -> Result<String, String> {
     let claim_info = db::with_db(|conn| {
         conn.query_row(
             "SELECT agent_id, branch_name, claimed_at FROM claims WHERE bead_id = ?1",
-            [bead_id],
+            [task_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -18,8 +18,7 @@ pub fn generate_task_context(bead_id: &str, _workspace_root: &Path) -> Result<St
     }).map_err(|e| e.to_string())?;
 
     let mut out = String::new();
-    out.push_str(&format!("# Task Context: {}\n\n", bead_id));
-
+    out.push_str(&format!("# Task Context: {}\n\n", task_id));
 
     if let Some((agent, branch, _ts)) = claim_info {
         out.push_str(&format!("- **Status**: In Progress (Claimed by {})\n", agent));
@@ -29,9 +28,9 @@ pub fn generate_task_context(bead_id: &str, _workspace_root: &Path) -> Result<St
     }
 
     out.push_str("\n## Objectives\n");
-    out.push_str("1. Fulfill the requirements of this specific bead.\n");
+    out.push_str("1. Fulfill the requirements of this task.\n");
     out.push_str("2. Ensure all tests pass within this isolated worktree.\n");
-    out.push_str("3. Release the bead when done using `bacchus release`.\n");
+    out.push_str("3. Release when done using `bacchus release`.\n");
 
     Ok(out)
 }

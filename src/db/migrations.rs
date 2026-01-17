@@ -198,6 +198,23 @@ CREATE TRIGGER symbols_fts_update AFTER UPDATE ON symbols BEGIN
 END;
 "#,
     },
+    Migration {
+        version: 5,
+        name: "add_active_footprints",
+        sql: r#"
+-- Active footprints table for collision detection
+-- Stores resolved footprints from active task claims
+CREATE TABLE active_footprints (
+    task_id TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    pattern_type TEXT NOT NULL,    -- 'modifies' | 'creates'
+    resolved_symbols TEXT,         -- JSON array of matched fq_names
+    PRIMARY KEY (task_id, pattern)
+);
+CREATE INDEX idx_footprints_pattern ON active_footprints(pattern);
+CREATE INDEX idx_footprints_task ON active_footprints(task_id);
+"#,
+    },
 ];
 
 /// Get the current schema version from the database
@@ -267,7 +284,7 @@ mod tests {
         apply_migrations(&conn, true).unwrap();
 
         let version = get_current_version(&conn).unwrap();
-        assert_eq!(version, 4); // Update to latest migration version
+        assert_eq!(version, 5); // Update to latest migration version
 
         // Verify claims table exists
         let count: i32 = conn
