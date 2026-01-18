@@ -133,6 +133,7 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
 }
 
 /// Save tasks to the YAML file with atomic write and file locking
+#[allow(dead_code)] // Public API, may be used by external callers
 pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksError> {
     use fs2::FileExt;
     use std::io::Write;
@@ -179,7 +180,9 @@ pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksErro
     file.sync_all()
         .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
 
-    // Atomic rename (on Unix, this is atomic; on Windows, it may not be)
+    // Atomic rename (remove first on Windows for compatibility)
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(&path);
     std::fs::rename(&temp_path, &path)
         .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
 
@@ -331,6 +334,9 @@ pub fn update_task_status(workspace_root: &Path, task_id: &str, status: &str) ->
     file.sync_all()
         .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
 
+    // Atomic rename (remove first on Windows for compatibility)
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(&path);
     std::fs::rename(&temp_path, &path)
         .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
 
@@ -427,16 +433,20 @@ pub fn footprints_overlap(a: &ResolvedFootprint, b: &ResolvedFootprint) -> bool 
     false
 }
 
-/// Check if two symbol patterns match (handles wildcards)
+/// Check if two symbol patterns match (handles wildcards and bare file paths)
 fn symbols_match(a: &str, b: &str) -> bool {
     // Exact match already handled by disjoint check
     if a == b {
         return true;
     }
 
+    // Normalize bare file paths to file::* for comparison
+    let norm_a = if a.contains("::") { a.to_string() } else { format!("{}::*", a) };
+    let norm_b = if b.contains("::") { b.to_string() } else { format!("{}::*", b) };
+
     // Check if one is a wildcard for the other's file
-    if let Some((file_a, sym_a)) = a.rsplit_once("::") {
-        if let Some((file_b, sym_b)) = b.rsplit_once("::") {
+    if let Some((file_a, sym_a)) = norm_a.rsplit_once("::") {
+        if let Some((file_b, sym_b)) = norm_b.rsplit_once("::") {
             // Same file: wildcard matches any symbol
             if file_a == file_b && (sym_a == "*" || sym_b == "*") {
                 return true;
@@ -533,22 +543,30 @@ pub fn store_active_footprints(task_id: &str, footprint: &TaskFootprint) -> Resu
     with_db(|conn| {
         // Store modifies patterns
         for pattern in &footprint.modifies {
+            // Normalize bare file paths to file::* for consistent matching
+            let normalized_pattern = if pattern.contains("::") {
+                pattern.clone()
+            } else {
+                format!("{}::*", pattern)
+            };
+
             // Resolve symbols for this pattern (using conn to avoid deadlock)
-            let resolved: Vec<String> = if let Some((file_part, symbol_part)) = pattern.rsplit_once("::") {
+            let resolved: Vec<String> = if let Some((file_part, symbol_part)) = normalized_pattern.rsplit_once("::") {
                 if symbol_part == "*" {
                     get_symbols_in_file_with_conn(conn, file_part).unwrap_or_default()
                 } else {
-                    vec![pattern.clone()]
+                    vec![normalized_pattern.clone()]
                 }
             } else {
-                get_symbols_in_file_with_conn(conn, pattern).unwrap_or_default()
+                // Shouldn't happen after normalization, but handle gracefully
+                get_symbols_in_file_with_conn(conn, &normalized_pattern).unwrap_or_default()
             };
 
             let resolved_json = serde_json::to_string(&resolved).ok();
 
             conn.execute(
                 "INSERT OR REPLACE INTO active_footprints (task_id, pattern, pattern_type, resolved_symbols) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![task_id, pattern, "modifies", resolved_json],
+                rusqlite::params![task_id, normalized_pattern, "modifies", resolved_json],
             )?;
         }
 
@@ -824,5 +842,16 @@ tasks:
         assert!(symbols_match("src/auth.rs::login", "src/auth.rs::*"));
         assert!(!symbols_match("src/auth.rs::*", "src/user.rs::login"));
         assert!(!symbols_match("src/auth.rs::login", "src/user.rs::*"));
+    }
+
+    #[test]
+    fn test_symbols_match_bare_file_paths() {
+        // Bare file path should be treated as file::*
+        assert!(symbols_match("src/auth.rs", "src/auth.rs::login"));
+        assert!(symbols_match("src/auth.rs::login", "src/auth.rs"));
+        assert!(symbols_match("src/auth.rs", "src/auth.rs::*"));
+        assert!(!symbols_match("src/auth.rs", "src/user.rs::login"));
+        // Two bare paths for same file should match
+        assert!(symbols_match("src/auth.rs", "src/auth.rs"));
     }
 }

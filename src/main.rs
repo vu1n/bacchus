@@ -390,10 +390,11 @@ fn store_symbols(symbols: &[indexer::ExtractedSymbol]) -> Result<(), String> {
             conn.execute("DELETE FROM symbols WHERE file = ?1", [file])?;
         }
 
-        // Insert new symbols
+        // Insert new symbols using OR REPLACE to handle duplicates
+        // (e.g., TS function overloads with same fq_name - last definition wins)
         for sym in symbols {
             conn.execute(
-                "INSERT INTO symbols (file, fq_name, kind, span_start_line, span_end_line, line_count, hash, docstring, language) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT OR REPLACE INTO symbols (file, fq_name, kind, span_start_line, span_end_line, line_count, hash, docstring, language) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     sym.file,
                     sym.fq_name,
