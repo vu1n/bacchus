@@ -374,11 +374,26 @@ fn parse_file(
 }
 
 /// Store symbols in database (batched in single transaction)
+/// Clears existing symbols for each file before inserting to prevent stale accumulation
 fn store_symbols(symbols: &[indexer::ExtractedSymbol]) -> Result<(), String> {
     db::with_db(|conn| {
+        // Collect unique files being indexed
+        let files: std::collections::HashSet<_> = symbols.iter().map(|s| s.file.as_str()).collect();
+
+        // Delete existing symbols for these files (handles deleted/renamed symbols)
+        for file in &files {
+            // Delete from FTS first (triggers won't fire on direct FTS delete)
+            conn.execute(
+                "DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE file = ?1)",
+                [file],
+            )?;
+            conn.execute("DELETE FROM symbols WHERE file = ?1", [file])?;
+        }
+
+        // Insert new symbols
         for sym in symbols {
             conn.execute(
-                "INSERT OR REPLACE INTO symbols (file, fq_name, kind, span_start_line, span_end_line, line_count, hash, docstring, language) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO symbols (file, fq_name, kind, span_start_line, span_end_line, line_count, hash, docstring, language) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     sym.file,
                     sym.fq_name,

@@ -215,6 +215,39 @@ CREATE INDEX idx_footprints_pattern ON active_footprints(pattern);
 CREATE INDEX idx_footprints_task ON active_footprints(task_id);
 "#,
     },
+    Migration {
+        version: 6,
+        name: "fix_symbols_unique_and_footprints_pk",
+        sql: r#"
+-- Fix symbols table: add unique constraint on (file, fq_name)
+-- First, dedupe by keeping the row with max id for each (file, fq_name)
+DELETE FROM symbols WHERE id NOT IN (
+    SELECT MAX(id) FROM symbols GROUP BY file, fq_name
+);
+-- Add unique index (SQLite doesn't support ADD CONSTRAINT, use unique index)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_symbols_file_fqname ON symbols(file, fq_name);
+
+-- Fix active_footprints: PK should include pattern_type
+-- Same pattern can be both 'modifies' and 'creates'
+DROP TABLE IF EXISTS active_footprints;
+CREATE TABLE active_footprints (
+    task_id TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    pattern_type TEXT NOT NULL,    -- 'modifies' | 'creates'
+    resolved_symbols TEXT,         -- JSON array of matched fq_names
+    PRIMARY KEY (task_id, pattern, pattern_type)
+);
+CREATE INDEX idx_footprints_pattern ON active_footprints(pattern);
+CREATE INDEX idx_footprints_task ON active_footprints(task_id);
+
+-- Update FTS triggers to handle UNIQUE constraint violations
+DROP TRIGGER IF EXISTS symbols_fts_insert;
+CREATE TRIGGER symbols_fts_insert AFTER INSERT ON symbols BEGIN
+  INSERT INTO symbols_fts(rowid, fq_name, docstring)
+  VALUES (new.id, new.fq_name, COALESCE(new.docstring, ''));
+END;
+"#,
+    },
 ];
 
 /// Get the current schema version from the database
@@ -284,7 +317,7 @@ mod tests {
         apply_migrations(&conn, true).unwrap();
 
         let version = get_current_version(&conn).unwrap();
-        assert_eq!(version, 5); // Update to latest migration version
+        assert_eq!(version, 6); // Update to latest migration version
 
         // Verify claims table exists
         let count: i32 = conn

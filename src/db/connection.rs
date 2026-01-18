@@ -30,6 +30,10 @@ pub fn init_db(db_path: Option<&str>, silent: bool) -> Result<()> {
     // Create connection
     let conn = Connection::open(path)?;
 
+    // Set busy timeout for concurrent access (5 seconds)
+    // This makes SQLite retry instead of immediately returning SQLITE_BUSY
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
     // Enable WAL mode for better concurrency
     conn.pragma_update(None, "journal_mode", "WAL")?;
 

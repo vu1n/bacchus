@@ -132,8 +132,11 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
     Ok(tasks_file.tasks)
 }
 
-/// Save tasks to the YAML file
+/// Save tasks to the YAML file with atomic write and file locking
 pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksError> {
+    use fs2::FileExt;
+    use std::io::Write;
+
     let path = tasks_file_path(workspace_root);
 
     // Ensure .bacchus directory exists
@@ -141,6 +144,20 @@ pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksErro
         std::fs::create_dir_all(parent)
             .map_err(|e| TasksError::WriteError(e.to_string()))?;
     }
+
+    // Use a lock file to serialize writes across processes
+    let lock_path = path.with_extension("yaml.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&lock_path)
+        .map_err(|e| TasksError::WriteError(format!("open lock: {}", e)))?;
+
+    // Acquire exclusive lock (blocks until available)
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| TasksError::WriteError(format!("lock: {}", e)))?;
 
     let tasks_file = TasksFile {
         version: 1,
@@ -150,9 +167,23 @@ pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksErro
     let content = serde_yaml::to_string(&tasks_file)
         .map_err(|e| TasksError::WriteError(e.to_string()))?;
 
-    std::fs::write(&path, content)
-        .map_err(|e| TasksError::WriteError(e.to_string()))?;
+    // Atomic write: write to temp file, then rename
+    let temp_path = path.with_extension("yaml.tmp");
 
+    let mut file = std::fs::File::create(&temp_path)
+        .map_err(|e| TasksError::WriteError(format!("create temp: {}", e)))?;
+
+    file.write_all(content.as_bytes())
+        .map_err(|e| TasksError::WriteError(format!("write: {}", e)))?;
+
+    file.sync_all()
+        .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
+
+    // Atomic rename (on Unix, this is atomic; on Windows, it may not be)
+    std::fs::rename(&temp_path, &path)
+        .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
+
+    // Lock is released when lock_file is dropped
     Ok(())
 }
 
@@ -230,16 +261,50 @@ pub fn get_ready_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
     Ok(ready)
 }
 
-/// Update a task's status in the YAML file
+/// Update a task's status in the YAML file (atomic with file locking)
 pub fn update_task_status(workspace_root: &Path, task_id: &str, status: &str) -> Result<(), TasksError> {
+    use fs2::FileExt;
+    use std::io::Write;
+
     // Validate status
     let valid_statuses = ["open", "in_progress", "blocked", "closed"];
     if !valid_statuses.contains(&status) {
         return Err(TasksError::InvalidStatus(status.to_string()));
     }
 
-    let mut tasks = load_tasks(workspace_root)?;
+    let path = tasks_file_path(workspace_root);
 
+    // Ensure .bacchus directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| TasksError::WriteError(e.to_string()))?;
+    }
+
+    // Acquire lock for the entire read-modify-write cycle
+    let lock_path = path.with_extension("yaml.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&lock_path)
+        .map_err(|e| TasksError::WriteError(format!("open lock: {}", e)))?;
+
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| TasksError::WriteError(format!("lock: {}", e)))?;
+
+    // Read current tasks (within lock)
+    let mut tasks = if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| TasksError::ReadError(e.to_string()))?;
+        let tasks_file: TasksFile = serde_yaml::from_str(&content)
+            .map_err(|e| TasksError::ParseError(e.to_string()))?;
+        tasks_file.tasks
+    } else {
+        Vec::new()
+    };
+
+    // Find and update task
     let task = tasks
         .iter_mut()
         .find(|t| t.id == task_id)
@@ -247,7 +312,30 @@ pub fn update_task_status(workspace_root: &Path, task_id: &str, status: &str) ->
 
     task.status = status.to_string();
 
-    save_tasks(workspace_root, &tasks)
+    // Write back (within lock)
+    let tasks_file = TasksFile {
+        version: 1,
+        tasks,
+    };
+
+    let content = serde_yaml::to_string(&tasks_file)
+        .map_err(|e| TasksError::WriteError(e.to_string()))?;
+
+    let temp_path = path.with_extension("yaml.tmp");
+    let mut file = std::fs::File::create(&temp_path)
+        .map_err(|e| TasksError::WriteError(format!("create temp: {}", e)))?;
+
+    file.write_all(content.as_bytes())
+        .map_err(|e| TasksError::WriteError(format!("write: {}", e)))?;
+
+    file.sync_all()
+        .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
+
+    std::fs::rename(&temp_path, &path)
+        .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
+
+    // Lock released when lock_file is dropped
+    Ok(())
 }
 
 // ============================================================================
@@ -298,10 +386,21 @@ pub fn resolve_footprint(footprint: &TaskFootprint) -> ResolvedFootprint {
 }
 
 /// Check if two footprints overlap
+///
+/// Handles wildcards: `file::*` overlaps with any `file::symbol`
 pub fn footprints_overlap(a: &ResolvedFootprint, b: &ResolvedFootprint) -> bool {
-    // Check symbol overlap
+    // Check exact symbol overlap
     if !a.symbols.is_disjoint(&b.symbols) {
         return true;
+    }
+
+    // Check wildcard overlap: file::* matches file::anything
+    for sym_a in &a.symbols {
+        for sym_b in &b.symbols {
+            if symbols_match(sym_a, sym_b) {
+                return true;
+            }
+        }
     }
 
     // Check creates overlap
@@ -312,14 +411,14 @@ pub fn footprints_overlap(a: &ResolvedFootprint, b: &ResolvedFootprint) -> bool 
     // Check if any created file overlaps with modified symbols
     for create_path in &a.creates {
         for sym in &b.symbols {
-            if sym.starts_with(create_path) || sym.starts_with(&format!("{}::", create_path)) {
+            if symbols_match_file(create_path, sym) {
                 return true;
             }
         }
     }
     for create_path in &b.creates {
         for sym in &a.symbols {
-            if sym.starts_with(create_path) || sym.starts_with(&format!("{}::", create_path)) {
+            if symbols_match_file(create_path, sym) {
                 return true;
             }
         }
@@ -328,20 +427,55 @@ pub fn footprints_overlap(a: &ResolvedFootprint, b: &ResolvedFootprint) -> bool 
     false
 }
 
+/// Check if two symbol patterns match (handles wildcards)
+fn symbols_match(a: &str, b: &str) -> bool {
+    // Exact match already handled by disjoint check
+    if a == b {
+        return true;
+    }
+
+    // Check if one is a wildcard for the other's file
+    if let Some((file_a, sym_a)) = a.rsplit_once("::") {
+        if let Some((file_b, sym_b)) = b.rsplit_once("::") {
+            // Same file: wildcard matches any symbol
+            if file_a == file_b && (sym_a == "*" || sym_b == "*") {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Check if a file path matches a symbol pattern
+fn symbols_match_file(file_path: &str, symbol: &str) -> bool {
+    if let Some((file, _)) = symbol.rsplit_once("::") {
+        file == file_path
+    } else {
+        // Symbol without :: is treated as file path
+        symbol == file_path
+    }
+}
+
 /// Get symbols in a specific file from the index
 fn get_symbols_in_file(file_path: &str) -> Result<Vec<String>, TasksError> {
-    with_db(|conn| {
-        let mut stmt = conn
-            .prepare("SELECT fq_name FROM symbols WHERE file = ?1")?;
+    with_db(|conn| get_symbols_in_file_with_conn(conn, file_path))
+        .map_err(|e| TasksError::DbError(e.to_string()))
+}
 
-        let symbols: Vec<String> = stmt
-            .query_map([file_path], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+/// Get symbols in a specific file (internal, takes connection to avoid deadlock)
+fn get_symbols_in_file_with_conn(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT fq_name FROM symbols WHERE file = ?1")?;
 
-        Ok(symbols)
-    })
-    .map_err(|e| TasksError::DbError(e.to_string()))
+    let symbols: Vec<String> = stmt
+        .query_map([file_path], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(symbols)
 }
 
 /// Get active footprints from all current claims
@@ -399,15 +533,15 @@ pub fn store_active_footprints(task_id: &str, footprint: &TaskFootprint) -> Resu
     with_db(|conn| {
         // Store modifies patterns
         for pattern in &footprint.modifies {
-            // Resolve symbols for this pattern
+            // Resolve symbols for this pattern (using conn to avoid deadlock)
             let resolved: Vec<String> = if let Some((file_part, symbol_part)) = pattern.rsplit_once("::") {
                 if symbol_part == "*" {
-                    get_symbols_in_file(file_part).unwrap_or_default()
+                    get_symbols_in_file_with_conn(conn, file_part).unwrap_or_default()
                 } else {
                     vec![pattern.clone()]
                 }
             } else {
-                get_symbols_in_file(pattern).unwrap_or_default()
+                get_symbols_in_file_with_conn(conn, pattern).unwrap_or_default()
             };
 
             let resolved_json = serde_json::to_string(&resolved).ok();
@@ -646,5 +780,49 @@ tasks:
         assert_eq!(task.status, "open"); // default
         assert!(task.depends_on.is_empty()); // default
         assert!(task.footprint.modifies.is_empty()); // default
+    }
+
+    #[test]
+    fn test_footprints_wildcard_overlap() {
+        // file::* should match file::specific_symbol
+        let mut a = ResolvedFootprint::default();
+        a.symbols.insert("src/auth.rs::*".to_string());
+
+        let mut b = ResolvedFootprint::default();
+        b.symbols.insert("src/auth.rs::login".to_string());
+
+        assert!(footprints_overlap(&a, &b));
+    }
+
+    #[test]
+    fn test_footprints_wildcard_no_overlap_different_files() {
+        // file1::* should NOT match file2::symbol
+        let mut a = ResolvedFootprint::default();
+        a.symbols.insert("src/auth.rs::*".to_string());
+
+        let mut b = ResolvedFootprint::default();
+        b.symbols.insert("src/user.rs::create".to_string());
+
+        assert!(!footprints_overlap(&a, &b));
+    }
+
+    #[test]
+    fn test_footprints_create_overlaps_modify() {
+        // Creating a file should overlap with modifying symbols in that file
+        let mut a = ResolvedFootprint::default();
+        a.creates.insert("src/new_file.rs".to_string());
+
+        let mut b = ResolvedFootprint::default();
+        b.symbols.insert("src/new_file.rs::SomeStruct".to_string());
+
+        assert!(footprints_overlap(&a, &b));
+    }
+
+    #[test]
+    fn test_symbols_match_wildcards() {
+        assert!(symbols_match("src/auth.rs::*", "src/auth.rs::login"));
+        assert!(symbols_match("src/auth.rs::login", "src/auth.rs::*"));
+        assert!(!symbols_match("src/auth.rs::*", "src/user.rs::login"));
+        assert!(!symbols_match("src/auth.rs::login", "src/user.rs::*"));
     }
 }
