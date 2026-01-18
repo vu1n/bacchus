@@ -3,14 +3,16 @@
 mod cli;
 mod config;
 mod db;
+mod epics;
 mod indexer;
+mod messages;
 mod tasks;
 mod tools;
 mod updater;
 mod worktree;
 
 use clap::Parser;
-use cli::{Cli, Commands, SessionCommands, TaskCommands};
+use cli::{Cli, Commands, EpicCommands, MessageCommands, SessionCommands, TaskCommands};
 use std::path::PathBuf;
 
 fn main() {
@@ -169,8 +171,8 @@ fn main() {
         // ====================================================================
         Commands::Session { command } => {
             match command {
-                SessionCommands::Start { mode, task_id, max_concurrent } => {
-                    tools::start_session(&mode, task_id.as_deref(), max_concurrent)
+                SessionCommands::Start { mode, task_id, max_concurrent, agent_id } => {
+                    tools::start_session(&mode, task_id.as_deref(), max_concurrent, agent_id.as_deref())
                         .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
                         .map_err(|e| rusqlite::Error::SqliteFailure(
                             rusqlite::ffi::Error::new(1),
@@ -247,6 +249,95 @@ fn main() {
                             rusqlite::ffi::Error::new(1),
                             Some(e),
                         ))
+                }
+            }
+        }
+
+        // ====================================================================
+        // Epic Commands (hierarchical orchestration)
+        // ====================================================================
+        Commands::Epic { command } => {
+            match command {
+                EpicCommands::List { status } => {
+                    let status_filter = status.as_ref().and_then(|s| epics::EpicStatus::from_str(s).ok());
+                    epics::list_epics(status_filter)
+                        .map(|epics| serde_json::to_string_pretty(&epics).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        ))
+                }
+                EpicCommands::Show { id } => {
+                    epics::get_epic_with_counts(&id)
+                        .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        ))
+                }
+                EpicCommands::Create { id, title, description } => {
+                    let input = epics::CreateEpicInput {
+                        id,
+                        title,
+                        description,
+                        created_by: "human".to_string(),
+                    };
+                    epics::create_epic(input)
+                        .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        ))
+                }
+                EpicCommands::Assign { id, agent } => {
+                    epics::assign_epic(&id, &agent)
+                        .map(|epic| serde_json::json!({
+                            "success": true,
+                            "epic": epic,
+                            "message": format!("Epic {} assigned to {}", id, agent)
+                        }).to_string())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        ))
+                }
+            }
+        }
+
+        // ====================================================================
+        // Message Commands (agent communication)
+        // ====================================================================
+        Commands::Message { command } => {
+            match command {
+                MessageCommands::List { agent, status } => {
+                    let status_filter = status.as_ref().and_then(|s| messages::MessageStatus::from_str(s).ok());
+                    messages::list_messages(agent.as_deref(), status_filter)
+                        .map(|msgs| serde_json::to_string_pretty(&msgs).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        ))
+                }
+                MessageCommands::Send { agent, message_type, payload } => {
+                    match serde_json::from_str::<serde_json::Value>(&payload) {
+                        Ok(payload_json) => {
+                            let input = messages::SendMessageInput {
+                                target_agent: agent,
+                                message_type,
+                                payload: payload_json,
+                            };
+                            messages::send_message(input)
+                                .map(|msg| serde_json::to_string_pretty(&msg).unwrap())
+                                .map_err(|e| rusqlite::Error::SqliteFailure(
+                                    rusqlite::ffi::Error::new(1),
+                                    Some(e.to_string()),
+                                ))
+                        }
+                        Err(e) => Err(rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(format!("Invalid JSON payload: {}", e)),
+                        ))
+                    }
                 }
             }
         }

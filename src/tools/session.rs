@@ -15,6 +15,8 @@ pub struct Session {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrent: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,  // For architect mode (persistent identity)
     pub started_at: String,
 }
 
@@ -63,7 +65,7 @@ fn session_path() -> Option<std::path::PathBuf> {
 }
 
 /// Start a session
-pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32) -> Result<String, String> {
+pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32, agent_id: Option<&str>) -> Result<String, String> {
     let root = find_workspace_root().ok_or("No workspace root found")?;
     let bacchus_dir = root.join(".bacchus");
     fs::create_dir_all(&bacchus_dir).map_err(|e| e.to_string())?;
@@ -75,6 +77,7 @@ pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32) -> 
                 mode: "agent".to_string(),
                 task_id: Some(task_id.to_string()),
                 max_concurrent: None,
+                agent_id: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
@@ -82,9 +85,20 @@ pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32) -> 
             mode: "orchestrator".to_string(),
             task_id: None,
             max_concurrent: Some(max_concurrent),
+            agent_id: None,
             started_at: chrono::Utc::now().to_rfc3339(),
         },
-        _ => return Err(format!("Unknown mode: {}. Use 'agent' or 'orchestrator'", mode)),
+        "architect" => {
+            let agent_id = agent_id.ok_or("agent_id required for architect mode")?;
+            Session {
+                mode: "architect".to_string(),
+                task_id: None,
+                max_concurrent: None,
+                agent_id: Some(agent_id.to_string()),
+                started_at: chrono::Utc::now().to_rfc3339(),
+            }
+        }
+        _ => return Err(format!("Unknown mode: {}. Use 'agent', 'orchestrator', or 'architect'", mode)),
     };
 
     let json = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
@@ -151,6 +165,7 @@ pub fn check_session() -> HookCheckOutput {
     match session.mode.as_str() {
         "agent" => check_agent_session(&session),
         "orchestrator" => check_orchestrator_session(&session),
+        "architect" => check_architect_session(&session),
         _ => HookCheckOutput {
             decision: "approve".to_string(),
             reason: format!("Unknown session mode: {}", session.mode),
@@ -276,6 +291,79 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         HookCheckOutput {
             decision: "approve".to_string(),
             reason: "Orchestrator complete".to_string(),
+        }
+    }
+}
+
+fn check_architect_session(session: &Session) -> HookCheckOutput {
+    let agent_id = match &session.agent_id {
+        Some(id) => id,
+        None => return HookCheckOutput {
+            decision: "approve".to_string(),
+            reason: "No agent ID in architect session".to_string(),
+        },
+    };
+
+    // Check for pending messages for this architect
+    let pending_count = with_db(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM agent_messages WHERE target_agent = ?1 AND status = 'pending'",
+            [agent_id.as_str()],
+            |r| r.get::<_, i32>(0),
+        )
+    })
+    .unwrap_or(0);
+
+    // Check for messages currently being processed
+    let processing_count = with_db(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM agent_messages WHERE processing_by = ?1 AND status = 'processing'",
+            [agent_id.as_str()],
+            |r| r.get::<_, i32>(0),
+        )
+    })
+    .unwrap_or(0);
+
+    // Check for epics in planning state (architect's responsibility)
+    let planning_epics = with_db(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM epics WHERE status = 'planning'",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
+    })
+    .unwrap_or(0);
+
+    if processing_count > 0 {
+        HookCheckOutput {
+            decision: "block".to_string(),
+            reason: format!(
+                "Architect {} has {} message(s) being processed. Complete processing before exiting.",
+                agent_id, processing_count
+            ),
+        }
+    } else if pending_count > 0 {
+        HookCheckOutput {
+            decision: "block".to_string(),
+            reason: format!(
+                "Architect {} has {} pending message(s). Poll and process messages before exiting.",
+                agent_id, pending_count
+            ),
+        }
+    } else if planning_epics > 0 {
+        HookCheckOutput {
+            decision: "block".to_string(),
+            reason: format!(
+                "{} epic(s) in 'planning' state. Break down into tasks before exiting.",
+                planning_epics
+            ),
+        }
+    } else {
+        // No pending work - architect can exit
+        let _ = stop_session();
+        HookCheckOutput {
+            decision: "approve".to_string(),
+            reason: "No pending work for architect. Session cleared.".to_string(),
         }
     }
 }

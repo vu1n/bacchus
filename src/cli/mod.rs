@@ -139,13 +139,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommands,
     },
+
+    /// Manage epics (high-level work containers)
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommands,
+    },
+
+    /// Manage agent messages (for debugging/monitoring)
+    Message {
+        #[command(subcommand)]
+        command: MessageCommands,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum SessionCommands {
-    /// Start a session (agent or orchestrator mode)
+    /// Start a session (agent, orchestrator, or architect mode)
     Start {
-        /// Mode: agent or orchestrator
+        /// Mode: agent, orchestrator, or architect
         mode: String,
         /// Task ID (required for agent mode)
         #[arg(long)]
@@ -153,6 +165,9 @@ pub enum SessionCommands {
         /// Max concurrent agents (for orchestrator mode)
         #[arg(long, default_value = "3")]
         max_concurrent: i32,
+        /// Agent ID (required for architect mode)
+        #[arg(long)]
+        agent_id: Option<String>,
     },
 
     /// Stop the current session
@@ -207,4 +222,64 @@ pub enum TaskCommands {
 
     /// Initialize a tasks.yaml template
     Init,
+}
+
+#[derive(Subcommand)]
+pub enum EpicCommands {
+    /// List epics with optional status filter
+    List {
+        /// Filter by status (open, planning, active, closed)
+        #[arg(long)]
+        status: Option<String>,
+    },
+
+    /// Show details for a specific epic (with task counts)
+    Show {
+        /// The epic ID to show
+        id: String,
+    },
+
+    /// Create a new epic
+    Create {
+        /// Epic ID (e.g., AUTH-EPIC)
+        #[arg(long)]
+        id: String,
+        /// Epic title
+        #[arg(long)]
+        title: String,
+        /// Epic description
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// Assign an epic to an architect agent for breakdown
+    Assign {
+        /// The epic ID to assign
+        id: String,
+        /// The architect agent ID to assign to
+        agent: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MessageCommands {
+    /// List messages with optional filters
+    List {
+        /// Filter by target agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Filter by status (pending, processing, processed, failed)
+        #[arg(long)]
+        status: Option<String>,
+    },
+
+    /// Send a message to an agent (for testing/debugging)
+    Send {
+        /// Target agent ID
+        agent: String,
+        /// Message type (e.g., epic_assigned)
+        message_type: String,
+        /// JSON payload
+        payload: String,
+    },
 }

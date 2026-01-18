@@ -1,10 +1,20 @@
 //! Task management module
 //!
-//! Built-in YAML-based task management for multi-agent coordination.
-//! Source of truth: `.bacchus/tasks.yaml`
+//! Supports both YAML-based tasks (.bacchus/tasks.yaml) for backward compatibility
+//! and SQLite-based tasks (tasks_v2 table) for hierarchical orchestration.
+//!
+//! ## Task Storage
+//! - **YAML tasks**: Legacy format in `.bacchus/tasks.yaml` (no epic association)
+//! - **SQLite tasks**: New format in `tasks_v2` table (must belong to an epic)
+//!
+//! ## Migration Path
+//! 1. Existing YAML tasks continue to work
+//! 2. New epics/tasks use SQLite via `epics::create_epic` and `create_sqlite_task`
+//! 3. Future: `task migrate` command to move YAML tasks to SQLite
 
 use crate::db::with_db;
 use fs2::FileExt;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -108,6 +118,101 @@ pub enum TasksError {
 
     #[error("Database error: {0}")]
     DbError(String),
+
+    #[error("Task not ready: {0}")]
+    NotReady(String),
+
+    #[error("Epic not found: {0}")]
+    EpicNotFound(String),
+}
+
+// ============================================================================
+// SQLite Task Types (tasks_v2)
+// ============================================================================
+
+/// Task status for SQLite tasks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqliteTaskStatus {
+    Draft,
+    Open,
+    InProgress,
+    Blocked,
+    Closed,
+}
+
+impl SqliteTaskStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SqliteTaskStatus::Draft => "draft",
+            SqliteTaskStatus::Open => "open",
+            SqliteTaskStatus::InProgress => "in_progress",
+            SqliteTaskStatus::Blocked => "blocked",
+            SqliteTaskStatus::Closed => "closed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Self, TasksError> {
+        match s {
+            "draft" => Ok(SqliteTaskStatus::Draft),
+            "open" => Ok(SqliteTaskStatus::Open),
+            "in_progress" => Ok(SqliteTaskStatus::InProgress),
+            "blocked" => Ok(SqliteTaskStatus::Blocked),
+            "closed" => Ok(SqliteTaskStatus::Closed),
+            _ => Err(TasksError::InvalidStatus(s.to_string())),
+        }
+    }
+}
+
+impl std::fmt::Display for SqliteTaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// A task stored in SQLite (tasks_v2 table)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqliteTask {
+    pub id: String,
+    pub epic_id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub priority: i32,
+    pub status: SqliteTaskStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<i64>,
+}
+
+/// Input for creating a new SQLite task
+#[derive(Debug, Clone)]
+pub struct CreateSqliteTaskInput {
+    pub id: String,
+    pub epic_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: i32,
+    pub depends_on: Vec<String>,
+    pub footprint: TaskFootprint,
+}
+
+/// Normalized footprint entry for SQLite
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalizedFootprint {
+    pub pattern_type: String, // "modifies" | "creates"
+    pub file_path: String,
+    pub symbol: String,
+    pub is_wildcard: bool,
 }
 
 // ============================================================================
@@ -801,6 +906,677 @@ tasks:
 }
 
 // ============================================================================
+// SQLite Task Operations (tasks_v2)
+// ============================================================================
+
+/// Normalize a TaskFootprint into NormalizedFootprint entries for SQLite storage
+///
+/// Uses split_once (first ::) to correctly handle nested symbols like file::Struct::method
+/// which becomes file_path="file", symbol="Struct::method"
+pub fn normalize_footprint(footprint: &TaskFootprint) -> Vec<NormalizedFootprint> {
+    let mut normalized = Vec::new();
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+
+    for pattern in &footprint.modifies {
+        // Use split_once (first ::) to handle nested symbols like file::Foo::bar
+        // This gives file_path="file", symbol="Foo::bar"
+        if let Some((file_path, symbol_part)) = pattern.split_once("::") {
+            if symbol_part == "*" || symbol_part.is_empty() {
+                // Wildcard: file::* or malformed file:: -> (file, "", is_wildcard=1)
+                let key = ("modifies".to_string(), file_path.to_string(), String::new());
+                if seen.insert(key) {
+                    normalized.push(NormalizedFootprint {
+                        pattern_type: "modifies".to_string(),
+                        file_path: file_path.to_string(),
+                        symbol: String::new(),
+                        is_wildcard: true,
+                    });
+                }
+            } else {
+                // Exact symbol: file::Symbol or file::Struct::method -> (file, Symbol/Struct::method, is_wildcard=0)
+                let key = ("modifies".to_string(), file_path.to_string(), symbol_part.to_string());
+                if seen.insert(key) {
+                    normalized.push(NormalizedFootprint {
+                        pattern_type: "modifies".to_string(),
+                        file_path: file_path.to_string(),
+                        symbol: symbol_part.to_string(),
+                        is_wildcard: false,
+                    });
+                }
+            }
+        } else {
+            // Bare file path: file -> (file, "", is_wildcard=1)
+            let key = ("modifies".to_string(), pattern.to_string(), String::new());
+            if seen.insert(key) {
+                normalized.push(NormalizedFootprint {
+                    pattern_type: "modifies".to_string(),
+                    file_path: pattern.to_string(),
+                    symbol: String::new(),
+                    is_wildcard: true,
+                });
+            }
+        }
+    }
+
+    for path in &footprint.creates {
+        // Creates are always wildcard (affects whole file)
+        let key = ("creates".to_string(), path.to_string(), String::new());
+        if seen.insert(key) {
+            normalized.push(NormalizedFootprint {
+                pattern_type: "creates".to_string(),
+                file_path: path.to_string(),
+                symbol: String::new(),
+                is_wildcard: true,
+            });
+        }
+    }
+
+    normalized
+}
+
+/// Create a new SQLite task with dependencies and footprints
+///
+/// The task is created as 'draft' and atomically flipped to 'open' after
+/// all dependencies and footprints are inserted.
+pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        // Check epic exists
+        let epic_exists: bool = conn.query_row(
+            "SELECT 1 FROM epics WHERE id = ?1",
+            [&input.epic_id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        if !epic_exists {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Epic not found: {}", input.epic_id)),
+            ));
+        }
+
+        // Check for duplicate task ID
+        let task_exists: bool = conn.query_row(
+            "SELECT 1 FROM tasks_v2 WHERE id = ?1",
+            [&input.id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        if task_exists {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task already exists: {}", input.id)),
+            ));
+        }
+
+        // Use savepoint for auto-rollback on error
+        // SAVEPOINT works even if no transaction is active (SQLite auto-starts one)
+        conn.execute("SAVEPOINT create_task", [])?;
+
+        let result = (|| -> rusqlite::Result<i64> {
+            // Insert task as draft
+            conn.execute(
+                "INSERT INTO tasks_v2 (id, epic_id, title, description, priority, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?6)",
+                params![input.id, input.epic_id, input.title, input.description, input.priority, now],
+            )?;
+
+            // Insert dependencies (trigger validates same-epic constraint)
+            for dep_id in &input.depends_on {
+                conn.execute(
+                    "INSERT INTO task_dependencies (task_id, depends_on) VALUES (?1, ?2)",
+                    params![input.id, dep_id],
+                )?;
+            }
+
+            // Insert normalized footprints
+            let normalized = normalize_footprint(&input.footprint);
+            for fp in &normalized {
+                conn.execute(
+                    "INSERT INTO task_footprints (task_id, pattern_type, file_path, symbol, is_wildcard)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![input.id, fp.pattern_type, fp.file_path, fp.symbol, fp.is_wildcard as i32],
+                )?;
+            }
+
+            // Flip to open after all inserts succeed
+            // Explicitly set updated_at to avoid staleness from trigger
+            let flip_time = chrono::Utc::now().timestamp_millis();
+            conn.execute(
+                "UPDATE tasks_v2 SET status = 'open', updated_at = ?2 WHERE id = ?1",
+                params![input.id, flip_time],
+            )?;
+
+            Ok(flip_time)
+        })();
+
+        match result {
+            Ok(flip_time) => {
+                conn.execute("RELEASE create_task", [])?;
+                Ok(SqliteTask {
+                    id: input.id,
+                    epic_id: input.epic_id,
+                    title: input.title,
+                    description: input.description,
+                    priority: input.priority,
+                    status: SqliteTaskStatus::Open,
+                    claimed_by: None,
+                    claimed_at: None,
+                    lease_expires_at: None,
+                    heartbeat_at: None,
+                    created_at: now,
+                    updated_at: flip_time,
+                    deleted_at: None,
+                })
+            }
+            Err(e) => {
+                // Rollback on any error
+                let _ = conn.execute("ROLLBACK TO create_task", []);
+                let _ = conn.execute("RELEASE create_task", []);
+                Err(e)
+            }
+        }
+    })
+    .map_err(|e: rusqlite::Error| {
+        let msg = e.to_string();
+        if msg.contains("Epic not found") {
+            TasksError::EpicNotFound(msg)
+        } else if msg.contains("Task already exists") {
+            TasksError::DuplicateTask(msg)
+        } else if msg.contains("same epic") {
+            TasksError::DbError("Dependencies must be within the same epic".to_string())
+        } else {
+            TasksError::DbError(msg)
+        }
+    })
+}
+
+/// Claim the next ready SQLite task atomically
+///
+/// Readiness = open + not deleted + deps satisfied + no footprint collision
+/// Returns None if no ready tasks available.
+pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let lease_expires = now + 300_000; // 5 minute lease
+
+    with_db(|conn| {
+        // Atomic claim with embedded readiness check
+        // This is a complex query but it runs as a single atomic UPDATE
+        conn.execute(
+            r#"
+            UPDATE tasks_v2
+            SET status = 'in_progress',
+                claimed_by = ?1,
+                claimed_at = ?2,
+                lease_expires_at = ?3,
+                heartbeat_at = ?2,
+                updated_at = ?2
+            WHERE id = (
+                SELECT t.id FROM tasks_v2 t
+                WHERE t.status = 'open'
+                  AND t.deleted_at IS NULL
+                  -- All deps are closed OR deleted
+                  AND NOT EXISTS (
+                      SELECT 1 FROM task_dependencies td
+                      JOIN tasks_v2 dep ON dep.id = td.depends_on
+                      WHERE td.task_id = t.id
+                        AND dep.status != 'closed'
+                        AND dep.deleted_at IS NULL
+                  )
+                  -- No footprint overlap with OTHER in_progress tasks
+                  AND NOT EXISTS (
+                      SELECT 1 FROM task_footprints fp1
+                      JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
+                        AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
+                      JOIN tasks_v2 other ON other.id = fp2.task_id
+                      WHERE fp1.task_id = t.id
+                        AND other.id != t.id
+                        AND other.status = 'in_progress'
+                        AND other.deleted_at IS NULL
+                  )
+                ORDER BY t.priority, t.created_at
+                LIMIT 1
+            )
+            "#,
+            params![agent_id, now, lease_expires],
+        )?;
+
+        // Check if we claimed anything
+        let changes = conn.changes();
+        if changes == 0 {
+            return Ok(None);
+        }
+
+        // Fetch the claimed task
+        let task = conn.query_row(
+            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
+                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
+             FROM tasks_v2 WHERE claimed_by = ?1 AND status = 'in_progress'
+             ORDER BY claimed_at DESC LIMIT 1",
+            [agent_id],
+            |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            },
+        )?;
+
+        Ok(Some(task))
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// Claim a specific SQLite task atomically
+///
+/// Returns error if task is not ready (deps not satisfied, footprint collision, etc.)
+pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let lease_expires = now + 300_000; // 5 minute lease
+
+    with_db(|conn| {
+        // Atomic claim with readiness check
+        let affected = conn.execute(
+            r#"
+            UPDATE tasks_v2
+            SET status = 'in_progress',
+                claimed_by = ?1,
+                claimed_at = ?2,
+                lease_expires_at = ?3,
+                heartbeat_at = ?2,
+                updated_at = ?2
+            WHERE id = ?4
+              AND status = 'open'
+              AND deleted_at IS NULL
+              -- All deps are closed OR deleted
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_dependencies td
+                  JOIN tasks_v2 dep ON dep.id = td.depends_on
+                  WHERE td.task_id = ?4
+                    AND dep.status != 'closed'
+                    AND dep.deleted_at IS NULL
+              )
+              -- No footprint overlap with OTHER in_progress tasks
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_footprints fp1
+                  JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
+                    AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
+                  JOIN tasks_v2 other ON other.id = fp2.task_id
+                  WHERE fp1.task_id = ?4
+                    AND other.id != ?4
+                    AND other.status = 'in_progress'
+                    AND other.deleted_at IS NULL
+              )
+            "#,
+            params![agent_id, now, lease_expires, task_id],
+        )?;
+
+        if affected == 0 {
+            // Check why claim failed
+            let task_status: Option<String> = conn.query_row(
+                "SELECT status FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
+                [task_id],
+                |row| row.get(0),
+            ).ok();
+
+            return Err(match task_status {
+                None => rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(format!("Task not found: {}", task_id)),
+                ),
+                Some(s) if s != "open" => rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(format!("Task {} has status '{}', not 'open'", task_id, s)),
+                ),
+                _ => rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(format!("Task {} is not ready (deps or footprint collision)", task_id)),
+                ),
+            });
+        }
+
+        // Fetch the claimed task
+        conn.query_row(
+            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
+                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
+             FROM tasks_v2 WHERE id = ?1",
+            [task_id],
+            |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            },
+        )
+    })
+    .map_err(|e: rusqlite::Error| {
+        let msg = e.to_string();
+        if msg.contains("Task not found") {
+            TasksError::TaskNotFound(msg)
+        } else if msg.contains("not ready") || msg.contains("not 'open'") {
+            TasksError::NotReady(msg)
+        } else {
+            TasksError::DbError(msg)
+        }
+    })
+}
+
+/// Send a heartbeat for a claimed task (extends lease)
+pub fn heartbeat_sqlite_task(task_id: &str, agent_id: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let lease_expires = now + 300_000; // 5 minute lease
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks_v2
+             SET heartbeat_at = ?1, lease_expires_at = ?2, updated_at = ?1
+             WHERE id = ?3 AND claimed_by = ?4 AND status = 'in_progress' AND deleted_at IS NULL",
+            params![now, lease_expires, task_id, agent_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task {} not owned by {} or not in_progress", task_id, agent_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// Release a SQLite task (mark as closed, clear claim)
+pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks_v2
+             SET status = 'closed',
+                 claimed_by = NULL,
+                 claimed_at = NULL,
+                 lease_expires_at = NULL,
+                 heartbeat_at = NULL,
+                 updated_at = ?1
+             WHERE id = ?2 AND claimed_by = ?3 AND status = 'in_progress'",
+            params![now, task_id, agent_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task {} not owned by {} or not in_progress", task_id, agent_id)),
+            ));
+        }
+
+        // Fetch the released task
+        conn.query_row(
+            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
+                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
+             FROM tasks_v2 WHERE id = ?1",
+            [task_id],
+            |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Closed),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            },
+        )
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// Reclaim stale SQLite tasks (called by orchestrator)
+///
+/// Tasks with expired leases are reset to 'open' status.
+/// Returns the number of tasks reclaimed.
+pub fn reclaim_stale_sqlite_tasks() -> Result<usize, TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks_v2
+             SET status = 'open',
+                 claimed_by = NULL,
+                 claimed_at = NULL,
+                 lease_expires_at = NULL,
+                 heartbeat_at = NULL,
+                 updated_at = ?1
+             WHERE status = 'in_progress' AND lease_expires_at < ?1 AND deleted_at IS NULL",
+            params![now],
+        )?;
+
+        Ok(affected)
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// List SQLite tasks with optional filters
+pub fn list_sqlite_tasks(
+    epic_id: Option<&str>,
+    status: Option<SqliteTaskStatus>,
+    include_deleted: bool,
+) -> Result<Vec<SqliteTask>, TasksError> {
+    with_db(|conn| {
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<String> = Vec::new();
+
+        if let Some(eid) = epic_id {
+            conditions.push(format!("epic_id = ?{}", param_values.len() + 1));
+            param_values.push(eid.to_string());
+        }
+
+        if let Some(s) = status {
+            conditions.push(format!("status = ?{}", param_values.len() + 1));
+            param_values.push(s.as_str().to_string());
+        }
+
+        if !include_deleted {
+            conditions.push("deleted_at IS NULL".to_string());
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
+                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
+             FROM tasks_v2 {} ORDER BY priority, created_at",
+            where_clause
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+
+        let params_ref: Vec<&dyn rusqlite::ToSql> = param_values
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+
+        let tasks = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(tasks)
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// Get ready SQLite tasks (for display/debugging)
+pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, TasksError> {
+    with_db(|conn| {
+        // Build query with optional epic filter using proper parameterization
+        let has_epic_filter = epic_id.is_some();
+        let epic_filter = if has_epic_filter { "AND t.epic_id = ?1" } else { "" };
+
+        let sql = format!(r#"
+            SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status,
+                   t.claimed_by, t.claimed_at, t.lease_expires_at, t.heartbeat_at,
+                   t.created_at, t.updated_at, t.deleted_at
+            FROM tasks_v2 t
+            WHERE t.status = 'open'
+              AND t.deleted_at IS NULL
+              {}
+              -- All deps are closed OR deleted
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_dependencies td
+                  JOIN tasks_v2 dep ON dep.id = td.depends_on
+                  WHERE td.task_id = t.id
+                    AND dep.status != 'closed'
+                    AND dep.deleted_at IS NULL
+              )
+              -- No footprint overlap with in_progress tasks
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_footprints fp1
+                  JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
+                    AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
+                  JOIN tasks_v2 other ON other.id = fp2.task_id
+                  WHERE fp1.task_id = t.id
+                    AND other.id != t.id
+                    AND other.status = 'in_progress'
+                    AND other.deleted_at IS NULL
+              )
+            ORDER BY t.priority, t.created_at
+        "#, epic_filter);
+
+        let mut stmt = conn.prepare(&sql)?;
+
+        // Use different query paths based on whether we have an epic filter
+        let tasks: Vec<SqliteTask> = if let Some(eid) = epic_id {
+            stmt.query_map([eid], |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            })?.filter_map(|r| r.ok()).collect()
+        } else {
+            stmt.query_map([], |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            })?.filter_map(|r| r.ok()).collect()
+        };
+
+        Ok(tasks)
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// Soft-delete a SQLite task
+pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        // First close the task if not already closed
+        conn.execute(
+            "UPDATE tasks_v2 SET status = 'closed', claimed_by = NULL, claimed_at = NULL,
+             lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL",
+            params![now, task_id],
+        )?;
+
+        // Then set deleted_at (trigger enforces closed + unclaimed invariant)
+        let affected = conn.execute(
+            "UPDATE tasks_v2 SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![now, task_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task not found or already deleted: {}", task_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -941,5 +1717,379 @@ tasks:
         assert!(!symbols_match("src/auth.rs", "src/user.rs::login"));
         // Two bare paths for same file should match
         assert!(symbols_match("src/auth.rs", "src/auth.rs"));
+    }
+
+    // ========================================================================
+    // SQLite Task Tests
+    // ========================================================================
+
+    fn setup_test_db() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        crate::db::init_db(Some(db_path.to_str().unwrap()), true).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_normalize_footprint_exact_symbol() {
+        let footprint = TaskFootprint {
+            modifies: vec!["src/auth.rs::AuthHandler".to_string()],
+            creates: vec![],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].pattern_type, "modifies");
+        assert_eq!(normalized[0].file_path, "src/auth.rs");
+        assert_eq!(normalized[0].symbol, "AuthHandler");
+        assert!(!normalized[0].is_wildcard);
+    }
+
+    #[test]
+    fn test_normalize_footprint_wildcard() {
+        let footprint = TaskFootprint {
+            modifies: vec!["src/jwt.rs::*".to_string()],
+            creates: vec![],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].pattern_type, "modifies");
+        assert_eq!(normalized[0].file_path, "src/jwt.rs");
+        assert_eq!(normalized[0].symbol, "");
+        assert!(normalized[0].is_wildcard);
+    }
+
+    #[test]
+    fn test_normalize_footprint_bare_file() {
+        let footprint = TaskFootprint {
+            modifies: vec!["src/config.rs".to_string()],
+            creates: vec![],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].file_path, "src/config.rs");
+        assert_eq!(normalized[0].symbol, "");
+        assert!(normalized[0].is_wildcard);
+    }
+
+    #[test]
+    fn test_normalize_footprint_creates() {
+        let footprint = TaskFootprint {
+            modifies: vec![],
+            creates: vec!["src/new_file.rs".to_string()],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].pattern_type, "creates");
+        assert_eq!(normalized[0].file_path, "src/new_file.rs");
+        assert_eq!(normalized[0].symbol, "");
+        assert!(normalized[0].is_wildcard);
+    }
+
+    #[test]
+    fn test_normalize_footprint_nested_symbol() {
+        // Nested symbols like file::Struct::method should preserve full symbol path
+        let footprint = TaskFootprint {
+            modifies: vec!["src/foo.rs::Foo::bar".to_string()],
+            creates: vec![],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].pattern_type, "modifies");
+        assert_eq!(normalized[0].file_path, "src/foo.rs");
+        assert_eq!(normalized[0].symbol, "Foo::bar"); // Full nested path preserved
+        assert!(!normalized[0].is_wildcard);
+    }
+
+    #[test]
+    fn test_normalize_footprint_deduplication() {
+        // Duplicate patterns should be deduplicated
+        let footprint = TaskFootprint {
+            modifies: vec![
+                "src/auth.rs::Handler".to_string(),
+                "src/auth.rs::Handler".to_string(), // Duplicate
+                "src/jwt.rs::*".to_string(),
+                "src/jwt.rs::*".to_string(), // Duplicate wildcard
+            ],
+            creates: vec![
+                "src/new.rs".to_string(),
+                "src/new.rs".to_string(), // Duplicate create
+            ],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 3); // Only 3 unique entries
+    }
+
+    #[test]
+    fn test_normalize_footprint_malformed_empty_symbol() {
+        // Malformed file:: (empty symbol after ::) should be treated as wildcard
+        let footprint = TaskFootprint {
+            modifies: vec!["src/foo.rs::".to_string()],
+            creates: vec![],
+        };
+
+        let normalized = normalize_footprint(&footprint);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].pattern_type, "modifies");
+        assert_eq!(normalized[0].file_path, "src/foo.rs");
+        assert_eq!(normalized[0].symbol, ""); // Empty symbol
+        assert!(normalized[0].is_wildcard); // Treated as wildcard
+    }
+
+    #[test]
+    fn test_create_sqlite_task() {
+        let _dir = setup_test_db();
+
+        // Create epic first
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "TEST-EPIC".to_string(),
+            title: "Test Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        // Create task
+        let input = CreateSqliteTaskInput {
+            id: "TEST-001".to_string(),
+            epic_id: "TEST-EPIC".to_string(),
+            title: "Test Task".to_string(),
+            description: Some("A test task".to_string()),
+            priority: 3,
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        };
+
+        let task = create_sqlite_task(input).unwrap();
+        assert_eq!(task.id, "TEST-001");
+        assert_eq!(task.epic_id, "TEST-EPIC");
+        assert_eq!(task.status, SqliteTaskStatus::Open);
+        assert_eq!(task.priority, 3);
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_claim_sqlite_task() {
+        let _dir = setup_test_db();
+
+        // Setup: create epic and task
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "CLAIM-EPIC".to_string(),
+            title: "Claim Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "CLAIM-001".to_string(),
+            epic_id: "CLAIM-EPIC".to_string(),
+            title: "Claimable Task".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        // Claim the task
+        let task = claim_sqlite_task("CLAIM-001", "agent-1").unwrap();
+        assert_eq!(task.status, SqliteTaskStatus::InProgress);
+        assert_eq!(task.claimed_by, Some("agent-1".to_string()));
+
+        // Second claim should fail
+        let result = claim_sqlite_task("CLAIM-001", "agent-2");
+        assert!(result.is_err());
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_claim_next_sqlite_task() {
+        let _dir = setup_test_db();
+
+        // Setup: create epic and tasks
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "NEXT-EPIC".to_string(),
+            title: "Next Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        // Create tasks with different priorities
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "NEXT-LOW".to_string(),
+            epic_id: "NEXT-EPIC".to_string(),
+            title: "Low Priority".to_string(),
+            description: None,
+            priority: 10, // Lower priority (higher number)
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "NEXT-HIGH".to_string(),
+            epic_id: "NEXT-EPIC".to_string(),
+            title: "High Priority".to_string(),
+            description: None,
+            priority: 1, // Higher priority (lower number)
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        // Should claim the higher priority task first
+        let task = claim_next_sqlite_task("agent-1").unwrap();
+        assert!(task.is_some());
+        let task = task.unwrap();
+        assert_eq!(task.id, "NEXT-HIGH");
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_sqlite_task_dependencies() {
+        let _dir = setup_test_db();
+
+        // Setup
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "DEP-EPIC".to_string(),
+            title: "Dep Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        // Create first task
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "DEP-001".to_string(),
+            epic_id: "DEP-EPIC".to_string(),
+            title: "First Task".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        // Create second task depending on first
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "DEP-002".to_string(),
+            epic_id: "DEP-EPIC".to_string(),
+            title: "Second Task".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec!["DEP-001".to_string()],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        // Second task should not be claimable (dep not satisfied)
+        let result = claim_sqlite_task("DEP-002", "agent-1");
+        assert!(result.is_err());
+
+        // Claim and release first task
+        claim_sqlite_task("DEP-001", "agent-1").unwrap();
+        release_sqlite_task("DEP-001", "agent-1").unwrap();
+
+        // Now second task should be claimable
+        let task = claim_sqlite_task("DEP-002", "agent-2").unwrap();
+        assert_eq!(task.id, "DEP-002");
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_sqlite_task_footprint_collision() {
+        let _dir = setup_test_db();
+
+        // Setup
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "FP-EPIC".to_string(),
+            title: "Footprint Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        // Create tasks with overlapping footprints
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "FP-001".to_string(),
+            epic_id: "FP-EPIC".to_string(),
+            title: "First Modifier".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec![],
+            footprint: TaskFootprint {
+                modifies: vec!["src/auth.rs::Handler".to_string()],
+                creates: vec![],
+            },
+        }).unwrap();
+
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "FP-002".to_string(),
+            epic_id: "FP-EPIC".to_string(),
+            title: "Second Modifier".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec![],
+            footprint: TaskFootprint {
+                modifies: vec!["src/auth.rs::Handler".to_string()], // Same symbol
+                creates: vec![],
+            },
+        }).unwrap();
+
+        // Claim first task
+        claim_sqlite_task("FP-001", "agent-1").unwrap();
+
+        // Second task should not be claimable (footprint collision)
+        let result = claim_sqlite_task("FP-002", "agent-2");
+        assert!(result.is_err());
+
+        // Release first task
+        release_sqlite_task("FP-001", "agent-1").unwrap();
+
+        // Now second task should be claimable
+        let task = claim_sqlite_task("FP-002", "agent-2").unwrap();
+        assert_eq!(task.id, "FP-002");
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_heartbeat_sqlite_task() {
+        let _dir = setup_test_db();
+
+        // Setup
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "HB-EPIC".to_string(),
+            title: "Heartbeat Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "HB-001".to_string(),
+            epic_id: "HB-EPIC".to_string(),
+            title: "Heartbeat Task".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        // Claim task
+        let task = claim_sqlite_task("HB-001", "agent-1").unwrap();
+        let original_heartbeat = task.heartbeat_at;
+
+        // Small delay to ensure timestamp changes
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Send heartbeat
+        heartbeat_sqlite_task("HB-001", "agent-1").unwrap();
+
+        // Heartbeat from wrong agent should fail
+        let result = heartbeat_sqlite_task("HB-001", "agent-2");
+        assert!(result.is_err());
+
+        crate::db::close_db();
     }
 }
