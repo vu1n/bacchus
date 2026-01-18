@@ -215,8 +215,7 @@ pub fn add_task(
     let result = tasks::modify_tasks(workspace_root, |mut all_tasks| {
         // Check for duplicate ID
         if all_tasks.iter().any(|t| t.id == task_id_owned) {
-            // Return special error to indicate duplicate (not a real error)
-            return Err(tasks::TasksError::WriteError("__DUPLICATE__".to_string()));
+            return Err(tasks::TasksError::DuplicateTask(task_id_owned.clone()));
         }
 
         // Create new task
@@ -240,10 +239,10 @@ pub fn add_task(
             task_id: task_id.to_string(),
             message: format!("Added task {}", task_id),
         }),
-        Err(tasks::TasksError::WriteError(msg)) if msg == "__DUPLICATE__" => Ok(TaskAddOutput {
+        Err(tasks::TasksError::DuplicateTask(id)) => Ok(TaskAddOutput {
             success: false,
-            task_id: task_id.to_string(),
-            message: format!("Task with ID {} already exists", task_id),
+            task_id: id.clone(),
+            message: format!("Task with ID {} already exists", id),
         }),
         Err(e) => Err(e.to_string()),
     }

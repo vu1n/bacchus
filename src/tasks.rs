@@ -100,6 +100,9 @@ pub enum TasksError {
     #[error("Task not found: {0}")]
     TaskNotFound(String),
 
+    #[error("Task already exists: {0}")]
+    DuplicateTask(String),
+
     #[error("Invalid status: {0}")]
     InvalidStatus(String),
 
@@ -216,23 +219,23 @@ where
 
 /// Load tasks from the YAML file with shared locking
 ///
-/// Uses shared lock to prevent reading while a write is in progress
+/// Uses shared lock to prevent reading while a write is in progress.
+/// The lock is acquired before checking file existence to handle the
+/// Windows atomic write window where the file is temporarily renamed.
 pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
     let path = tasks_file_path(workspace_root);
-
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    // Acquire shared lock to prevent reading during writes
     let lock_path = tasks_lock_path(workspace_root);
-    let lock_file = if lock_path.exists() {
+
+    // Acquire shared lock BEFORE checking existence to avoid race with
+    // Windows atomic writes (which rename to .bak temporarily)
+    // This blocks until any exclusive lock (write) is released
+    let _lock_file = if lock_path.exists() {
         let lf = std::fs::OpenOptions::new()
             .read(true)
             .open(&lock_path)
             .ok();
         if let Some(ref f) = lf {
-            // Best effort - don't fail reads if locking fails
+            // Block waiting for shared lock - ensures we don't read during writes
             let _ = f.lock_shared();
         }
         lf
@@ -240,15 +243,18 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
         None
     };
 
+    // Check existence AFTER acquiring lock
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
     let content = std::fs::read_to_string(&path)
         .map_err(|e| TasksError::ReadError(e.to_string()))?;
 
     let tasks_file: TasksFile = serde_yaml::from_str(&content)
         .map_err(|e| TasksError::ParseError(e.to_string()))?;
 
-    // Lock released when lock_file is dropped
-    drop(lock_file);
-
+    // Lock released when _lock_file is dropped
     Ok(tasks_file.tasks)
 }
 
