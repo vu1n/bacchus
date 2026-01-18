@@ -207,90 +207,46 @@ pub fn add_task(
     priority: Option<i32>,
     depends_on: Vec<String>,
 ) -> Result<TaskAddOutput, String> {
-    use fs2::FileExt;
-    use std::io::Write;
+    let task_id_owned = task_id.to_string();
+    let title_owned = title.to_string();
+    let description_owned = description.map(|s| s.to_string());
 
-    let path = tasks::tasks_file_path(workspace_root);
+    // Use modify_tasks for atomic read-modify-write with proper locking
+    let result = tasks::modify_tasks(workspace_root, |mut all_tasks| {
+        // Check for duplicate ID
+        if all_tasks.iter().any(|t| t.id == task_id_owned) {
+            // Return special error to indicate duplicate (not a real error)
+            return Err(tasks::TasksError::WriteError("__DUPLICATE__".to_string()));
+        }
 
-    // Ensure .bacchus directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
+        // Create new task
+        let new_task = Task {
+            id: task_id_owned.clone(),
+            title: title_owned.clone(),
+            description: description_owned.clone(),
+            priority: priority.unwrap_or(5),
+            status: "open".to_string(),
+            depends_on: depends_on.clone(),
+            footprint: tasks::TaskFootprint::default(),
+        };
 
-    // Acquire lock for the entire read-modify-write cycle
-    let lock_path = path.with_extension("yaml.lock");
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&lock_path)
-        .map_err(|e| format!("open lock: {}", e))?;
+        all_tasks.push(new_task);
+        Ok(all_tasks)
+    });
 
-    lock_file
-        .lock_exclusive()
-        .map_err(|e| format!("lock: {}", e))?;
-
-    // Read current tasks (within lock)
-    let mut all_tasks = if path.exists() {
-        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let tasks_file: tasks::TasksFile = serde_yaml::from_str(&content)
-            .map_err(|e| e.to_string())?;
-        tasks_file.tasks
-    } else {
-        Vec::new()
-    };
-
-    // Check for duplicate ID
-    if all_tasks.iter().any(|t| t.id == task_id) {
-        return Ok(TaskAddOutput {
+    match result {
+        Ok(()) => Ok(TaskAddOutput {
+            success: true,
+            task_id: task_id.to_string(),
+            message: format!("Added task {}", task_id),
+        }),
+        Err(tasks::TasksError::WriteError(msg)) if msg == "__DUPLICATE__" => Ok(TaskAddOutput {
             success: false,
             task_id: task_id.to_string(),
             message: format!("Task with ID {} already exists", task_id),
-        });
+        }),
+        Err(e) => Err(e.to_string()),
     }
-
-    // Create new task
-    let new_task = Task {
-        id: task_id.to_string(),
-        title: title.to_string(),
-        description: description.map(|s| s.to_string()),
-        priority: priority.unwrap_or(5),
-        status: "open".to_string(),
-        depends_on,
-        footprint: tasks::TaskFootprint::default(),
-    };
-
-    all_tasks.push(new_task);
-
-    // Write back (within lock)
-    let tasks_file = tasks::TasksFile {
-        version: 1,
-        tasks: all_tasks,
-    };
-
-    let content = serde_yaml::to_string(&tasks_file).map_err(|e| e.to_string())?;
-
-    let temp_path = path.with_extension("yaml.tmp");
-    let mut file = std::fs::File::create(&temp_path)
-        .map_err(|e| format!("create temp: {}", e))?;
-
-    file.write_all(content.as_bytes())
-        .map_err(|e| format!("write: {}", e))?;
-
-    file.sync_all().map_err(|e| format!("sync: {}", e))?;
-
-    // Atomic rename (use remove + rename for Windows compatibility)
-    #[cfg(windows)]
-    let _ = std::fs::remove_file(&path);
-    std::fs::rename(&temp_path, &path)
-        .map_err(|e| format!("rename: {}", e))?;
-
-    // Lock released when lock_file is dropped
-    Ok(TaskAddOutput {
-        success: true,
-        task_id: task_id.to_string(),
-        message: format!("Added task {}", task_id),
-    })
 }
 
 #[cfg(test)]

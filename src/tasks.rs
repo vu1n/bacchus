@@ -4,6 +4,7 @@
 //! Source of truth: `.bacchus/tasks.yaml`
 
 use crate::db::with_db;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -115,62 +116,24 @@ pub fn tasks_file_path(workspace_root: &Path) -> std::path::PathBuf {
     workspace_root.join(".bacchus/tasks.yaml")
 }
 
-/// Load tasks from the YAML file
-pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
-    let path = tasks_file_path(workspace_root);
-
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| TasksError::ReadError(e.to_string()))?;
-
-    let tasks_file: TasksFile = serde_yaml::from_str(&content)
-        .map_err(|e| TasksError::ParseError(e.to_string()))?;
-
-    Ok(tasks_file.tasks)
+/// Get the path to the lock file for tasks.yaml
+fn tasks_lock_path(workspace_root: &Path) -> std::path::PathBuf {
+    workspace_root.join(".bacchus/tasks.yaml.lock")
 }
 
-/// Save tasks to the YAML file with atomic write and file locking
-#[allow(dead_code)] // Public API, may be used by external callers
-pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksError> {
-    use fs2::FileExt;
+/// Atomically write content to tasks.yaml with proper locking
+///
+/// Strategy:
+/// - Unix: write to .tmp, rename over target (atomic)
+/// - Windows: write to .tmp, rename target to .bak, rename .tmp to target, delete .bak
+///   (minimizes window where file is missing, .bak allows recovery)
+fn atomic_write_tasks(workspace_root: &Path, content: &str) -> Result<(), TasksError> {
     use std::io::Write;
 
     let path = tasks_file_path(workspace_root);
-
-    // Ensure .bacchus directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| TasksError::WriteError(e.to_string()))?;
-    }
-
-    // Use a lock file to serialize writes across processes
-    let lock_path = path.with_extension("yaml.lock");
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&lock_path)
-        .map_err(|e| TasksError::WriteError(format!("open lock: {}", e)))?;
-
-    // Acquire exclusive lock (blocks until available)
-    lock_file
-        .lock_exclusive()
-        .map_err(|e| TasksError::WriteError(format!("lock: {}", e)))?;
-
-    let tasks_file = TasksFile {
-        version: 1,
-        tasks: tasks.to_vec(),
-    };
-
-    let content = serde_yaml::to_string(&tasks_file)
-        .map_err(|e| TasksError::WriteError(e.to_string()))?;
-
-    // Atomic write: write to temp file, then rename
     let temp_path = path.with_extension("yaml.tmp");
 
+    // Write to temp file
     let mut file = std::fs::File::create(&temp_path)
         .map_err(|e| TasksError::WriteError(format!("create temp: {}", e)))?;
 
@@ -180,14 +143,167 @@ pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksErro
     file.sync_all()
         .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
 
-    // Atomic rename (remove first on Windows for compatibility)
-    #[cfg(windows)]
-    let _ = std::fs::remove_file(&path);
-    std::fs::rename(&temp_path, &path)
-        .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
+    drop(file); // Close before rename
 
-    // Lock is released when lock_file is dropped
+    // Platform-specific atomic replace
+    #[cfg(unix)]
+    {
+        std::fs::rename(&temp_path, &path)
+            .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
+    }
+
+    #[cfg(windows)]
+    {
+        let backup_path = path.with_extension("yaml.bak");
+
+        // If target exists, rename to backup first
+        if path.exists() {
+            // Remove old backup if exists
+            let _ = std::fs::remove_file(&backup_path);
+            std::fs::rename(&path, &backup_path)
+                .map_err(|e| TasksError::WriteError(format!("backup: {}", e)))?;
+        }
+
+        // Rename temp to target
+        if let Err(e) = std::fs::rename(&temp_path, &path) {
+            // Try to restore from backup
+            if backup_path.exists() {
+                let _ = std::fs::rename(&backup_path, &path);
+            }
+            return Err(TasksError::WriteError(format!("rename: {}", e)));
+        }
+
+        // Success - remove backup
+        let _ = std::fs::remove_file(&backup_path);
+    }
+
     Ok(())
+}
+
+/// Execute a function while holding an exclusive lock on tasks.yaml
+/// Used for read-modify-write operations
+fn with_exclusive_lock<F, T>(workspace_root: &Path, f: F) -> Result<T, TasksError>
+where
+    F: FnOnce() -> Result<T, TasksError>,
+{
+    let path = tasks_file_path(workspace_root);
+
+    // Ensure .bacchus directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| TasksError::WriteError(e.to_string()))?;
+    }
+
+    let lock_path = tasks_lock_path(workspace_root);
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&lock_path)
+        .map_err(|e| TasksError::WriteError(format!("open lock: {}", e)))?;
+
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| TasksError::WriteError(format!("lock: {}", e)))?;
+
+    let result = f();
+
+    // Lock released when lock_file is dropped
+    drop(lock_file);
+
+    result
+}
+
+/// Load tasks from the YAML file with shared locking
+///
+/// Uses shared lock to prevent reading while a write is in progress
+pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
+    let path = tasks_file_path(workspace_root);
+
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    // Acquire shared lock to prevent reading during writes
+    let lock_path = tasks_lock_path(workspace_root);
+    let lock_file = if lock_path.exists() {
+        let lf = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&lock_path)
+            .ok();
+        if let Some(ref f) = lf {
+            // Best effort - don't fail reads if locking fails
+            let _ = f.lock_shared();
+        }
+        lf
+    } else {
+        None
+    };
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| TasksError::ReadError(e.to_string()))?;
+
+    let tasks_file: TasksFile = serde_yaml::from_str(&content)
+        .map_err(|e| TasksError::ParseError(e.to_string()))?;
+
+    // Lock released when lock_file is dropped
+    drop(lock_file);
+
+    Ok(tasks_file.tasks)
+}
+
+/// Save tasks to the YAML file with atomic write and file locking
+#[allow(dead_code)] // Public API, may be used by external callers
+pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksError> {
+    with_exclusive_lock(workspace_root, || {
+        let tasks_file = TasksFile {
+            version: 1,
+            tasks: tasks.to_vec(),
+        };
+
+        let content = serde_yaml::to_string(&tasks_file)
+            .map_err(|e| TasksError::WriteError(e.to_string()))?;
+
+        atomic_write_tasks(workspace_root, &content)
+    })
+}
+
+/// Modify tasks with a locked read-modify-write cycle
+///
+/// The closure receives the current tasks and should return the modified list.
+/// The entire operation is atomic with proper file locking.
+pub fn modify_tasks<F>(workspace_root: &Path, f: F) -> Result<(), TasksError>
+where
+    F: FnOnce(Vec<Task>) -> Result<Vec<Task>, TasksError>,
+{
+    with_exclusive_lock(workspace_root, || {
+        let path = tasks_file_path(workspace_root);
+
+        // Read current tasks (within lock)
+        let tasks = if path.exists() {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| TasksError::ReadError(e.to_string()))?;
+            let tasks_file: TasksFile = serde_yaml::from_str(&content)
+                .map_err(|e| TasksError::ParseError(e.to_string()))?;
+            tasks_file.tasks
+        } else {
+            Vec::new()
+        };
+
+        // Apply modification
+        let modified_tasks = f(tasks)?;
+
+        // Write back (within lock)
+        let tasks_file = TasksFile {
+            version: 1,
+            tasks: modified_tasks,
+        };
+
+        let content = serde_yaml::to_string(&tasks_file)
+            .map_err(|e| TasksError::WriteError(e.to_string()))?;
+
+        atomic_write_tasks(workspace_root, &content)
+    })
 }
 
 // ============================================================================
@@ -266,82 +382,48 @@ pub fn get_ready_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
 
 /// Update a task's status in the YAML file (atomic with file locking)
 pub fn update_task_status(workspace_root: &Path, task_id: &str, status: &str) -> Result<(), TasksError> {
-    use fs2::FileExt;
-    use std::io::Write;
-
-    // Validate status
+    // Validate status before acquiring lock
     let valid_statuses = ["open", "in_progress", "blocked", "closed"];
     if !valid_statuses.contains(&status) {
         return Err(TasksError::InvalidStatus(status.to_string()));
     }
 
-    let path = tasks_file_path(workspace_root);
+    let task_id = task_id.to_string();
+    let status = status.to_string();
 
-    // Ensure .bacchus directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+    with_exclusive_lock(workspace_root, || {
+        let path = tasks_file_path(workspace_root);
+
+        // Read current tasks (within lock)
+        let mut tasks = if path.exists() {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| TasksError::ReadError(e.to_string()))?;
+            let tasks_file: TasksFile = serde_yaml::from_str(&content)
+                .map_err(|e| TasksError::ParseError(e.to_string()))?;
+            tasks_file.tasks
+        } else {
+            Vec::new()
+        };
+
+        // Find and update task
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| TasksError::TaskNotFound(task_id.clone()))?;
+
+        task.status = status.clone();
+
+        // Write back (within lock)
+        let tasks_file = TasksFile {
+            version: 1,
+            tasks,
+        };
+
+        let content = serde_yaml::to_string(&tasks_file)
             .map_err(|e| TasksError::WriteError(e.to_string()))?;
-    }
 
-    // Acquire lock for the entire read-modify-write cycle
-    let lock_path = path.with_extension("yaml.lock");
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&lock_path)
-        .map_err(|e| TasksError::WriteError(format!("open lock: {}", e)))?;
-
-    lock_file
-        .lock_exclusive()
-        .map_err(|e| TasksError::WriteError(format!("lock: {}", e)))?;
-
-    // Read current tasks (within lock)
-    let mut tasks = if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| TasksError::ReadError(e.to_string()))?;
-        let tasks_file: TasksFile = serde_yaml::from_str(&content)
-            .map_err(|e| TasksError::ParseError(e.to_string()))?;
-        tasks_file.tasks
-    } else {
-        Vec::new()
-    };
-
-    // Find and update task
-    let task = tasks
-        .iter_mut()
-        .find(|t| t.id == task_id)
-        .ok_or_else(|| TasksError::TaskNotFound(task_id.to_string()))?;
-
-    task.status = status.to_string();
-
-    // Write back (within lock)
-    let tasks_file = TasksFile {
-        version: 1,
-        tasks,
-    };
-
-    let content = serde_yaml::to_string(&tasks_file)
-        .map_err(|e| TasksError::WriteError(e.to_string()))?;
-
-    let temp_path = path.with_extension("yaml.tmp");
-    let mut file = std::fs::File::create(&temp_path)
-        .map_err(|e| TasksError::WriteError(format!("create temp: {}", e)))?;
-
-    file.write_all(content.as_bytes())
-        .map_err(|e| TasksError::WriteError(format!("write: {}", e)))?;
-
-    file.sync_all()
-        .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
-
-    // Atomic rename (remove first on Windows for compatibility)
-    #[cfg(windows)]
-    let _ = std::fs::remove_file(&path);
-    std::fs::rename(&temp_path, &path)
-        .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
-
-    // Lock released when lock_file is dropped
-    Ok(())
+        atomic_write_tasks(workspace_root, &content)
+    })
 }
 
 // ============================================================================
