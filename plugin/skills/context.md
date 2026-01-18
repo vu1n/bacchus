@@ -15,20 +15,20 @@ bacchus context
 
 This command auto-detects mode:
 - **Repo root**: Global view (all claims, ready work, project stats)
-- **In worktree**: Task view (specific bead objectives, related symbols)
+- **In worktree**: Task view (specific task objectives, related symbols)
 
 ## Global Context (Orchestrator)
 
 When run from repo root, shows:
 - Active claims and their age
-- Ready beads waiting for agents
-- Blocked beads needing intervention
+- Ready tasks waiting for agents
+- Blocked tasks needing intervention
 - Project health statistics
 
 ## Task Context (Agent)
 
 When run from a worktree, shows:
-- Bead details (title, description, acceptance criteria)
+- Task details (title, description, acceptance criteria)
 - Dependencies (what this unblocks)
 - Related symbols in the codebase
 - Suggested starting points
@@ -40,19 +40,19 @@ When run from a worktree, shows:
 # Bacchus Status
 
 ## Active Work (2 agents)
-- beads-abc123: "Add user auth" (agent-1, 15 min)
-- beads-def456: "Write tests" (agent-2, 8 min)
+- AUTH-001: "Add user auth" (agent-1, 15 min)
+- AUTH-002: "Write tests" (agent-2, 8 min)
 
-## Ready Work (1 bead)
-- beads-ghi789: "Update docs" (P2, no blockers)
+## Ready Work (1 task)
+- AUTH-003: "Update docs" (P2, no blockers)
 
-## Blocked (1 bead)
-- beads-jkl012: "Deploy" (blocked by beads-abc123)
+## Blocked (1 task)
+- DEPLOY-001: "Deploy" (blocked by AUTH-001)
 ```
 
 **Task Mode**:
 ```markdown
-# Task: beads-abc123
+# Task: AUTH-001
 
 ## Objective
 Add user authentication with JWT tokens
@@ -67,7 +67,7 @@ Add user authentication with JWT tokens
 - `UserService.authenticate()`: Existing stub
 
 ## Unblocks
-- beads-jkl012: "Deploy to production"
+- DEPLOY-001: "Deploy to production"
 ```
 
 ## When to Use

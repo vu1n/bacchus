@@ -19,23 +19,9 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # Check dependencies
 check_dependencies() {
-    local missing=0
-
-    # bd (beads CLI) is required for bead management
-    if ! command -v bd &> /dev/null; then
-        warn "bd (beads CLI) not found. Bacchus requires beads for task tracking."
-        warn "Install beads: https://github.com/vu1n/beads"
-        missing=1
-    fi
-
     # git is required for worktree operations
     if ! command -v git &> /dev/null; then
         error "git is required for bacchus worktree operations"
-    fi
-
-    if [ $missing -eq 1 ]; then
-        warn "Some dependencies missing. Bacchus may not work correctly."
-        echo ""
     fi
 }
 
@@ -173,6 +159,7 @@ install_plugin() {
     mkdir -p "${PLUGIN_DIR}/commands"
     curl -sLf -o "${PLUGIN_DIR}/commands/agent.md" "${base_url}/commands/agent.md" || warn "Could not download agent.md"
     curl -sLf -o "${PLUGIN_DIR}/commands/orchestrate.md" "${base_url}/commands/orchestrate.md" || warn "Could not download orchestrate.md"
+    curl -sLf -o "${PLUGIN_DIR}/commands/architect.md" "${base_url}/commands/architect.md" || warn "Could not download architect.md"
     curl -sLf -o "${PLUGIN_DIR}/commands/cancel.md" "${base_url}/commands/cancel.md" || warn "Could not download cancel.md"
 
     # Skills
@@ -184,7 +171,7 @@ install_plugin() {
     curl -sLf -o "${PLUGIN_DIR}/README.md" "${base_url}/README.md" || warn "Could not download README.md"
 
     info "Plugin installed to: ${PLUGIN_DIR}"
-    info "Available commands: /bacchus-agent, /bacchus-orchestrate, /bacchus-cancel"
+    info "Available commands: /bacchus-agent, /bacchus-orchestrate, /bacchus-architect, /bacchus-cancel"
 }
 
 # Get latest release tag from GitHub

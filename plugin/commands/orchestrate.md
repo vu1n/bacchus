@@ -1,6 +1,6 @@
 ---
 name: bacchus-orchestrate
-description: Start orchestrator that spawns agents for ready beads until all work is complete.
+description: Start orchestrator that spawns agents for ready tasks until all work is complete.
 arguments:
   - name: max_concurrent
     description: Maximum number of concurrent agents (default 3)
@@ -9,7 +9,7 @@ arguments:
 
 # Bacchus Orchestrator Mode
 
-You are now the **Bacchus Orchestrator**. Your job is to spawn and manage agents until all beads are complete.
+You are now the **Bacchus Orchestrator**. Your job is to spawn and manage agents until all tasks are complete.
 
 ## Start Session
 
@@ -28,37 +28,36 @@ Each iteration:
 ### 1. Check Status
 
 ```bash
-bd status
-bd ready
+bacchus task list
+bacchus task list --ready
 bacchus list
 ```
 
 ### 2. Spawn Agents for Ready Work
 
-For each ready bead (up to {{#if max_concurrent}}{{max_concurrent}}{{else}}3{{/if}} concurrent), spawn a background agent using the Task tool:
+For each ready task (up to {{#if max_concurrent}}{{max_concurrent}}{{else}}3{{/if}} concurrent), spawn a background agent using the Task tool:
 
 ```
 Task tool:
   subagent_type: "general-purpose"
   run_in_background: true
   prompt: |
-    You are a Bacchus agent working on bead {bead_id}.
+    You are a Bacchus agent working on task {task_id}.
 
-    First, start your session and claim the bead:
-    bacchus session start agent --bead-id "{bead_id}"
-    bacchus claim "{bead_id}" agent-{unique_id}
+    First, start your session and claim the task:
+    bacchus session start agent --task-id "{task_id}"
+    bacchus claim "{task_id}" agent-{unique_id}
 
-    Then read the bead details:
-    bd show {bead_id}
+    Then read the task details:
+    bacchus task show {task_id}
 
     Work in the worktree using -C flag (do NOT cd into it):
-    git -C .bacchus/worktrees/{bead_id} status
-    git -C .bacchus/worktrees/{bead_id} add .
-    git -C .bacchus/worktrees/{bead_id} commit -m "message"
+    git -C .bacchus/worktrees/{task_id} status
+    git -C .bacchus/worktrees/{task_id} add .
+    git -C .bacchus/worktrees/{task_id} commit -m "message"
 
     When complete:
-    bd close {bead_id}
-    bacchus release {bead_id} --status done
+    bacchus release {task_id} --status done
 ```
 
 ### 3. Monitor Progress
@@ -66,7 +65,7 @@ Task tool:
 ```bash
 bacchus list          # Active agents
 bacchus stale --minutes 30  # Find stuck work
-bd status             # Overall progress
+bacchus task list     # Overall progress
 ```
 
 ### 4. Handle Completions
@@ -78,10 +77,10 @@ bd status             # Overall progress
 ## Stop Hook Behavior
 
 The hook will:
-- **BLOCK** if ready beads exist and under max_concurrent
-- **BLOCK** if beads are in_progress (wait for agents)
-- **APPROVE** if all beads closed (session auto-clears)
-- **APPROVE** if only blocked beads remain (needs manual intervention)
+- **BLOCK** if ready tasks exist and under max_concurrent
+- **BLOCK** if tasks are in_progress (wait for agents)
+- **APPROVE** if all tasks closed (session auto-clears)
+- **APPROVE** if only blocked tasks remain (needs manual intervention)
 
 ## Force Exit
 
@@ -95,10 +94,10 @@ bacchus session stop
 
 ```bash
 # Project overview
-bd status
+bacchus task list
 
 # Ready work
-bd ready
+bacchus task list --ready
 
 # Active agents
 bacchus list
@@ -106,9 +105,8 @@ bacchus list
 # Stale detection
 bacchus stale --minutes 30
 
-# Manual unblock
-bd update <bead_id> --status open
-bd comment <bead_id> "Unblocked: reason"
+# Check specific task
+bacchus task show <task_id>
 ```
 
 ---
@@ -116,5 +114,5 @@ bd comment <bead_id> "Unblocked: reason"
 Now check the current state:
 
 ```bash
-bd status && bd ready && bacchus list
+bacchus task list && bacchus task list --ready && bacchus list
 ```

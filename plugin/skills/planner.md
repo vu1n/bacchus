@@ -1,25 +1,25 @@
 ---
 name: bacchus-planner
-description: Break down complex requests into trackable beads with dependencies. Use before orchestrating work with bacchus.
+description: Break down complex requests into trackable tasks with dependencies. Use before orchestrating work with bacchus.
 ---
 
 # Bacchus Planner
 
-Break down complex user requests into atomic, trackable beads with proper dependencies.
+Break down complex user requests into atomic, trackable tasks with proper dependencies.
 
 ## Workflow
 
 1. **Analyze**: Understand the user's request and current project state
-2. **Decompose**: Split into atomic units (one PR per bead)
+2. **Decompose**: Split into atomic units (one PR per task)
 3. **Sequence**: Map dependencies (what blocks what)
-4. **Create**: Build the beads using `bd` CLI
+4. **Create**: Build the tasks in `.bacchus/tasks.yaml` or use CLI
 
 ## Principles
 
-- **Atomic**: Each bead = one logical change = one PR
-- **Ordered**: Use `bd dep add` to enforce sequence
-- **Testable**: Each bead should be independently verifiable
-- **Parallelizable**: Independent beads can run concurrently
+- **Atomic**: Each task = one logical change = one PR
+- **Ordered**: Use `depends_on` to enforce sequence
+- **Testable**: Each task should be independently verifiable
+- **Parallelizable**: Independent tasks can run concurrently
 
 ## Example
 
@@ -37,38 +37,59 @@ UI components (ui)
 **Execution**:
 ```bash
 # Check current state
-bd list --status=open
+bacchus task list
 
-# Create beads
-bd create --title="Add avatar_url to users table" --type=task --priority=1
-# → Created beads-abc123
+# Initialize tasks file if needed
+bacchus task init
 
-bd create --title="Avatar upload API endpoint" --type=task --priority=1
-# → Created beads-def456
-
-bd create --title="Profile page UI" --type=task --priority=2
-# → Created beads-ghi789
-
-bd create --title="Avatar upload component" --type=task --priority=2
-# → Created beads-jkl012
-
-# Set dependencies
-bd dep add beads-def456 beads-abc123  # API needs schema
-bd dep add beads-ghi789 beads-def456  # UI needs API
-bd dep add beads-jkl012 beads-def456  # Upload needs API
+# Add tasks with dependencies
+bacchus task add --id PROFILE-001 --title "Add avatar_url to users table" --priority 1
+bacchus task add --id PROFILE-002 --title "Avatar upload API endpoint" --priority 1 --deps PROFILE-001
+bacchus task add --id PROFILE-003 --title "Profile page UI" --priority 2 --deps PROFILE-002
+bacchus task add --id PROFILE-004 --title "Avatar upload component" --priority 2 --deps PROFILE-002
 
 # Verify
-bd list --status=open
-bd ready  # Should show beads-abc123 as only ready bead
+bacchus task list
+bacchus task list --ready  # Should show PROFILE-001 as only ready task
+```
+
+## Tasks YAML Format
+
+You can also directly edit `.bacchus/tasks.yaml`:
+
+```yaml
+version: 1
+tasks:
+  - id: PROFILE-001
+    title: "Add avatar_url to users table"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies:
+        - "src/db/schema.rs::UserTable"
+      creates:
+        - "migrations/add_avatar_url.sql"
+
+  - id: PROFILE-002
+    title: "Avatar upload API endpoint"
+    priority: 1
+    status: open
+    depends_on: [PROFILE-001]
+    footprint:
+      modifies:
+        - "src/api/users.rs::*"
+      creates:
+        - "src/api/avatar.rs"
 ```
 
 ## Checklist
 
 Before finishing:
-- [ ] Every significant unit of work has a bead
+- [ ] Every significant unit of work has a task
 - [ ] Dependencies correctly model the execution order
 - [ ] No circular dependencies
-- [ ] Ready beads can be worked on immediately
+- [ ] Ready tasks can be worked on immediately
 
 ## Next Steps
 
@@ -77,7 +98,7 @@ After planning, orchestrate the work:
 /bacchus-orchestrate
 ```
 
-Or work on a single bead:
+Or work on a single task:
 ```
-/bacchus-agent <bead_id>
+/bacchus-agent <task_id>
 ```
