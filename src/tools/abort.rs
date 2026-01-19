@@ -1,8 +1,9 @@
 //! Abort tool - abort a failed merge for a task
 //!
 //! Restores the repository to pre-merge state when a merge conflict occurs.
+//! Uses SQLite-based task management (tasks_v2 table).
 
-use crate::db::with_db;
+use crate::tasks::{self, TasksError};
 use crate::worktree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -18,18 +19,20 @@ pub fn abort_merge(
     task_id: &str,
     workspace_root: &Path,
 ) -> Result<AbortOutput, Box<dyn std::error::Error>> {
-    // 1. Check claim exists
-    let claim_exists = with_db(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT 1 FROM claims WHERE bead_id = ?1",
-                [task_id],
-                |_| Ok(true),
-            )
-            .unwrap_or(false))
-    })?;
+    // 1. Check task exists and is claimed
+    let task = match tasks::get_sqlite_task(task_id) {
+        Ok(t) => t,
+        Err(TasksError::TaskNotFound(_)) => {
+            return Ok(AbortOutput {
+                success: false,
+                task_id: task_id.to_string(),
+                message: format!("Task {} not found", task_id),
+            });
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
 
-    if !claim_exists {
+    if task.claimed_by.is_none() {
         return Ok(AbortOutput {
             success: false,
             task_id: task_id.to_string(),

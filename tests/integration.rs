@@ -568,7 +568,7 @@ mod error_tests {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("Invalid status") || stdout.contains("No claim found"),
+            stdout.contains("Invalid status") || stdout.contains("No claim found") || stdout.contains("not found"),
             "Expected error for invalid status, got: {}", stdout
         );
     }

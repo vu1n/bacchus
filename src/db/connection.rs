@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use super::migrations::apply_migrations;
+use super::migrations::init_schema;
 
 /// Global database connection pool (single connection for now)
 static DB_POOL: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
@@ -16,8 +16,7 @@ static DB_POOL: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
 ///
 /// # Arguments
 /// * `db_path` - Path to the database file. If None, uses `.bacchus/bacchus.db` in current directory.
-/// * `silent` - If true, suppress migration output
-pub fn init_db(db_path: Option<&str>, silent: bool) -> Result<()> {
+pub fn init_db(db_path: Option<&str>) -> Result<()> {
     let path = db_path.unwrap_or(".bacchus/bacchus.db");
 
     // Ensure directory exists
@@ -40,8 +39,8 @@ pub fn init_db(db_path: Option<&str>, silent: bool) -> Result<()> {
     // Enable foreign keys
     conn.pragma_update(None, "foreign_keys", "ON")?;
 
-    // Apply migrations
-    apply_migrations(&conn, silent)?;
+    // Initialize schema
+    init_schema(&conn)?;
 
     // Store in global pool
     let pool = DB_POOL.get_or_init(|| Mutex::new(None));
@@ -83,7 +82,7 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let path_str = db_path.to_str().unwrap();
 
-        init_db(Some(path_str), true).unwrap();
+        init_db(Some(path_str)).unwrap();
 
         // Verify connection works
         with_db(|conn| {

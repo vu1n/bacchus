@@ -254,7 +254,7 @@ mod tests {
     fn setup_test_db() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap()), true).unwrap();
+        init_db(Some(db_path.to_str().unwrap())).unwrap();
         dir
     }
 

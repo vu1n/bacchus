@@ -198,25 +198,6 @@ pub enum TaskCommands {
         id: String,
     },
 
-    /// Add a new task
-    Add {
-        /// Task ID (e.g., AUTH-001)
-        #[arg(long)]
-        id: String,
-        /// Task title
-        #[arg(long)]
-        title: String,
-        /// Task description
-        #[arg(long)]
-        description: Option<String>,
-        /// Priority (lower = higher priority, default: 5)
-        #[arg(long)]
-        priority: Option<i32>,
-        /// Comma-separated list of task IDs this depends on
-        #[arg(long)]
-        deps: Option<String>,
-    },
-
     /// Validate tasks against the symbol index
     Validate,
 

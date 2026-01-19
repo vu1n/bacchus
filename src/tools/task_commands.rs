@@ -51,13 +51,6 @@ pub struct TaskInitOutput {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TaskAddOutput {
-    pub success: bool,
-    pub task_id: String,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct TaskImportOutput {
     pub success: bool,
     pub imported: usize,
@@ -208,56 +201,6 @@ pub fn init_tasks(workspace_root: &Path) -> Result<TaskInitOutput, String> {
         path: path.to_string_lossy().to_string(),
         message: "Created tasks.yaml template".to_string(),
     })
-}
-
-/// Add a new task to tasks.yaml (atomic with file locking)
-pub fn add_task(
-    workspace_root: &Path,
-    task_id: &str,
-    title: &str,
-    description: Option<&str>,
-    priority: Option<i32>,
-    depends_on: Vec<String>,
-) -> Result<TaskAddOutput, String> {
-    let task_id_owned = task_id.to_string();
-    let title_owned = title.to_string();
-    let description_owned = description.map(|s| s.to_string());
-
-    // Use modify_tasks for atomic read-modify-write with proper locking
-    let result = tasks::modify_tasks(workspace_root, |mut all_tasks| {
-        // Check for duplicate ID
-        if all_tasks.iter().any(|t| t.id == task_id_owned) {
-            return Err(tasks::TasksError::DuplicateTask(task_id_owned.clone()));
-        }
-
-        // Create new task
-        let new_task = Task {
-            id: task_id_owned.clone(),
-            title: title_owned.clone(),
-            description: description_owned.clone(),
-            priority: priority.unwrap_or(5),
-            status: "open".to_string(),
-            depends_on: depends_on.clone(),
-            footprint: tasks::TaskFootprint::default(),
-        };
-
-        all_tasks.push(new_task);
-        Ok(all_tasks)
-    });
-
-    match result {
-        Ok(()) => Ok(TaskAddOutput {
-            success: true,
-            task_id: task_id.to_string(),
-            message: format!("Added task {}", task_id),
-        }),
-        Err(tasks::TasksError::DuplicateTask(id)) => Ok(TaskAddOutput {
-            success: false,
-            task_id: id.clone(),
-            message: format!("Task with ID {} already exists", id),
-        }),
-        Err(e) => Err(e.to_string()),
-    }
 }
 
 /// Import tasks from YAML to SQLite

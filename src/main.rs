@@ -33,7 +33,7 @@ fn main() {
     
     let db_path_str = db_path_buf.to_str().unwrap_or(".bacchus/bacchus.db");
 
-    if let Err(e) = db::init_db(Some(db_path_str), true) {
+    if let Err(e) = db::init_db(Some(db_path_str)) {
         eprintln!("Failed to initialize database: {}", e);
         std::process::exit(1);
     }
@@ -217,17 +217,6 @@ fn main() {
                 }
                 TaskCommands::Show { id } => {
                     tools::show_task(&workspace_root, &id)
-                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                TaskCommands::Add { id, title, description, priority, deps } => {
-                    let deps_vec = deps
-                        .map(|d| d.split(',').map(|s| s.trim().to_string()).collect())
-                        .unwrap_or_default();
-                    tools::add_task(&workspace_root, &id, &title, description.as_deref(), priority, deps_vec)
                         .map(|r| serde_json::to_string_pretty(&r).unwrap())
                         .map_err(|e| rusqlite::Error::SqliteFailure(
                             rusqlite::ffi::Error::new(1),
@@ -522,36 +511,47 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
         .unwrap_or(0);
 
     db::with_db(|conn| {
-        // Count claims
+        // Count active claims from tasks_v2 (in_progress with claimed_by)
         let claims_count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM claims",
+            "SELECT COUNT(*) FROM tasks_v2
+             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
             [],
             |r| r.get(0),
         ).unwrap_or(0);
 
-        // Get active claims with worktree paths
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        // Get active claims from tasks_v2
         let mut stmt = conn.prepare(
-            "SELECT bead_id, agent_id, worktree_path, branch_name,
-                    (strftime('%s', 'now') * 1000 - claimed_at) / 60000 as age_minutes
-             FROM claims"
+            "SELECT id, claimed_by, claimed_at
+             FROM tasks_v2
+             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL"
         )?;
         let claims: Vec<(serde_json::Value, String)> = stmt
             .query_map([], |row| {
-                let worktree_path: String = row.get(2)?;
+                let task_id: String = row.get(0)?;
+                let claimed_at: Option<i64> = row.get(2)?;
+                let age_minutes = claimed_at.map(|ca| (now_ms - ca) / 60000).unwrap_or(0);
+                let worktree_path = format!(".bacchus/worktrees/{}", task_id);
                 Ok((serde_json::json!({
-                    "task_id": row.get::<_, String>(0)?,
-                    "agent_id": row.get::<_, String>(1)?,
+                    "task_id": &task_id,
+                    "agent_id": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     "worktree_path": &worktree_path,
-                    "branch": row.get::<_, String>(3)?,
-                    "age_minutes": row.get::<_, i64>(4)?
+                    "branch": format!("bacchus/{}", task_id),
+                    "age_minutes": age_minutes
                 }), worktree_path))
             })?
             .filter_map(|r| r.ok())
             .collect();
 
         let claim_values: Vec<serde_json::Value> = claims.iter().map(|(v, _)| v.clone()).collect();
-        let claimed_worktrees: std::collections::HashSet<String> =
-            claims.iter().map(|(_, p)| p.clone()).collect();
+        let claimed_task_ids: std::collections::HashSet<String> =
+            claims.iter()
+                .filter_map(|(v, _)| v.get("task_id").and_then(|t| t.as_str()).map(String::from))
+                .collect();
 
         // Count symbols indexed
         let symbols_count: i32 = conn.query_row(
@@ -571,13 +571,10 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
                     if path.is_dir() {
-                        let path_str = path.to_string_lossy().to_string();
-                        if !claimed_worktrees.contains(&path_str) {
-                            orphaned_worktrees.push(
-                                path.file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| path_str)
-                            );
+                        if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                            if !claimed_task_ids.contains(dir_name) {
+                                orphaned_worktrees.push(dir_name.to_string());
+                            }
                         }
                     }
                 }
@@ -586,7 +583,7 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
 
         // Check for broken claims (claims where worktree doesn't exist)
         let broken_claims: Vec<String> = claims.iter()
-            .filter(|(_, path)| !PathBuf::from(path).exists())
+            .filter(|(_, path)| !workspace_root.join(path).exists())
             .filter_map(|(v, _)| v.get("task_id").and_then(|b| b.as_str()).map(String::from))
             .collect();
 

@@ -1,9 +1,9 @@
 //! Resolve tool - complete a merge after manual conflict resolution
 //!
 //! Finishes the merge, removes worktree, and updates task status.
+//! Uses SQLite-based task management (tasks_v2 table).
 
-use crate::db::with_db;
-use crate::tasks;
+use crate::tasks::{self, SqliteTaskStatus};
 use crate::worktree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -20,18 +20,21 @@ pub fn resolve_merge(
     task_id: &str,
     workspace_root: &Path,
 ) -> Result<ResolveOutput, Box<dyn std::error::Error>> {
-    // 1. Check claim exists
-    let claim_exists = with_db(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT 1 FROM claims WHERE bead_id = ?1",
-                [task_id],
-                |_| Ok(true),
-            )
-            .unwrap_or(false))
-    })?;
+    // 1. Check task exists and is claimed
+    let task = match tasks::get_sqlite_task(task_id) {
+        Ok(t) => t,
+        Err(tasks::TasksError::TaskNotFound(_)) => {
+            return Ok(ResolveOutput {
+                success: false,
+                task_id: task_id.to_string(),
+                merged: false,
+                message: format!("Task {} not found", task_id),
+            });
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
 
-    if !claim_exists {
+    if task.claimed_by.is_none() {
         return Ok(ResolveOutput {
             success: false,
             task_id: task_id.to_string(),
@@ -39,6 +42,8 @@ pub fn resolve_merge(
             message: format!("No claim found for {}", task_id),
         });
     }
+
+    let agent_id = task.claimed_by.clone().unwrap_or_default();
 
     // 2. Check we're in a merge state
     if !worktree::is_in_merge_conflict(workspace_root)? {
@@ -84,16 +89,12 @@ pub fn resolve_merge(
     // 6. Remove worktree (non-force since we merged)
     worktree::remove_worktree(workspace_root, task_id, false)?;
 
-    // 7. Clear active footprints
-    if let Err(e) = tasks::clear_active_footprints(task_id) {
-        eprintln!("Warning: Failed to clear footprints for {}: {}", task_id, e);
+    // 7. Release SQLite task (marks as closed and clears claim)
+    if !agent_id.is_empty() {
+        tasks::release_sqlite_task(task_id, &agent_id)?;
+    } else {
+        tasks::update_sqlite_task_status(task_id, SqliteTaskStatus::Closed)?;
     }
-
-    // 8. Update task status
-    tasks::update_task_status(workspace_root, task_id, "closed")?;
-
-    // 9. Remove claim
-    with_db(|conn| conn.execute("DELETE FROM claims WHERE bead_id = ?1", [task_id]))?;
 
     Ok(ResolveOutput {
         success: true,

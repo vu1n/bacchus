@@ -238,9 +238,14 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let in_progress_tasks = tasks::get_in_progress_tasks(&workspace_root).unwrap_or_default();
     let in_progress_count = in_progress_tasks.len();
 
-    // Get active claims count
+    // Get active claims count from tasks_v2 (in_progress with claimed_by)
     let active_count = with_db(|conn| {
-        conn.query_row("SELECT COUNT(*) FROM claims", [], |r| r.get::<_, i32>(0))
+        conn.query_row(
+            "SELECT COUNT(*) FROM tasks_v2
+             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
     })
     .unwrap_or(0) as usize;
 

@@ -1,19 +1,18 @@
 //! Task management module
 //!
-//! Supports both YAML-based tasks (.bacchus/tasks.yaml) for backward compatibility
-//! and SQLite-based tasks (tasks_v2 table) for hierarchical orchestration.
+//! Uses SQLite-based tasks (tasks_v2 table) for hierarchical orchestration.
+//! YAML tasks (.bacchus/tasks.yaml) are read-only and used for import.
 //!
 //! ## Task Storage
-//! - **YAML tasks**: Legacy format in `.bacchus/tasks.yaml` (no epic association)
-//! - **SQLite tasks**: New format in `tasks_v2` table (must belong to an epic)
+//! - **SQLite tasks**: Primary format in `tasks_v2` table (must belong to an epic)
+//! - **YAML tasks**: Read-only for `bacchus task import` migration
 //!
-//! ## Migration Path
-//! 1. Existing YAML tasks continue to work
-//! 2. New epics/tasks use SQLite via `epics::create_epic` and `create_sqlite_task`
-//! 3. Future: `task migrate` command to move YAML tasks to SQLite
+//! ## Workflow
+//! 1. Initialize tasks via `task init` (creates YAML template)
+//! 2. Import to SQLite via `task import --epic-id EPIC`
+//! 3. All runtime operations use SQLite
 
 use crate::db::with_db;
-use fs2::FileExt;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -104,9 +103,6 @@ pub enum TasksError {
     #[error("Failed to parse tasks file: {0}")]
     ParseError(String),
 
-    #[error("Failed to write tasks file: {0}")]
-    WriteError(String),
-
     #[error("Task not found: {0}")]
     TaskNotFound(String),
 
@@ -130,20 +126,8 @@ pub enum TasksError {
 }
 
 // ============================================================================
-// Task Source Detection
+// Import Support
 // ============================================================================
-
-/// Where a task is stored
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskSource {
-    /// Task is stored in SQLite (tasks_v2 table)
-    Sqlite,
-    /// Task is stored in YAML (.bacchus/tasks.yaml)
-    Yaml,
-    /// Task not found in either source
-    NotFound,
-}
 
 /// Result of importing YAML tasks to SQLite
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,131 +244,10 @@ pub fn tasks_file_path(workspace_root: &Path) -> std::path::PathBuf {
     workspace_root.join(".bacchus/tasks.yaml")
 }
 
-/// Get the path to the lock file for tasks.yaml
-fn tasks_lock_path(workspace_root: &Path) -> std::path::PathBuf {
-    workspace_root.join(".bacchus/tasks.yaml.lock")
-}
-
-/// Atomically write content to tasks.yaml with proper locking
-///
-/// Strategy:
-/// - Unix: write to .tmp, rename over target (atomic)
-/// - Windows: write to .tmp, rename target to .bak, rename .tmp to target, delete .bak
-///   (minimizes window where file is missing, .bak allows recovery)
-fn atomic_write_tasks(workspace_root: &Path, content: &str) -> Result<(), TasksError> {
-    use std::io::Write;
-
-    let path = tasks_file_path(workspace_root);
-    let temp_path = path.with_extension("yaml.tmp");
-
-    // Write to temp file
-    let mut file = std::fs::File::create(&temp_path)
-        .map_err(|e| TasksError::WriteError(format!("create temp: {}", e)))?;
-
-    file.write_all(content.as_bytes())
-        .map_err(|e| TasksError::WriteError(format!("write: {}", e)))?;
-
-    file.sync_all()
-        .map_err(|e| TasksError::WriteError(format!("sync: {}", e)))?;
-
-    drop(file); // Close before rename
-
-    // Platform-specific atomic replace
-    #[cfg(unix)]
-    {
-        std::fs::rename(&temp_path, &path)
-            .map_err(|e| TasksError::WriteError(format!("rename: {}", e)))?;
-    }
-
-    #[cfg(windows)]
-    {
-        let backup_path = path.with_extension("yaml.bak");
-
-        // If target exists, rename to backup first
-        if path.exists() {
-            // Remove old backup if exists
-            let _ = std::fs::remove_file(&backup_path);
-            std::fs::rename(&path, &backup_path)
-                .map_err(|e| TasksError::WriteError(format!("backup: {}", e)))?;
-        }
-
-        // Rename temp to target
-        if let Err(e) = std::fs::rename(&temp_path, &path) {
-            // Try to restore from backup
-            if backup_path.exists() {
-                let _ = std::fs::rename(&backup_path, &path);
-            }
-            return Err(TasksError::WriteError(format!("rename: {}", e)));
-        }
-
-        // Success - remove backup
-        let _ = std::fs::remove_file(&backup_path);
-    }
-
-    Ok(())
-}
-
-/// Execute a function while holding an exclusive lock on tasks.yaml
-/// Used for read-modify-write operations
-fn with_exclusive_lock<F, T>(workspace_root: &Path, f: F) -> Result<T, TasksError>
-where
-    F: FnOnce() -> Result<T, TasksError>,
-{
-    let path = tasks_file_path(workspace_root);
-
-    // Ensure .bacchus directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| TasksError::WriteError(e.to_string()))?;
-    }
-
-    let lock_path = tasks_lock_path(workspace_root);
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&lock_path)
-        .map_err(|e| TasksError::WriteError(format!("open lock: {}", e)))?;
-
-    lock_file
-        .lock_exclusive()
-        .map_err(|e| TasksError::WriteError(format!("lock: {}", e)))?;
-
-    let result = f();
-
-    // Lock released when lock_file is dropped
-    drop(lock_file);
-
-    result
-}
-
-/// Load tasks from the YAML file with shared locking
-///
-/// Uses shared lock to prevent reading while a write is in progress.
-/// The lock is acquired before checking file existence to handle the
-/// Windows atomic write window where the file is temporarily renamed.
+/// Load tasks from the YAML file (read-only for import purposes)
 pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
     let path = tasks_file_path(workspace_root);
-    let lock_path = tasks_lock_path(workspace_root);
 
-    // Acquire shared lock BEFORE checking existence to avoid race with
-    // Windows atomic writes (which rename to .bak temporarily)
-    // This blocks until any exclusive lock (write) is released
-    let _lock_file = if lock_path.exists() {
-        let lf = std::fs::OpenOptions::new()
-            .read(true)
-            .open(&lock_path)
-            .ok();
-        if let Some(ref f) = lf {
-            // Block waiting for shared lock - ensures we don't read during writes
-            let _ = f.lock_shared();
-        }
-        lf
-    } else {
-        None
-    };
-
-    // Check existence AFTER acquiring lock
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -395,62 +258,7 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
     let tasks_file: TasksFile = serde_yaml::from_str(&content)
         .map_err(|e| TasksError::ParseError(e.to_string()))?;
 
-    // Lock released when _lock_file is dropped
     Ok(tasks_file.tasks)
-}
-
-/// Save tasks to the YAML file with atomic write and file locking
-#[allow(dead_code)] // Public API, may be used by external callers
-pub fn save_tasks(workspace_root: &Path, tasks: &[Task]) -> Result<(), TasksError> {
-    with_exclusive_lock(workspace_root, || {
-        let tasks_file = TasksFile {
-            version: 1,
-            tasks: tasks.to_vec(),
-        };
-
-        let content = serde_yaml::to_string(&tasks_file)
-            .map_err(|e| TasksError::WriteError(e.to_string()))?;
-
-        atomic_write_tasks(workspace_root, &content)
-    })
-}
-
-/// Modify tasks with a locked read-modify-write cycle
-///
-/// The closure receives the current tasks and should return the modified list.
-/// The entire operation is atomic with proper file locking.
-pub fn modify_tasks<F>(workspace_root: &Path, f: F) -> Result<(), TasksError>
-where
-    F: FnOnce(Vec<Task>) -> Result<Vec<Task>, TasksError>,
-{
-    with_exclusive_lock(workspace_root, || {
-        let path = tasks_file_path(workspace_root);
-
-        // Read current tasks (within lock)
-        let tasks = if path.exists() {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| TasksError::ReadError(e.to_string()))?;
-            let tasks_file: TasksFile = serde_yaml::from_str(&content)
-                .map_err(|e| TasksError::ParseError(e.to_string()))?;
-            tasks_file.tasks
-        } else {
-            Vec::new()
-        };
-
-        // Apply modification
-        let modified_tasks = f(tasks)?;
-
-        // Write back (within lock)
-        let tasks_file = TasksFile {
-            version: 1,
-            tasks: modified_tasks,
-        };
-
-        let content = serde_yaml::to_string(&tasks_file)
-            .map_err(|e| TasksError::WriteError(e.to_string()))?;
-
-        atomic_write_tasks(workspace_root, &content)
-    })
 }
 
 // ============================================================================
@@ -525,52 +333,6 @@ pub fn get_ready_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
     ready.sort_by_key(|t| t.priority);
 
     Ok(ready)
-}
-
-/// Update a task's status in the YAML file (atomic with file locking)
-pub fn update_task_status(workspace_root: &Path, task_id: &str, status: &str) -> Result<(), TasksError> {
-    // Validate status before acquiring lock
-    let valid_statuses = ["open", "in_progress", "blocked", "closed"];
-    if !valid_statuses.contains(&status) {
-        return Err(TasksError::InvalidStatus(status.to_string()));
-    }
-
-    let task_id = task_id.to_string();
-    let status = status.to_string();
-
-    with_exclusive_lock(workspace_root, || {
-        let path = tasks_file_path(workspace_root);
-
-        // Read current tasks (within lock)
-        let mut tasks = if path.exists() {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| TasksError::ReadError(e.to_string()))?;
-            let tasks_file: TasksFile = serde_yaml::from_str(&content)
-                .map_err(|e| TasksError::ParseError(e.to_string()))?;
-            tasks_file.tasks
-        } else {
-            Vec::new()
-        };
-
-        // Find and update task
-        let task = tasks
-            .iter_mut()
-            .find(|t| t.id == task_id)
-            .ok_or_else(|| TasksError::TaskNotFound(task_id.clone()))?;
-
-        task.status = status.clone();
-
-        // Write back (within lock)
-        let tasks_file = TasksFile {
-            version: 1,
-            tasks,
-        };
-
-        let content = serde_yaml::to_string(&tasks_file)
-            .map_err(|e| TasksError::WriteError(e.to_string()))?;
-
-        atomic_write_tasks(workspace_root, &content)
-    })
 }
 
 // ============================================================================
@@ -759,67 +521,6 @@ fn get_active_footprints() -> Result<ResolvedFootprint, TasksError> {
         }
 
         Ok(resolved)
-    })
-    .map_err(|e| TasksError::DbError(e.to_string()))
-}
-
-// ============================================================================
-// Active Footprint Management
-// ============================================================================
-
-/// Store footprints for an active claim
-pub fn store_active_footprints(task_id: &str, footprint: &TaskFootprint) -> Result<(), TasksError> {
-    with_db(|conn| {
-        // Store modifies patterns
-        for pattern in &footprint.modifies {
-            // Normalize bare file paths to file::* for consistent matching
-            let normalized_pattern = if pattern.contains("::") {
-                pattern.clone()
-            } else {
-                format!("{}::*", pattern)
-            };
-
-            // Resolve symbols for this pattern (using conn to avoid deadlock)
-            let resolved: Vec<String> = if let Some((file_part, symbol_part)) = normalized_pattern.rsplit_once("::") {
-                if symbol_part == "*" {
-                    get_symbols_in_file_with_conn(conn, file_part).unwrap_or_default()
-                } else {
-                    vec![normalized_pattern.clone()]
-                }
-            } else {
-                // Shouldn't happen after normalization, but handle gracefully
-                get_symbols_in_file_with_conn(conn, &normalized_pattern).unwrap_or_default()
-            };
-
-            let resolved_json = serde_json::to_string(&resolved).ok();
-
-            conn.execute(
-                "INSERT OR REPLACE INTO active_footprints (task_id, pattern, pattern_type, resolved_symbols) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![task_id, normalized_pattern, "modifies", resolved_json],
-            )?;
-        }
-
-        // Store creates patterns
-        for pattern in &footprint.creates {
-            conn.execute(
-                "INSERT OR REPLACE INTO active_footprints (task_id, pattern, pattern_type, resolved_symbols) VALUES (?1, ?2, ?3, NULL)",
-                rusqlite::params![task_id, pattern, "creates"],
-            )?;
-        }
-
-        Ok(())
-    })
-    .map_err(|e| TasksError::DbError(e.to_string()))
-}
-
-/// Clear footprints for a released claim
-pub fn clear_active_footprints(task_id: &str) -> Result<(), TasksError> {
-    with_db(|conn| {
-        conn.execute(
-            "DELETE FROM active_footprints WHERE task_id = ?1",
-            [task_id],
-        )?;
-        Ok(())
     })
     .map_err(|e| TasksError::DbError(e.to_string()))
 }
@@ -1613,38 +1314,8 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
 }
 
 // ============================================================================
-// Task Source Detection & Import
+// SQLite Task Operations
 // ============================================================================
-
-/// Detect where a task is stored
-///
-/// Checks SQLite first (preferred), then YAML for backwards compatibility.
-pub fn detect_task_source(task_id: &str, workspace_root: &Path) -> TaskSource {
-    // Check SQLite first (preferred source)
-    let in_sqlite = with_db(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT 1 FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
-                [task_id],
-                |_| Ok(true),
-            )
-            .unwrap_or(false))
-    })
-    .unwrap_or(false);
-
-    if in_sqlite {
-        return TaskSource::Sqlite;
-    }
-
-    // Check YAML
-    if let Ok(tasks) = load_tasks(workspace_root) {
-        if tasks.iter().any(|t| t.id == task_id) {
-            return TaskSource::Yaml;
-        }
-    }
-
-    TaskSource::NotFound
-}
 
 /// Get a SQLite task by ID
 pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
@@ -2024,7 +1695,7 @@ tasks:
     fn setup_test_db() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        crate::db::init_db(Some(db_path.to_str().unwrap()), true).unwrap();
+        crate::db::init_db(Some(db_path.to_str().unwrap())).unwrap();
         dir
     }
 
@@ -2392,7 +2063,7 @@ tasks:
     }
 
     // ========================================================================
-    // Task Source Detection Tests
+    // Import Tests
     // ========================================================================
 
     fn setup_test_workspace() -> tempfile::TempDir {
@@ -2417,60 +2088,6 @@ tasks:
         std::fs::write(bacchus_dir.join("tasks.yaml"), tasks_yaml).unwrap();
         dir
     }
-
-    #[test]
-    fn test_detect_task_source_sqlite() {
-        let _dir = setup_test_db();
-
-        // Create epic and task in SQLite
-        crate::epics::create_epic(crate::epics::CreateEpicInput {
-            id: "SRC-EPIC".to_string(),
-            title: "Source Epic".to_string(),
-            description: None,
-            created_by: "human".to_string(),
-        }).unwrap();
-
-        create_sqlite_task(CreateSqliteTaskInput {
-            id: "SRC-001".to_string(),
-            epic_id: "SRC-EPIC".to_string(),
-            title: "SQLite Task".to_string(),
-            description: None,
-            priority: 5,
-            depends_on: vec![],
-            footprint: TaskFootprint::default(),
-        }).unwrap();
-
-        // Task should be detected as SQLite
-        let workspace = tempfile::tempdir().unwrap();
-        let source = detect_task_source("SRC-001", workspace.path());
-        assert_eq!(source, TaskSource::Sqlite);
-
-        // Unknown task should be NotFound
-        let source = detect_task_source("UNKNOWN-001", workspace.path());
-        assert_eq!(source, TaskSource::NotFound);
-
-        crate::db::close_db();
-    }
-
-    #[test]
-    fn test_detect_task_source_yaml() {
-        let _dir = setup_test_db();
-        let workspace = setup_test_workspace();
-
-        // YAML task should be detected
-        let source = detect_task_source("YAML-001", workspace.path());
-        assert_eq!(source, TaskSource::Yaml);
-
-        // Unknown task should be NotFound
-        let source = detect_task_source("UNKNOWN-001", workspace.path());
-        assert_eq!(source, TaskSource::NotFound);
-
-        crate::db::close_db();
-    }
-
-    // ========================================================================
-    // Import Tests
-    // ========================================================================
 
     #[test]
     fn test_import_yaml_tasks_basic() {

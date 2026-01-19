@@ -191,7 +191,7 @@ bacchus session check
 ```bash
 cargo build           # Debug build
 cargo build --release # Release build
-cargo test            # Run tests
+cargo test -- --test-threads=1  # Run tests (sequential due to global DB pool)
 ```
 
 ### Local Testing
@@ -232,46 +232,65 @@ The install script downloads from the release matching the latest tag.
 
 ## Database Schema
 
-### Claims Table (bacchus.db)
+All task state lives in SQLite (`bacchus.db`). YAML is import-only.
+
+### Tasks Table
 
 ```sql
-CREATE TABLE claims (
-    bead_id TEXT PRIMARY KEY,    -- Note: column named bead_id for historical reasons
-    agent_id TEXT NOT NULL,
-    worktree_path TEXT NOT NULL,
-    branch_name TEXT NOT NULL,
-    claimed_at INTEGER NOT NULL  -- Unix timestamp in ms
+CREATE TABLE tasks_v2 (
+    id TEXT PRIMARY KEY,
+    epic_id TEXT NOT NULL REFERENCES epics(id),
+    title TEXT NOT NULL,
+    description TEXT,
+    priority INTEGER NOT NULL DEFAULT 5,
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | blocked | closed
+    claimed_by TEXT,                        -- agent_id who claimed
+    claimed_at INTEGER,                     -- Unix timestamp ms
+    lease_expires_at INTEGER,
+    heartbeat_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER                      -- Soft delete
 );
 ```
 
-### Active Footprints Table (bacchus.db)
+### Epics Table
 
 ```sql
-CREATE TABLE active_footprints (
-    task_id TEXT NOT NULL,
-    pattern TEXT NOT NULL,
-    pattern_type TEXT NOT NULL,    -- 'modifies' | 'creates'
-    resolved_symbols TEXT,         -- JSON array of matched fq_names
-    PRIMARY KEY (task_id, pattern)
+CREATE TABLE epics (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open',  -- open | planning | active | closed
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 ```
 
-### Symbols Table (bacchus.db)
+### Symbols Table
 
 ```sql
 CREATE TABLE symbols (
+    id INTEGER PRIMARY KEY,
     file TEXT NOT NULL,
     fq_name TEXT NOT NULL,
     kind TEXT NOT NULL,
-    span_start_line INTEGER,
-    span_end_line INTEGER,
-    line_count INTEGER,
-    hash TEXT,
+    span_start_line INTEGER NOT NULL,
+    span_end_line INTEGER NOT NULL,
+    line_count INTEGER NOT NULL,
+    hash TEXT NOT NULL,
     docstring TEXT,
-    language TEXT,
-    PRIMARY KEY (file, fq_name)
+    language TEXT NOT NULL
 );
 ```
+
+### Supporting Tables
+
+- `task_dependencies` - Task dependency edges (same-epic enforced by trigger)
+- `task_footprints` - Normalized footprint patterns for overlap detection
+- `agent_messages` - Pull-based agent communication queue
+- `symbols_fts` - FTS5 full-text search for symbols
 
 ## Environment Variables
 

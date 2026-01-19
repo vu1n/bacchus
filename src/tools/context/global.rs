@@ -10,9 +10,15 @@ pub fn generate_global_context(workspace_root: &Path) -> Result<String, String> 
     // 1. Active Claims (Who is doing what?)
     out.push_str("## Active Claims\n");
     let claims = db::with_db(|conn| {
-         let mut stmt = conn.prepare("SELECT bead_id, agent_id FROM claims")?;
+         let mut stmt = conn.prepare(
+             "SELECT id, claimed_by FROM tasks_v2
+              WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL"
+         )?;
          let rows = stmt.query_map([], |row| {
-             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+             Ok((
+                 row.get::<_, String>(0)?,
+                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+             ))
          })?;
          rows.collect::<Result<Vec<_>, _>>()
     }).map_err(|e| e.to_string())?;

@@ -5,13 +5,12 @@ use rusqlite::OptionalExtension;
 pub fn generate_task_context(task_id: &str, _workspace_root: &Path) -> Result<String, String> {
     let claim_info = db::with_db(|conn| {
         conn.query_row(
-            "SELECT agent_id, branch_name, claimed_at FROM claims WHERE bead_id = ?1",
+            "SELECT claimed_by, claimed_at FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
             [task_id],
             |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
                 ))
             }
         ).optional()
@@ -20,11 +19,13 @@ pub fn generate_task_context(task_id: &str, _workspace_root: &Path) -> Result<St
     let mut out = String::new();
     out.push_str(&format!("# Task Context: {}\n\n", task_id));
 
-    if let Some((agent, branch, _ts)) = claim_info {
+    if let Some((Some(agent), _ts)) = claim_info {
         out.push_str(&format!("- **Status**: In Progress (Claimed by {})\n", agent));
-        out.push_str(&format!("- **Branch**: `{}`\n", branch));
+        out.push_str(&format!("- **Branch**: `bacchus/{}`\n", task_id));
+    } else if claim_info.is_some() {
+        out.push_str("- **Status**: Not Claimed\n");
     } else {
-        out.push_str("- **Status**: Unknown / Not Claimed\n");
+        out.push_str("- **Status**: Unknown (Task not found)\n");
     }
 
     out.push_str("\n## Objectives\n");
