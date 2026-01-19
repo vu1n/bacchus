@@ -2,11 +2,12 @@
 
 ## Overview
 
-Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. It provides isolated git worktrees for parallel agent work with built-in task management via `.bacchus/tasks.yaml`.
+Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. It provides isolated git worktrees for parallel agent work with SQLite-based task management.
 
 **Key concepts:**
-- **tasks** = What needs to be done (defined in `.bacchus/tasks.yaml`)
-- **claims** = Who's doing what right now (worktrees, sessions)
+- **epics** = High-level work containers (groups of related tasks)
+- **tasks** = What needs to be done (stored in SQLite, can import from YAML)
+- **claims** = Who's doing what right now (task.claimed_by in SQLite)
 
 ## Architecture
 
@@ -21,7 +22,7 @@ Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. 
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     bacchus CLI (Rust)                       │
-│  ├── Task management (list/show/validate/init)              │
+│  ├── Task management (list/show/validate/import)            │
 │  ├── Session management (start/stop/status/check)           │
 │  ├── Coordination (next/claim/release/stale)                │
 │  ├── Symbol indexing (index/symbols)                        │
@@ -31,10 +32,12 @@ Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. 
          ▼                              ▼
 ┌──────────────────────┐    ┌─────────────────────┐
 │ .bacchus/            │    │ git                 │
-│ ├── tasks.yaml       │    │ Worktrees           │
-│ ├── bacchus.db       │    │ Branches            │
-│ ├── session.json     │    │ Merges              │
-│ └── worktrees/       │    └─────────────────────┘
+│ ├── bacchus.db ────────── │ (SQLite: epics,     │
+│ │   tasks, claims)   │    │  Worktrees          │
+│ ├── tasks.yaml ──────────▶│  Branches           │
+│ │   (import only)    │    │  Merges             │
+│ ├── session.json     │    └─────────────────────┘
+│ └── worktrees/       │
 └──────────────────────┘
 ```
 
@@ -44,14 +47,15 @@ Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. 
 src/
 ├── main.rs              # CLI entry point, command routing
 ├── cli/mod.rs           # Clap command definitions
-├── tasks.rs             # YAML-based task management
+├── tasks.rs             # SQLite task management + YAML import
+├── epics.rs             # Epic management
 ├── worktree.rs          # Git worktree operations
-├── db/                  # SQLite database (claims, symbols)
+├── db/                  # SQLite database (schema, connection)
 ├── indexer/             # Tree-sitter symbol extraction
 ├── updater.rs           # Self-update functionality
 └── tools/
     ├── mod.rs           # Tool exports
-    ├── task_commands.rs # Task list/show/validate/init
+    ├── task_commands.rs # Task list/show/validate/import
     ├── session.rs       # Session management for stop hooks
     ├── claim.rs         # Claim specific task
     ├── next.rs          # Claim next ready task
@@ -68,28 +72,27 @@ src/
 
 ### Task Management (`src/tasks.rs`)
 
-Manages tasks via `.bacchus/tasks.yaml`:
+All task state lives in SQLite. YAML is import-only format.
 
 ```rust
-pub struct Task {
+// SQLite task (primary)
+pub struct SqliteTask {
     pub id: String,
+    pub epic_id: String,
     pub title: String,
     pub description: Option<String>,
-    pub priority: i32,           // Lower = higher priority (default: 5)
-    pub status: String,          // open | in_progress | blocked | closed
-    pub depends_on: Vec<String>, // Task IDs that must be closed first
-    pub footprint: TaskFootprint,
-}
-
-pub struct TaskFootprint {
-    pub modifies: Vec<String>,   // Symbols this task will change
-    pub creates: Vec<String>,    // New files to create
+    pub priority: i32,
+    pub status: String,          // draft | open | in_progress | blocked | closed
+    pub claimed_by: Option<String>,
+    pub claimed_at: Option<i64>,
 }
 
 // Key functions:
-pub fn load_tasks(workspace_root) -> Result<Vec<Task>>
-pub fn get_ready_tasks(workspace_root) -> Result<Vec<Task>>
-pub fn update_task_status(workspace_root, task_id, status) -> Result<()>
+pub fn import_yaml_tasks(workspace_root, epic_id) -> Result<ImportResult>
+pub fn claim_sqlite_task(task_id, agent_id) -> Result<SqliteTask>
+pub fn claim_next_sqlite_task(agent_id) -> Result<Option<SqliteTask>>
+pub fn release_sqlite_task(task_id, new_status) -> Result<()>
+pub fn get_sqlite_task(task_id) -> Result<SqliteTask>
 ```
 
 **Ready calculation**: A task is ready when:
@@ -130,7 +133,9 @@ pub fn remove_worktree(task_id, workspace_root, force) -> Result<()>
 pub fn merge_worktree(task_id, workspace_root, target_branch) -> Result<()>
 ```
 
-## Task YAML Format
+## Task YAML Format (Import Only)
+
+YAML is used for bulk task definition. Import with `bacchus task import --epic-id <EPIC>`.
 
 ```yaml
 version: 1
@@ -158,6 +163,8 @@ tasks:
       modifies: ["src/middleware/mod.rs::*"]
       creates: ["src/middleware/rate_limit.rs"]
 ```
+
+After import, all operations (claim, release, status changes) happen in SQLite.
 
 ## Stop Hook Flow
 
