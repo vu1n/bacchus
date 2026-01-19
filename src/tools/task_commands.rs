@@ -57,6 +57,18 @@ pub struct TaskAddOutput {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TaskImportOutput {
+    pub success: bool,
+    pub imported: usize,
+    pub skipped: usize,
+    pub imported_ids: Vec<String>,
+    pub skipped_ids: Vec<String>,
+    pub epic_id: String,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
 // ============================================================================
 // Commands
 // ============================================================================
@@ -243,6 +255,49 @@ pub fn add_task(
             success: false,
             task_id: id.clone(),
             message: format!("Task with ID {} already exists", id),
+        }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Import tasks from YAML to SQLite
+pub fn import_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result<TaskImportOutput, String> {
+    match tasks::import_yaml_tasks(workspace_root, epic_id) {
+        Ok(result) => {
+            let message = if result.imported > 0 {
+                format!(
+                    "Imported {} tasks to epic '{}' ({} skipped)",
+                    result.imported, result.epic_id, result.skipped
+                )
+            } else if result.skipped > 0 {
+                format!(
+                    "All {} tasks already exist in SQLite (epic '{}')",
+                    result.skipped, result.epic_id
+                )
+            } else {
+                "No tasks to import".to_string()
+            };
+
+            Ok(TaskImportOutput {
+                success: true,
+                imported: result.imported,
+                skipped: result.skipped,
+                imported_ids: result.imported_ids,
+                skipped_ids: result.skipped_ids,
+                epic_id: result.epic_id,
+                warnings: result.warnings,
+                message,
+            })
+        }
+        Err(tasks::TasksError::NoTasksFile(path)) => Ok(TaskImportOutput {
+            success: false,
+            imported: 0,
+            skipped: 0,
+            imported_ids: vec![],
+            skipped_ids: vec![],
+            epic_id: epic_id.unwrap_or("").to_string(),
+            warnings: vec![],
+            message: format!("No tasks.yaml found at {}", path),
         }),
         Err(e) => Err(e.to_string()),
     }

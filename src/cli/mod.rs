@@ -222,6 +222,13 @@ pub enum TaskCommands {
 
     /// Initialize a tasks.yaml template
     Init,
+
+    /// Import tasks from YAML to SQLite
+    Import {
+        /// Epic ID to import tasks into (auto-generated if not specified)
+        #[arg(long)]
+        epic_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

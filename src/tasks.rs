@@ -124,6 +124,42 @@ pub enum TasksError {
 
     #[error("Epic not found: {0}")]
     EpicNotFound(String),
+
+    #[error("No tasks file found: {0}")]
+    NoTasksFile(String),
+}
+
+// ============================================================================
+// Task Source Detection
+// ============================================================================
+
+/// Where a task is stored
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskSource {
+    /// Task is stored in SQLite (tasks_v2 table)
+    Sqlite,
+    /// Task is stored in YAML (.bacchus/tasks.yaml)
+    Yaml,
+    /// Task not found in either source
+    NotFound,
+}
+
+/// Result of importing YAML tasks to SQLite
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportResult {
+    /// Number of tasks imported
+    pub imported: usize,
+    /// Number of tasks skipped (already exist)
+    pub skipped: usize,
+    /// Task IDs that were imported
+    pub imported_ids: Vec<String>,
+    /// Task IDs that were skipped
+    pub skipped_ids: Vec<String>,
+    /// Epic ID used for imported tasks
+    pub epic_id: String,
+    /// Any warnings generated during import
+    pub warnings: Vec<String>,
 }
 
 // ============================================================================
@@ -1577,6 +1613,268 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
 }
 
 // ============================================================================
+// Task Source Detection & Import
+// ============================================================================
+
+/// Detect where a task is stored
+///
+/// Checks SQLite first (preferred), then YAML for backwards compatibility.
+pub fn detect_task_source(task_id: &str, workspace_root: &Path) -> TaskSource {
+    // Check SQLite first (preferred source)
+    let in_sqlite = with_db(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
+                [task_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false))
+    })
+    .unwrap_or(false);
+
+    if in_sqlite {
+        return TaskSource::Sqlite;
+    }
+
+    // Check YAML
+    if let Ok(tasks) = load_tasks(workspace_root) {
+        if tasks.iter().any(|t| t.id == task_id) {
+            return TaskSource::Yaml;
+        }
+    }
+
+    TaskSource::NotFound
+}
+
+/// Get a SQLite task by ID
+pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
+    with_db(|conn| {
+        conn.query_row(
+            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
+                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
+             FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
+            [task_id],
+            |row| {
+                let status_str: String = row.get(5)?;
+                Ok(SqliteTask {
+                    id: row.get(0)?,
+                    epic_id: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    priority: row.get(4)?,
+                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+                    claimed_by: row.get(6)?,
+                    claimed_at: row.get(7)?,
+                    lease_expires_at: row.get(8)?,
+                    heartbeat_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    deleted_at: row.get(12)?,
+                })
+            },
+        )
+    })
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => TasksError::TaskNotFound(task_id.to_string()),
+        e => TasksError::DbError(e.to_string()),
+    })
+}
+
+/// Update a SQLite task's status
+pub fn update_sqlite_task_status(task_id: &str, status: SqliteTaskStatus) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks_v2 SET status = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            params![status.as_str(), now, task_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task not found: {}", task_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Import tasks from YAML to SQLite
+///
+/// Reads `.bacchus/tasks.yaml` and creates corresponding tasks in SQLite.
+/// Auto-creates an epic if none specified. Skips tasks that already exist (idempotent).
+///
+/// # Arguments
+/// * `workspace_root` - Path to the workspace root
+/// * `epic_id` - Optional epic ID. If None, auto-generates one from the first task prefix.
+///
+/// # Returns
+/// ImportResult with counts of imported/skipped tasks
+pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result<ImportResult, TasksError> {
+    let path = tasks_file_path(workspace_root);
+
+    if !path.exists() {
+        return Err(TasksError::NoTasksFile(path.to_string_lossy().to_string()));
+    }
+
+    let yaml_tasks = load_tasks(workspace_root)?;
+
+    if yaml_tasks.is_empty() {
+        return Ok(ImportResult {
+            imported: 0,
+            skipped: 0,
+            imported_ids: vec![],
+            skipped_ids: vec![],
+            epic_id: epic_id.unwrap_or("").to_string(),
+            warnings: vec!["No tasks found in YAML file".to_string()],
+        });
+    }
+
+    // Determine epic ID
+    let epic_id = match epic_id {
+        Some(id) => id.to_string(),
+        None => {
+            // Auto-generate from first task ID prefix (e.g., "AUTH-001" -> "AUTH-IMPORT")
+            let first_task = &yaml_tasks[0];
+            if let Some(prefix) = first_task.id.split('-').next() {
+                format!("{}-IMPORT", prefix)
+            } else {
+                "YAML-IMPORT".to_string()
+            }
+        }
+    };
+
+    // Ensure epic exists (create if needed)
+    ensure_epic_exists(&epic_id)?;
+
+    let mut imported = 0;
+    let mut skipped = 0;
+    let mut imported_ids = Vec::new();
+    let mut skipped_ids = Vec::new();
+    let mut warnings = Vec::new();
+
+    // First pass: collect task IDs being imported to validate dependencies
+    let yaml_task_ids: HashSet<String> = yaml_tasks.iter().map(|t| t.id.clone()).collect();
+
+    // Process each task
+    for task in &yaml_tasks {
+        // Check if task already exists in SQLite
+        let exists_in_sqlite = with_db(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT 1 FROM tasks_v2 WHERE id = ?1",
+                    [&task.id],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false))
+        })
+        .unwrap_or(false);
+
+        if exists_in_sqlite {
+            skipped += 1;
+            skipped_ids.push(task.id.clone());
+            continue;
+        }
+
+        // Validate dependencies - they must either be in YAML or already in SQLite
+        let mut valid_deps = Vec::new();
+        for dep in &task.depends_on {
+            if yaml_task_ids.contains(dep) {
+                // Dep is in YAML, will be imported
+                valid_deps.push(dep.clone());
+            } else {
+                // Check if dep exists in SQLite (same epic)
+                let dep_exists = with_db(|conn| {
+                    Ok(conn
+                        .query_row(
+                            "SELECT 1 FROM tasks_v2 WHERE id = ?1 AND epic_id = ?2 AND deleted_at IS NULL",
+                            params![dep, &epic_id],
+                            |_| Ok(true),
+                        )
+                        .unwrap_or(false))
+                })
+                .unwrap_or(false);
+
+                if dep_exists {
+                    valid_deps.push(dep.clone());
+                } else {
+                    warnings.push(format!(
+                        "Task {}: dependency {} not found, skipping dependency",
+                        task.id, dep
+                    ));
+                }
+            }
+        }
+
+        // Create the SQLite task
+        let input = CreateSqliteTaskInput {
+            id: task.id.clone(),
+            epic_id: epic_id.clone(),
+            title: task.title.clone(),
+            description: task.description.clone(),
+            priority: task.priority,
+            depends_on: valid_deps,
+            footprint: task.footprint.clone(),
+        };
+
+        match create_sqlite_task(input) {
+            Ok(_) => {
+                imported += 1;
+                imported_ids.push(task.id.clone());
+            }
+            Err(e) => {
+                warnings.push(format!("Failed to import task {}: {}", task.id, e));
+                skipped += 1;
+                skipped_ids.push(task.id.clone());
+            }
+        }
+    }
+
+    Ok(ImportResult {
+        imported,
+        skipped,
+        imported_ids,
+        skipped_ids,
+        epic_id,
+        warnings,
+    })
+}
+
+/// Ensure an epic exists, creating it if needed
+fn ensure_epic_exists(epic_id: &str) -> Result<(), TasksError> {
+    let exists = with_db(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM epics WHERE id = ?1",
+                [epic_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false))
+    })
+    .unwrap_or(false);
+
+    if exists {
+        return Ok(());
+    }
+
+    // Create the epic
+    let now = chrono::Utc::now().timestamp_millis();
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO epics (id, title, description, status, created_by, created_at, updated_at)
+             VALUES (?1, ?2, NULL, 'open', 'import', ?3, ?3)",
+            params![epic_id, format!("Imported from YAML: {}", epic_id), now],
+        )
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))?;
+
+    Ok(())
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -2089,6 +2387,172 @@ tasks:
         // Heartbeat from wrong agent should fail
         let result = heartbeat_sqlite_task("HB-001", "agent-2");
         assert!(result.is_err());
+
+        crate::db::close_db();
+    }
+
+    // ========================================================================
+    // Task Source Detection Tests
+    // ========================================================================
+
+    fn setup_test_workspace() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let bacchus_dir = dir.path().join(".bacchus");
+        std::fs::create_dir_all(&bacchus_dir).unwrap();
+
+        let tasks_yaml = r#"
+version: 1
+tasks:
+  - id: YAML-001
+    title: YAML Task 1
+    status: open
+    priority: 1
+    depends_on: []
+  - id: YAML-002
+    title: YAML Task 2
+    status: open
+    priority: 2
+    depends_on: [YAML-001]
+"#;
+        std::fs::write(bacchus_dir.join("tasks.yaml"), tasks_yaml).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_detect_task_source_sqlite() {
+        let _dir = setup_test_db();
+
+        // Create epic and task in SQLite
+        crate::epics::create_epic(crate::epics::CreateEpicInput {
+            id: "SRC-EPIC".to_string(),
+            title: "Source Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        }).unwrap();
+
+        create_sqlite_task(CreateSqliteTaskInput {
+            id: "SRC-001".to_string(),
+            epic_id: "SRC-EPIC".to_string(),
+            title: "SQLite Task".to_string(),
+            description: None,
+            priority: 5,
+            depends_on: vec![],
+            footprint: TaskFootprint::default(),
+        }).unwrap();
+
+        // Task should be detected as SQLite
+        let workspace = tempfile::tempdir().unwrap();
+        let source = detect_task_source("SRC-001", workspace.path());
+        assert_eq!(source, TaskSource::Sqlite);
+
+        // Unknown task should be NotFound
+        let source = detect_task_source("UNKNOWN-001", workspace.path());
+        assert_eq!(source, TaskSource::NotFound);
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_detect_task_source_yaml() {
+        let _dir = setup_test_db();
+        let workspace = setup_test_workspace();
+
+        // YAML task should be detected
+        let source = detect_task_source("YAML-001", workspace.path());
+        assert_eq!(source, TaskSource::Yaml);
+
+        // Unknown task should be NotFound
+        let source = detect_task_source("UNKNOWN-001", workspace.path());
+        assert_eq!(source, TaskSource::NotFound);
+
+        crate::db::close_db();
+    }
+
+    // ========================================================================
+    // Import Tests
+    // ========================================================================
+
+    #[test]
+    fn test_import_yaml_tasks_basic() {
+        let _dir = setup_test_db();
+        let workspace = setup_test_workspace();
+
+        // Import tasks
+        let result = import_yaml_tasks(workspace.path(), Some("TEST-EPIC")).unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped, 0);
+        assert!(result.imported_ids.contains(&"YAML-001".to_string()));
+        assert!(result.imported_ids.contains(&"YAML-002".to_string()));
+        assert_eq!(result.epic_id, "TEST-EPIC");
+
+        // Verify tasks are in SQLite
+        let task1 = get_sqlite_task("YAML-001").unwrap();
+        assert_eq!(task1.title, "YAML Task 1");
+        assert_eq!(task1.epic_id, "TEST-EPIC");
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_import_yaml_tasks_idempotent() {
+        let _dir = setup_test_db();
+        let workspace = setup_test_workspace();
+
+        // First import
+        let result1 = import_yaml_tasks(workspace.path(), Some("IDEM-EPIC")).unwrap();
+        assert_eq!(result1.imported, 2);
+
+        // Second import should skip all
+        let result2 = import_yaml_tasks(workspace.path(), Some("IDEM-EPIC")).unwrap();
+        assert_eq!(result2.imported, 0);
+        assert_eq!(result2.skipped, 2);
+        assert!(result2.skipped_ids.contains(&"YAML-001".to_string()));
+        assert!(result2.skipped_ids.contains(&"YAML-002".to_string()));
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_import_yaml_tasks_auto_epic_id() {
+        let _dir = setup_test_db();
+        let workspace = setup_test_workspace();
+
+        // Import without epic ID - should auto-generate from task prefix
+        let result = import_yaml_tasks(workspace.path(), None).unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.epic_id, "YAML-IMPORT"); // Auto-generated from "YAML-001"
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_import_yaml_tasks_with_deps() {
+        let _dir = setup_test_db();
+        let workspace = setup_test_workspace();
+
+        // Import tasks with dependencies
+        let result = import_yaml_tasks(workspace.path(), Some("DEP-IMP-EPIC")).unwrap();
+        assert_eq!(result.imported, 2);
+
+        // Verify dependency was preserved
+        // YAML-002 depends on YAML-001, so it shouldn't be ready
+        let ready_tasks = get_ready_sqlite_tasks(Some("DEP-IMP-EPIC")).unwrap();
+        assert_eq!(ready_tasks.len(), 1);
+        assert_eq!(ready_tasks[0].id, "YAML-001");
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_import_yaml_tasks_no_file() {
+        let _dir = setup_test_db();
+        let workspace = tempfile::tempdir().unwrap();
+
+        // No tasks.yaml file
+        let result = import_yaml_tasks(workspace.path(), Some("EMPTY-EPIC"));
+        assert!(matches!(result, Err(TasksError::NoTasksFile(_))));
 
         crate::db::close_db();
     }

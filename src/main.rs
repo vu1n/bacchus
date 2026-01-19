@@ -250,6 +250,14 @@ fn main() {
                             Some(e),
                         ))
                 }
+                TaskCommands::Import { epic_id } => {
+                    tools::import_tasks(&workspace_root, epic_id.as_deref())
+                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                        .map_err(|e| rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e),
+                        ))
+                }
             }
         }
 
