@@ -1,7 +1,7 @@
 //! Stale claims tool - finds and optionally cleans up abandoned claims
 //!
 //! Detects claims older than a threshold and can clean them up.
-//! Uses SQLite-based task management (tasks_v2 table).
+//! Uses SQLite-based task management (tasks table).
 
 use crate::db::with_db;
 use crate::tasks::{self, SqliteTaskStatus};
@@ -39,18 +39,18 @@ pub fn find_stale(
     let threshold_ms = minutes * 60 * 1000;
     let cutoff = now - threshold_ms;
 
-    // Query SQLite tasks_v2 for stale claims (expired lease or old heartbeat)
+    // Query SQLite tasks for stale claims (claimed_at threshold or legacy NULL claims)
     let stale_claims: Vec<StaleClaim> = with_db(|conn| {
-        // Find tasks that are in_progress with expired leases or old claims
+        // Find tasks that are in_progress with old claims
         let mut stmt = conn.prepare(
-            "SELECT id, claimed_by, claimed_at, lease_expires_at FROM tasks_v2
+            "SELECT id, claimed_by, claimed_at FROM tasks
              WHERE status = 'in_progress'
              AND deleted_at IS NULL
-             AND (lease_expires_at < ?1 OR (lease_expires_at IS NULL AND claimed_at < ?2))",
+             AND (claimed_at IS NULL OR claimed_at < ?1)",
         )?;
 
         let claims = stmt
-            .query_map([now, cutoff], |row| {
+            .query_map([cutoff], |row| {
                 let claimed_at: Option<i64> = row.get(2)?;
                 let claimed_at = claimed_at.unwrap_or(0);
                 let task_id: String = row.get(0)?;
@@ -85,15 +85,12 @@ pub fn find_stale(
             }
 
             // Reset SQLite task to open
-            if let Err(e) = tasks::update_sqlite_task_status(&claim.task_id, SqliteTaskStatus::Open) {
+            if let Err(e) = tasks::reset_sqlite_task(&claim.task_id, SqliteTaskStatus::Open) {
                 eprintln!(
                     "Warning: Failed to reset SQLite task status for {}: {}",
                     claim.task_id, e
                 );
             }
-
-            // Also use the reclaim function to clear claimed_by
-            let _ = tasks::reclaim_stale_sqlite_tasks();
 
             cleaned_up.push(claim.task_id.clone());
         }

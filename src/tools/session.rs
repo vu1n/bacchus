@@ -183,7 +183,7 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
     };
 
     // Get workspace root for task lookup
-    let workspace_root = match find_workspace_root() {
+    let _workspace_root = match find_workspace_root() {
         Some(root) => root,
         None => return HookCheckOutput {
             decision: "approve".to_string(),
@@ -192,25 +192,32 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
     };
 
     // Check task status
-    match tasks::get_task(&workspace_root, task_id) {
-        Ok(task) => {
-            if task.status == "closed" {
-                // Auto-clear session
+    match tasks::get_sqlite_task(task_id) {
+        Ok(task) => match task.status {
+            tasks::SqliteTaskStatus::Closed => {
                 let _ = stop_session();
                 HookCheckOutput {
                     decision: "approve".to_string(),
                     reason: format!("Task {} is closed. Session cleared.", task_id),
                 }
-            } else {
+            }
+            tasks::SqliteTaskStatus::Blocked => {
+                let _ = stop_session();
                 HookCheckOutput {
-                    decision: "block".to_string(),
-                    reason: format!(
-                        "Task {} status is '{}'. Continue working until complete, then run 'bacchus release {} --status done'.",
-                        task_id, task.status, task_id
-                    ),
+                    decision: "approve".to_string(),
+                    reason: format!("Task {} is blocked. Session cleared.", task_id),
                 }
             }
-        }
+            _ => HookCheckOutput {
+                decision: "block".to_string(),
+                reason: format!(
+                    "Task {} status is '{}'. Continue working until complete, then run 'bacchus release {} --status done' or '--status blocked'.",
+                    task_id,
+                    task.status.as_str(),
+                    task_id
+                ),
+            },
+        },
         Err(e) => HookCheckOutput {
             decision: "approve".to_string(),
             reason: format!("Cannot check task status: {}", e),
@@ -222,7 +229,7 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let max_concurrent = session.max_concurrent.unwrap_or(3);
 
     // Get workspace root for task lookup
-    let workspace_root = match find_workspace_root() {
+    let _workspace_root = match find_workspace_root() {
         Some(root) => root,
         None => return HookCheckOutput {
             decision: "approve".to_string(),
@@ -231,17 +238,19 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     };
 
     // Get project stats
-    let ready_tasks = tasks::get_ready_tasks(&workspace_root).unwrap_or_default();
+    let ready_tasks = tasks::get_ready_sqlite_tasks(None).unwrap_or_default();
     let ready_count = ready_tasks.len();
 
     // Get in_progress tasks (may include orphaned work without claims)
-    let in_progress_tasks = tasks::get_in_progress_tasks(&workspace_root).unwrap_or_default();
+    let in_progress_tasks =
+        tasks::list_sqlite_tasks(None, Some(tasks::SqliteTaskStatus::InProgress), false)
+            .unwrap_or_default();
     let in_progress_count = in_progress_tasks.len();
 
-    // Get active claims count from tasks_v2 (in_progress with claimed_by)
+    // Get active claims count from tasks (in_progress with claimed_by)
     let active_count = with_db(|conn| {
         conn.query_row(
-            "SELECT COUNT(*) FROM tasks_v2
+            "SELECT COUNT(*) FROM tasks
              WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
             [],
             |r| r.get::<_, i32>(0),
@@ -280,7 +289,7 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         HookCheckOutput {
             decision: "block".to_string(),
             reason: format!(
-                "{} task(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent>' or edit tasks.yaml to reset status.",
+                "{} task(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent> --force' or reset status in SQLite.",
                 in_progress_count,
                 task_ids.join(", ")
             ),

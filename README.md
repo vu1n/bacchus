@@ -4,7 +4,7 @@ Worktree-based coordination CLI for multi-agent work on codebases.
 
 Bacchus helps AI agents coordinate when working on the same codebase by:
 - **Worktree isolation** - each agent works in its own git worktree
-- **Beads integration** - automatically picks ready tasks and updates status
+- **Task management** - SQLite-based task tracking with dependencies and footprints
 - **Session management** - stop hooks keep agents working until tasks complete
 - **Stale detection** - finds and cleans up abandoned work
 
@@ -20,7 +20,6 @@ This installs:
 
 ### Prerequisites
 
-- [beads](https://github.com/vu1n/beads) - Task tracking (`bd` command)
 - git
 
 ### From Source
@@ -41,6 +40,11 @@ curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/uninstall
 ## Quick Start
 
 ```bash
+# Initialize tasks
+bacchus task init
+# Edit .bacchus/tasks.yaml to define tasks
+bacchus task import --epic-id MY-EPIC
+
 # Get next ready task (creates worktree, claims it)
 bacchus next agent-1
 
@@ -57,23 +61,40 @@ bacchus release TASK-42 --status done
 
 ## Commands
 
+### Task Management
+
+| Command | Description |
+|---------|-------------|
+| `task init` | Create tasks.yaml template |
+| `task list [--status X] [--ready]` | List tasks |
+| `task show <task_id>` | Show task details |
+| `task import [--epic-id X]` | Import tasks from YAML to SQLite |
+| `task validate` | Validate task definitions |
+
 ### Coordination
 
 | Command | Description |
 |---------|-------------|
-| `next <agent_id>` | Get next ready bead, create worktree, claim it |
-| `claim <bead_id> <agent_id> [--force]` | Claim specific bead (must be ready unless --force) |
-| `release <bead_id> --status done\|blocked\|failed` | Finish work |
+| `next <agent_id>` | Get next ready task, create worktree, claim it |
+| `claim <task_id> <agent_id> [--force]` | Claim specific task (must be ready unless --force) |
+| `release <task_id> --status done\|blocked\|failed` | Finish work |
 | `stale [--minutes N] [--cleanup]` | Find/cleanup abandoned claims |
 | `list` | List all active claims |
-| `resolve <bead_id>` | Complete merge after resolving conflicts |
-| `abort <bead_id>` | Abort merge, keep working |
+| `resolve <task_id>` | Complete merge after resolving conflicts |
+| `abort <task_id>` | Abort merge, keep working |
+
+### Review & Eval
+
+| Command | Description |
+|---------|-------------|
+| `review <task_id> [--build-cmd X] [--test-cmd Y]` | Review task before release |
+| `eval [--epic X] [--days N]` | Show completion metrics |
 
 ### Session Management
 
 | Command | Description |
 |---------|-------------|
-| `session start agent --bead-id <id>` | Start agent session (enables stop hook) |
+| `session start agent --task-id <id>` | Start agent session (enables stop hook) |
 | `session start orchestrator [--max-concurrent N]` | Start orchestrator session |
 | `session stop` | Clear session, allow exit |
 | `session status` | Show current session state |
@@ -91,7 +112,7 @@ bacchus release TASK-42 --status done
 | Command | Description |
 |---------|-------------|
 | `status` | Show claims, orphaned worktrees, broken claims |
-| `context [--bead-id X]` | Generate markdown context for agent |
+| `context [--task-id X]` | Generate markdown context for agent |
 | `workflow` | Print protocol documentation |
 
 ## Claude Code Plugin
@@ -104,7 +125,7 @@ The plugin provides stop hooks that keep agents working until tasks complete:
 /bacchus-agent TASK-42
 ```
 
-Starts an agent session. The stop hook blocks exit until the bead is closed.
+Starts an agent session. The stop hook blocks exit until the task is closed.
 
 ### Orchestrator Mode
 
@@ -112,7 +133,7 @@ Starts an agent session. The stop hook blocks exit until the bead is closed.
 /bacchus-orchestrate --max_concurrent 3
 ```
 
-Spawns agents for ready beads and monitors progress. Blocks exit while work remains.
+Spawns agents for ready tasks and monitors progress. Blocks exit while work remains.
 
 ### Cancel Session
 
@@ -131,10 +152,10 @@ claim/next → work in worktree → release
 ### 1. Get Work
 
 ```bash
-# Option A: Next ready bead
+# Option A: Next ready task
 bacchus next agent-1
 
-# Option B: Specific bead
+# Option B: Specific task
 bacchus claim TASK-42 agent-1
 ```
 
@@ -142,7 +163,7 @@ Output:
 ```json
 {
   "success": true,
-  "bead_id": "TASK-42",
+  "task_id": "TASK-42",
   "title": "Implement auth",
   "worktree_path": ".bacchus/worktrees/TASK-42",
   "branch": "bacchus/TASK-42"
@@ -151,7 +172,7 @@ Output:
 
 ### 2. Do Work
 
-Work in the worktree. All changes are isolated on branch `bacchus/{bead_id}`.
+Work in the worktree. All changes are isolated on branch `bacchus/{task_id}`.
 
 > **Warning**: Never `cd` into a worktree. Use `git -C` instead - worktrees are ephemeral and get deleted on release.
 
@@ -164,13 +185,13 @@ git -C .bacchus/worktrees/TASK-42 commit -m "Implement auth"
 ### 3. Release
 
 ```bash
-# Success - merge to main, cleanup worktree, close bead
+# Success - merge to main, cleanup worktree, close task
 bacchus release TASK-42 --status done
 
-# Blocked - keep worktree, mark bead blocked
+# Blocked - keep worktree, mark task blocked
 bacchus release TASK-42 --status blocked
 
-# Failed - discard worktree, reset bead to open
+# Failed - discard worktree, reset task to open
 bacchus release TASK-42 --status failed
 ```
 
@@ -179,8 +200,8 @@ bacchus release TASK-42 --status failed
 Sessions enable stop hooks that prevent premature exit:
 
 ```bash
-# Start agent session (blocks until bead closed)
-bacchus session start agent --bead-id TASK-42
+# Start agent session (blocks until task closed)
+bacchus session start agent --task-id TASK-42
 
 # Start orchestrator session (blocks while work remains)
 bacchus session start orchestrator --max-concurrent 3
@@ -206,27 +227,48 @@ bacchus stale --minutes 30
 bacchus stale --minutes 30 --cleanup
 ```
 
-## Relationship to Beads
+## Task Definition
 
-```
-beads    → What work needs to be done (issues, deps, status)
-bacchus  → Who's doing what right now (claims, worktrees, sessions)
+Tasks are defined in YAML and imported to SQLite:
+
+```yaml
+# .bacchus/tasks.yaml
+version: 1
+
+tasks:
+  - id: AUTH-001
+    title: "Implement user authentication"
+    description: "Add JWT-based auth"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies:
+        - "src/auth/handler.rs::AuthHandler"
+      creates:
+        - "src/auth/middleware.rs"
+
+  - id: API-002
+    title: "Add rate limiting"
+    priority: 2
+    depends_on: [AUTH-001]
+    footprint:
+      modifies: ["src/middleware/mod.rs::*"]
 ```
 
-Bacchus reads from beads to find ready work and updates bead status on claim/release.
+Import with: `bacchus task import --epic-id MY-EPIC`
 
 ## Directory Structure
 
 ```
 project/
 ├── .bacchus/
-│   ├── bacchus.db          # Claims database
+│   ├── bacchus.db          # SQLite database (tasks, claims, metrics)
+│   ├── tasks.yaml          # Task definitions (import source)
 │   ├── session.json        # Active session state
 │   └── worktrees/
 │       ├── TASK-42/        # Agent 1's isolated worktree
 │       └── TASK-43/        # Agent 2's isolated worktree
-└── .beads/
-    └── issues.jsonl        # Task database
 ```
 
 ## Stop Hook Architecture
@@ -234,8 +276,8 @@ project/
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    ORCHESTRATOR MODE                         │
-│  Spawns agents for ready beads                              │
-│  Blocks while: ready beads exist OR agents active           │
+│  Spawns agents for ready tasks                              │
+│  Blocks while: ready tasks exist OR agents active           │
 │  Approves when: all work done or blocked                    │
 ├─────────────────────────────────────────────────────────────┤
 │   ┌─────────┐   ┌─────────┐   ┌─────────┐                  │
@@ -244,8 +286,8 @@ project/
 │   └─────────┘   └─────────┘   └─────────┘                  │
 │                                                              │
 │  AGENT MODE                                                  │
-│  Blocks while: assigned bead not closed                     │
-│  Approves when: bd show <bead_id> → status == "closed"     │
+│  Blocks while: assigned task not closed                     │
+│  Approves when: task status == "closed"                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 

@@ -3,7 +3,7 @@ name: bacchus-cancel
 description: Cancel active bacchus session and optionally cleanup worktrees.
 arguments:
   - name: cleanup
-    description: If true, also cleanup worktrees and reset beads (default false)
+    description: If true, also cleanup worktrees and reset tasks (default false)
     required: false
 ---
 
@@ -37,10 +37,10 @@ For each active claim, decide what to do:
 
 ```bash
 # Keep work for later (preserves worktree)
-bacchus release <bead_id> --status blocked
+bacchus release <task_id> --status blocked
 
 # Discard work (removes worktree)
-bacchus release <bead_id> --status failed
+bacchus release <task_id> --status failed
 ```
 
 {{#if cleanup}}
@@ -50,7 +50,7 @@ bacchus release <bead_id> --status failed
 bacchus stale --minutes 1 --cleanup
 ```
 
-This removes all worktrees and resets beads to open.
+This removes all worktrees and resets tasks to open.
 {{/if}}
 
 ## Verify Cleanup
@@ -64,5 +64,5 @@ bacchus session status
 ## Resume Later
 
 To resume work:
-- Single bead: `/bacchus-agent <bead_id>`
+- Single task: `/bacchus-agent <task_id>`
 - Full orchestration: `/bacchus-orchestrate`

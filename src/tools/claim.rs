@@ -3,8 +3,11 @@
 //! Unlike `next`, this claims a specific task rather than the next ready one.
 //! By default, only claims ready tasks (open, no blockers). Use --force to override.
 
+use crate::db::with_db;
 use crate::tasks::{self, SqliteTaskStatus};
+use crate::tools::eval::{self, EventType};
 use crate::worktree;
+use rusqlite::params;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -52,9 +55,25 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
         match tasks::claim_sqlite_task(task_id, agent_id) {
             Ok(t) => Ok(t),
             Err(tasks::TasksError::NotReady(_)) => {
-                // Force claim: manually update to in_progress
-                tasks::update_sqlite_task_status(task_id, SqliteTaskStatus::InProgress)
-                    .map_err(tasks_error_to_rusqlite)?;
+                let now = chrono::Utc::now().timestamp_millis();
+                let updated = with_db(|conn| {
+                    conn.execute(
+                        "UPDATE tasks
+                         SET status = 'in_progress',
+                             claimed_by = ?1,
+                             claimed_at = ?2,
+                             updated_at = ?2
+                         WHERE id = ?3 AND deleted_at IS NULL",
+                        params![agent_id, now, task_id],
+                    )
+                })?;
+
+                if updated == 0 {
+                    return Err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(format!("Task not found: {}", task_id)),
+                    ));
+                }
                 // Now get the updated task
                 tasks::get_sqlite_task(task_id)
             }
@@ -75,6 +94,14 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
                     Some(format!("Failed to create worktree: {}", e)),
                 )
             })?;
+
+            // Record eval event (rework if previously completed)
+            let event_type = if eval::was_previously_completed(task_id) {
+                EventType::Rework
+            } else {
+                EventType::Started
+            };
+            let _ = eval::record_event(task_id, agent_id, event_type, None);
 
             Ok(ClaimOutput {
                 success: true,

@@ -53,7 +53,7 @@ fn main() {
         }
 
         Commands::Release { task_id, status } => {
-            tools::release_bead(&task_id, &status, &workspace_root)
+            tools::release_task(&task_id, &status, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
                 .map_err(|e| rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
@@ -90,6 +90,24 @@ fn main() {
 
         Commands::List => {
             tools::list_claims().map(|r| serde_json::to_string_pretty(&r).unwrap())
+        }
+
+        Commands::Review { task_id, build_cmd, test_cmd } => {
+            tools::review_task(&task_id, &workspace_root, build_cmd.as_deref(), test_cmd.as_deref())
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e),
+                ))
+        }
+
+        Commands::Eval { epic, days } => {
+            tools::generate_eval_report(epic.as_deref(), days)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e),
+                ))
         }
 
         // ====================================================================
@@ -505,15 +523,14 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Get ready tasks count BEFORE with_db to avoid deadlock
-    // (get_ready_tasks calls get_active_footprints which also uses with_db)
-    let ready_count = tasks::get_ready_tasks(&workspace_root)
+    let ready_count = tasks::get_ready_sqlite_tasks(None)
         .map(|v| v.len())
         .unwrap_or(0);
 
     db::with_db(|conn| {
-        // Count active claims from tasks_v2 (in_progress with claimed_by)
+        // Count active claims from tasks (in_progress with claimed_by)
         let claims_count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM tasks_v2
+            "SELECT COUNT(*) FROM tasks
              WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
             [],
             |r| r.get(0),
@@ -524,10 +541,10 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        // Get active claims from tasks_v2
+        // Get active claims from tasks
         let mut stmt = conn.prepare(
             "SELECT id, claimed_by, claimed_at
-             FROM tasks_v2
+             FROM tasks
              WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL"
         )?;
         let claims: Vec<(serde_json::Value, String)> = stmt

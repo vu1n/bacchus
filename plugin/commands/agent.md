@@ -25,11 +25,19 @@ bacchus claim "{{task_id}}" agent-$$
 
 The stop hook will now prevent you from stopping until `{{task_id}}` is closed.
 
-## Get Task Details
+## Get Task Context
+
+Get rich, type-aware context for your task:
 
 ```bash
-bacchus task show {{task_id}}
+bacchus context {{task_id}}
 ```
+
+This provides:
+- Task info (title, description, type, priority)
+- Dependencies (what blocks this, what this unblocks)
+- Footprint (files/symbols to modify/create)
+- Type-specific guidance
 
 ## Work in the Worktree
 
@@ -93,8 +101,8 @@ bacchus session stop
 
 ---
 
-Now start by checking the task details:
+Now start by getting your task context:
 
 ```bash
-bacchus task show {{task_id}}
+bacchus context {{task_id}}
 ```

@@ -28,7 +28,7 @@
     "_comment": "To use prompt-based hooks instead, replace the command hooks with:",
     "Stop_prompt": {
       "type": "prompt",
-      "prompt": "You are a Bacchus stop hook evaluator. Check BACCHUS_MODE env var. If 'agent': run 'bd show $BACCHUS_BEAD_ID --json' and block if status != closed. If 'orchestrator': run 'bd ready --json' and 'bacchus list', block if ready work exists or agents running. Respond with JSON: {\"decision\": \"approve\"|\"block\", \"reason\": \"...\"}",
+      "prompt": "You are a Bacchus stop hook evaluator. Check BACCHUS_MODE env var. If 'agent': run 'bacchus task show $BACCHUS_TASK_ID' and block if status != closed. If 'orchestrator': run 'bacchus task list --ready' and 'bacchus list', block if ready work exists or agents running. Respond with JSON: {\"decision\": \"approve\"|\"block\", \"reason\": \"...\"}",
       "timeout": 30
     }
   }

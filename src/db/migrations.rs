@@ -77,34 +77,34 @@ CREATE INDEX IF NOT EXISTS idx_epics_status ON epics(status);
 -- ============================================================================
 -- Tasks (SQLite-based task management)
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS tasks_v2 (
+CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     epic_id TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 5,
     status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | blocked | closed
+    task_type TEXT NOT NULL DEFAULT 'generic',  -- Task type for context-aware prompting
     claimed_by TEXT,                        -- agent_id who claimed
     claimed_at INTEGER,                     -- Unix timestamp ms
-    lease_expires_at INTEGER,               -- Auto-release if heartbeat missed
-    heartbeat_at INTEGER,                   -- Last heartbeat from worker
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
-    CHECK (status IN ('draft', 'open', 'in_progress', 'blocked', 'closed'))
+    CHECK (status IN ('draft', 'open', 'in_progress', 'blocked', 'closed')),
+    CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic'))
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_v2_status_priority ON tasks_v2(status, priority);
-CREATE INDEX IF NOT EXISTS idx_tasks_v2_epic ON tasks_v2(epic_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_v2_claimed ON tasks_v2(claimed_by) WHERE claimed_by IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_tasks_v2_ready ON tasks_v2(status, priority, created_at)
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority);
+CREATE INDEX IF NOT EXISTS idx_tasks_epic ON tasks(epic_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_claimed ON tasks(claimed_by) WHERE claimed_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, priority, created_at)
     WHERE status = 'open' AND deleted_at IS NULL;
 
 -- ============================================================================
 -- Task Dependencies (many-to-many, same-epic enforced by trigger)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS task_dependencies (
-    task_id TEXT NOT NULL REFERENCES tasks_v2(id) ON DELETE CASCADE,
-    depends_on TEXT NOT NULL REFERENCES tasks_v2(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    depends_on TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     PRIMARY KEY (task_id, depends_on),
     CHECK (task_id != depends_on)
 );
@@ -114,7 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on
 -- Task Footprints (normalized for overlap detection)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS task_footprints (
-    task_id TEXT NOT NULL REFERENCES tasks_v2(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     pattern_type TEXT NOT NULL,            -- 'modifies' | 'creates'
     file_path TEXT NOT NULL,
     symbol TEXT NOT NULL DEFAULT '',
@@ -157,17 +157,17 @@ CREATE TRIGGER enforce_same_epic_deps
 BEFORE INSERT ON task_dependencies
 BEGIN
     SELECT RAISE(ABORT, 'Dependencies must be within the same epic')
-    WHERE (SELECT epic_id FROM tasks_v2 WHERE id = NEW.task_id) !=
-          (SELECT epic_id FROM tasks_v2 WHERE id = NEW.depends_on);
+    WHERE (SELECT epic_id FROM tasks WHERE id = NEW.task_id) !=
+          (SELECT epic_id FROM tasks WHERE id = NEW.depends_on);
 END;
 
 -- Auto-update timestamps
-DROP TRIGGER IF EXISTS tasks_v2_set_updated_at;
-CREATE TRIGGER tasks_v2_set_updated_at
-AFTER UPDATE ON tasks_v2
+DROP TRIGGER IF EXISTS tasks_set_updated_at;
+CREATE TRIGGER tasks_set_updated_at
+AFTER UPDATE ON tasks
 FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
 BEGIN
-    UPDATE tasks_v2 SET updated_at = (strftime('%s','now') * 1000) WHERE id = NEW.id;
+    UPDATE tasks SET updated_at = (strftime('%s','now') * 1000) WHERE id = NEW.id;
 END;
 
 DROP TRIGGER IF EXISTS epics_set_updated_at;
@@ -184,8 +184,8 @@ CREATE TRIGGER task_deps_guard_deleted_ins
 BEFORE INSERT ON task_dependencies
 BEGIN
     SELECT RAISE(ABORT, 'Cannot add dependency to deleted task')
-    WHERE (SELECT deleted_at FROM tasks_v2 WHERE id = NEW.task_id) IS NOT NULL
-       OR (SELECT deleted_at FROM tasks_v2 WHERE id = NEW.depends_on) IS NOT NULL;
+    WHERE (SELECT deleted_at FROM tasks WHERE id = NEW.task_id) IS NOT NULL
+       OR (SELECT deleted_at FROM tasks WHERE id = NEW.depends_on) IS NOT NULL;
 END;
 
 DROP TRIGGER IF EXISTS task_deps_guard_deleted_upd;
@@ -193,8 +193,8 @@ CREATE TRIGGER task_deps_guard_deleted_upd
 BEFORE UPDATE ON task_dependencies
 BEGIN
     SELECT RAISE(ABORT, 'Cannot modify dependency for deleted task')
-    WHERE (SELECT deleted_at FROM tasks_v2 WHERE id = NEW.task_id) IS NOT NULL
-       OR (SELECT deleted_at FROM tasks_v2 WHERE id = NEW.depends_on) IS NOT NULL;
+    WHERE (SELECT deleted_at FROM tasks WHERE id = NEW.task_id) IS NOT NULL
+       OR (SELECT deleted_at FROM tasks WHERE id = NEW.depends_on) IS NOT NULL;
 END;
 
 -- Block footprints on deleted tasks
@@ -203,7 +203,7 @@ CREATE TRIGGER task_footprints_guard_deleted_ins
 BEFORE INSERT ON task_footprints
 BEGIN
     SELECT RAISE(ABORT, 'Cannot add footprint to deleted task')
-    WHERE (SELECT deleted_at FROM tasks_v2 WHERE id = NEW.task_id) IS NOT NULL;
+    WHERE (SELECT deleted_at FROM tasks WHERE id = NEW.task_id) IS NOT NULL;
 END;
 
 DROP TRIGGER IF EXISTS task_footprints_guard_deleted_upd;
@@ -211,21 +211,35 @@ CREATE TRIGGER task_footprints_guard_deleted_upd
 BEFORE UPDATE ON task_footprints
 BEGIN
     SELECT RAISE(ABORT, 'Cannot modify footprint for deleted task')
-    WHERE (SELECT deleted_at FROM tasks_v2 WHERE id = NEW.task_id) IS NOT NULL;
+    WHERE (SELECT deleted_at FROM tasks WHERE id = NEW.task_id) IS NOT NULL;
 END;
 
+-- ============================================================================
+-- Eval Metrics (track task events for analysis)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS task_eval_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,  -- started | completed | failed | rework | reviewed
+    event_data TEXT,            -- JSON payload with details
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_eval_task ON task_eval_metrics(task_id);
+CREATE INDEX IF NOT EXISTS idx_eval_agent ON task_eval_metrics(agent_id);
+CREATE INDEX IF NOT EXISTS idx_eval_type ON task_eval_metrics(event_type);
+CREATE INDEX IF NOT EXISTS idx_eval_time ON task_eval_metrics(created_at);
+
 -- Soft-delete guard
-DROP TRIGGER IF EXISTS tasks_v2_soft_delete_guard;
-CREATE TRIGGER tasks_v2_soft_delete_guard
-BEFORE UPDATE ON tasks_v2
+DROP TRIGGER IF EXISTS tasks_soft_delete_guard;
+CREATE TRIGGER tasks_soft_delete_guard
+BEFORE UPDATE ON tasks
 FOR EACH ROW WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL
 BEGIN
     SELECT RAISE(ABORT, 'Deleted tasks must be closed and unclaimed')
     WHERE NEW.status != 'closed'
        OR NEW.claimed_by IS NOT NULL
-       OR NEW.claimed_at IS NOT NULL
-       OR NEW.lease_expires_at IS NOT NULL
-       OR NEW.heartbeat_at IS NOT NULL;
+       OR NEW.claimed_at IS NOT NULL;
 END;
 "#;
 
@@ -239,7 +253,7 @@ mod tests {
         init_schema(&conn).unwrap();
 
         // Verify tables exist
-        let tables = ["symbols", "epics", "tasks_v2", "task_dependencies", "task_footprints", "agent_messages"];
+        let tables = ["symbols", "epics", "tasks", "task_dependencies", "task_footprints", "agent_messages"];
         for table in tables {
             let count: i32 = conn
                 .query_row(
@@ -296,13 +310,13 @@ mod tests {
 
         // Valid status
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Test', 'draft', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Test', 'draft', ?1, ?1)",
             [now],
         ).unwrap();
 
         // Invalid status should fail
         let result = conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T2', 'E1', 'Test', 'invalid', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T2', 'E1', 'Test', 'invalid', ?1, ?1)",
             [now],
         );
         assert!(result.is_err());
@@ -327,15 +341,15 @@ mod tests {
 
         // Tasks in different epics
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task 1', 'open', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task 1', 'open', ?1, ?1)",
             [now],
         ).unwrap();
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T2', 'E2', 'Task 2', 'open', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T2', 'E2', 'Task 2', 'open', ?1, ?1)",
             [now],
         ).unwrap();
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T3', 'E1', 'Task 3', 'open', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T3', 'E1', 'Task 3', 'open', ?1, ?1)",
             [now],
         ).unwrap();
 
@@ -365,7 +379,7 @@ mod tests {
             [now],
         ).unwrap();
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task', 'open', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task', 'open', ?1, ?1)",
             [now],
         ).unwrap();
 
@@ -388,7 +402,7 @@ mod tests {
             [now],
         ).unwrap();
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task', 'open', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task', 'open', ?1, ?1)",
             [now],
         ).unwrap();
 
@@ -437,19 +451,19 @@ mod tests {
             [now],
         ).unwrap();
         conn.execute(
-            "INSERT INTO tasks_v2 (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task', 'open', ?1, ?1)",
+            "INSERT INTO tasks (id, epic_id, title, status, created_at, updated_at) VALUES ('T1', 'E1', 'Task', 'open', ?1, ?1)",
             [now],
         ).unwrap();
 
         // Delete without closing should fail
         let result = conn.execute(
-            "UPDATE tasks_v2 SET deleted_at = ?1 WHERE id = 'T1'",
+            "UPDATE tasks SET deleted_at = ?1 WHERE id = 'T1'",
             [now],
         );
         assert!(result.is_err());
 
         // Close then delete should work
-        conn.execute("UPDATE tasks_v2 SET status = 'closed' WHERE id = 'T1'", []).unwrap();
-        conn.execute("UPDATE tasks_v2 SET deleted_at = ?1 WHERE id = 'T1'", [now]).unwrap();
+        conn.execute("UPDATE tasks SET status = 'closed' WHERE id = 'T1'", []).unwrap();
+        conn.execute("UPDATE tasks SET deleted_at = ?1 WHERE id = 'T1'", [now]).unwrap();
     }
 }

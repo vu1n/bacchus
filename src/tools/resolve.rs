@@ -1,7 +1,7 @@
 //! Resolve tool - complete a merge after manual conflict resolution
 //!
 //! Finishes the merge, removes worktree, and updates task status.
-//! Uses SQLite-based task management (tasks_v2 table).
+//! Uses SQLite-based task management.
 
 use crate::tasks::{self, SqliteTaskStatus};
 use crate::worktree;

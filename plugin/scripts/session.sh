@@ -1,7 +1,7 @@
 #!/bin/bash
 # Bacchus session management helper
 # Usage:
-#   session.sh start agent <bead_id>
+#   session.sh start agent <task_id>
 #   session.sh start orchestrator [max_concurrent]
 #   session.sh stop
 #   session.sh status
@@ -12,7 +12,7 @@ set -euo pipefail
 find_workspace_root() {
     local dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
     while [[ "$dir" != "/" ]]; do
-        if [[ -d "$dir/.bacchus" ]] || [[ -d "$dir/.beads" ]]; then
+        if [[ -d "$dir/.bacchus" ]]; then
             echo "$dir"
             return 0
         fi
@@ -34,19 +34,19 @@ case "${1:-}" in
         mode="${2:-}"
         case "$mode" in
             agent)
-                bead_id="${3:-}"
-                if [[ -z "$bead_id" ]]; then
-                    echo "Error: bead_id required for agent mode" >&2
+                task_id="${3:-}"
+                if [[ -z "$task_id" ]]; then
+                    echo "Error: task_id required for agent mode" >&2
                     exit 1
                 fi
                 cat > "$SESSION_FILE" <<EOF
 {
   "mode": "agent",
-  "bead_id": "$bead_id",
+  "task_id": "$task_id",
   "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
-                echo "Started agent session for $bead_id"
+                echo "Started agent session for $task_id"
                 ;;
             orchestrator)
                 max_concurrent="${3:-3}"
@@ -85,7 +85,7 @@ EOF
         ;;
 
     *)
-        echo "Usage: session.sh {start agent <bead_id>|start orchestrator [max]|stop|status}"
+        echo "Usage: session.sh {start agent <task_id>|start orchestrator [max]|stop|status}"
         exit 1
         ;;
 esac

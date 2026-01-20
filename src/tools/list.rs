@@ -1,6 +1,6 @@
 //! List active claims and worktrees
 //!
-//! Uses SQLite-based task management (tasks_v2 table).
+//! Uses SQLite-based task management.
 
 use crate::db::with_db;
 use rusqlite::Result;
@@ -21,12 +21,12 @@ pub struct ClaimInfo {
     pub age_minutes: i64,
 }
 
-/// List all active claims from SQLite tasks_v2
+/// List all active claims from SQLite
 pub fn list_claims() -> Result<ListOutput> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, claimed_by, claimed_at
-             FROM tasks_v2
+             FROM tasks
              WHERE status = 'in_progress'
                AND claimed_by IS NOT NULL
                AND deleted_at IS NULL

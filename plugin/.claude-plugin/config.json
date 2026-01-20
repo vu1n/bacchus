@@ -1,16 +1,16 @@
 {
   "name": "bacchus",
-  "version": "0.3.0",
-  "description": "Multi-agent coordination with persistent stop hooks. Agents keep working until beads are closed. Orchestrator spawns agents for ready work.",
+  "version": "0.4.0",
+  "description": "Multi-agent coordination with persistent stop hooks. Agents keep working until tasks are closed. Orchestrator spawns agents for ready work.",
   "author": "vu1n",
   "repository": "https://github.com/vu1n/bacchus",
   "commands": {
     "bacchus-agent": {
-      "description": "Start a persistent agent on a bead. Agent keeps working until bead is closed.",
+      "description": "Start a persistent agent on a task. Agent keeps working until task is closed.",
       "file": "../commands/agent.md"
     },
     "bacchus-orchestrate": {
-      "description": "Start orchestrator that spawns agents for ready beads until all work is complete.",
+      "description": "Start orchestrator that spawns agents for ready tasks until all work is complete.",
       "file": "../commands/orchestrate.md"
     },
     "bacchus-cancel": {

@@ -1,9 +1,10 @@
 //! Release task tool - merges or discards worktree, updates task status
 //!
 //! Handles completing, blocking, or failing a claimed task.
-//! Uses SQLite-based task management (tasks_v2 table).
+//! Uses SQLite-based task management.
 
 use crate::tasks::{self, SqliteTaskStatus};
+use crate::tools::eval::{self, EventType};
 use crate::worktree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -17,7 +18,7 @@ pub struct ReleaseOutput {
     pub message: String,
 }
 
-pub fn release_bead(
+pub fn release_task(
     task_id: &str,
     status: &str,
     workspace_root: &Path,
@@ -91,12 +92,12 @@ pub fn release_bead(
         }
         "blocked" => {
             // Keep worktree, mark as blocked
-            tasks::update_sqlite_task_status(task_id, SqliteTaskStatus::Blocked)?;
+            tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Blocked)?;
         }
         "failed" => {
             // Discard worktree, reset to open
             worktree::remove_worktree(workspace_root, task_id, true)?;
-            tasks::update_sqlite_task_status(task_id, SqliteTaskStatus::Open)?;
+            tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Open)?;
         }
         _ => {
             return Ok(ReleaseOutput {
@@ -108,6 +109,15 @@ pub fn release_bead(
             });
         }
     }
+
+    // Record eval event
+    let event_type = match status {
+        "done" => EventType::Completed,
+        "failed" => EventType::Failed,
+        "blocked" => EventType::Blocked,
+        _ => EventType::Completed, // fallback
+    };
+    let _ = eval::record_event(task_id, &agent_id, event_type, None);
 
     Ok(ReleaseOutput {
         success: true,

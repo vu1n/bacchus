@@ -70,6 +70,28 @@ pub enum Commands {
     /// List all active claims and worktrees
     List,
 
+    /// Review a task before release (advisory checks)
+    Review {
+        /// The task ID to review
+        task_id: String,
+        /// Build command to run (optional)
+        #[arg(long)]
+        build_cmd: Option<String>,
+        /// Test command to run (optional)
+        #[arg(long)]
+        test_cmd: Option<String>,
+    },
+
+    /// Generate eval metrics report
+    Eval {
+        /// Filter by epic ID
+        #[arg(long)]
+        epic: Option<String>,
+        /// Number of days to include (default: 7)
+        #[arg(long, default_value = "7")]
+        days: i64,
+    },
+
     // ========================================================================
     // Symbol Commands
     // ========================================================================

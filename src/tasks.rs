@@ -1,10 +1,10 @@
 //! Task management module
 //!
-//! Uses SQLite-based tasks (tasks_v2 table) for hierarchical orchestration.
+//! Uses SQLite-based tasks (tasks table) for hierarchical orchestration.
 //! YAML tasks (.bacchus/tasks.yaml) are read-only and used for import.
 //!
 //! ## Task Storage
-//! - **SQLite tasks**: Primary format in `tasks_v2` table (must belong to an epic)
+//! - **SQLite tasks**: Primary format in `tasks` table (must belong to an epic)
 //! - **YAML tasks**: Read-only for `bacchus task import` migration
 //!
 //! ## Workflow
@@ -15,7 +15,7 @@
 use crate::db::with_db;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -147,7 +147,7 @@ pub struct ImportResult {
 }
 
 // ============================================================================
-// SQLite Task Types (tasks_v2)
+// SQLite Task Types (tasks)
 // ============================================================================
 
 /// Task status for SQLite tasks
@@ -190,7 +190,150 @@ impl std::fmt::Display for SqliteTaskStatus {
     }
 }
 
-/// A task stored in SQLite (tasks_v2 table)
+/// Task type for context-aware prompting
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqliteTaskType {
+    BugFix,
+    Feature,
+    Refactor,
+    Test,
+    Docs,
+    Infra,
+    Generic,
+}
+
+impl SqliteTaskType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SqliteTaskType::BugFix => "bug_fix",
+            SqliteTaskType::Feature => "feature",
+            SqliteTaskType::Refactor => "refactor",
+            SqliteTaskType::Test => "test",
+            SqliteTaskType::Docs => "docs",
+            SqliteTaskType::Infra => "infra",
+            SqliteTaskType::Generic => "generic",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "bug_fix" => SqliteTaskType::BugFix,
+            "feature" => SqliteTaskType::Feature,
+            "refactor" => SqliteTaskType::Refactor,
+            "test" => SqliteTaskType::Test,
+            "docs" => SqliteTaskType::Docs,
+            "infra" => SqliteTaskType::Infra,
+            _ => SqliteTaskType::Generic,
+        }
+    }
+
+    /// Human-readable label for display
+    pub fn label(&self) -> &'static str {
+        match self {
+            SqliteTaskType::BugFix => "Bug Fix",
+            SqliteTaskType::Feature => "Feature",
+            SqliteTaskType::Refactor => "Refactor",
+            SqliteTaskType::Test => "Test",
+            SqliteTaskType::Docs => "Documentation",
+            SqliteTaskType::Infra => "Infrastructure",
+            SqliteTaskType::Generic => "Generic",
+        }
+    }
+}
+
+impl std::fmt::Display for SqliteTaskType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Infer task type from title and description
+pub fn infer_task_type(title: &str, description: Option<&str>) -> SqliteTaskType {
+    let text = format!(
+        "{} {}",
+        title.to_lowercase(),
+        description.unwrap_or("").to_lowercase()
+    );
+
+    // Bug fix patterns
+    if text.contains("fix")
+        || text.contains("bug")
+        || text.contains("error")
+        || text.contains("crash")
+        || text.contains("issue")
+        || text.contains("broken")
+        || text.contains("incorrect")
+        || text.contains("wrong")
+    {
+        return SqliteTaskType::BugFix;
+    }
+
+    // Feature patterns
+    if text.contains("add")
+        || text.contains("implement")
+        || text.contains("create")
+        || text.contains("new")
+        || text.contains("feature")
+        || text.contains("support")
+        || text.contains("enable")
+    {
+        return SqliteTaskType::Feature;
+    }
+
+    // Refactor patterns
+    if text.contains("refactor")
+        || text.contains("cleanup")
+        || text.contains("clean up")
+        || text.contains("reorganize")
+        || text.contains("restructure")
+        || text.contains("simplify")
+        || text.contains("improve")
+        || text.contains("optimize")
+    {
+        return SqliteTaskType::Refactor;
+    }
+
+    // Test patterns
+    if text.contains("test")
+        || text.contains("spec")
+        || text.contains("coverage")
+        || text.contains("mock")
+        || text.contains("stub")
+    {
+        return SqliteTaskType::Test;
+    }
+
+    // Docs patterns
+    if text.contains("doc")
+        || text.contains("readme")
+        || text.contains("comment")
+        || text.contains("explain")
+        || text.contains("describe")
+    {
+        return SqliteTaskType::Docs;
+    }
+
+    // Infra patterns
+    if text.contains("ci")
+        || text.contains("cd")
+        || text.contains("deploy")
+        || text.contains("build")
+        || text.contains("config")
+        || text.contains("docker")
+        || text.contains("kubernetes")
+        || text.contains("k8s")
+        || text.contains("terraform")
+        || text.contains("infra")
+        || text.contains("pipeline")
+    {
+        return SqliteTaskType::Infra;
+    }
+
+    SqliteTaskType::Generic
+}
+
+/// A task stored in SQLite (tasks table)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SqliteTask {
     pub id: String,
@@ -200,14 +343,11 @@ pub struct SqliteTask {
     pub description: Option<String>,
     pub priority: i32,
     pub status: SqliteTaskStatus,
+    pub task_type: SqliteTaskType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lease_expires_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub heartbeat_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,80 +399,6 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
         .map_err(|e| TasksError::ParseError(e.to_string()))?;
 
     Ok(tasks_file.tasks)
-}
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/// Get a specific task by ID
-pub fn get_task(workspace_root: &Path, task_id: &str) -> Result<Task, TasksError> {
-    let tasks = load_tasks(workspace_root)?;
-
-    tasks
-        .into_iter()
-        .find(|t| t.id == task_id)
-        .ok_or_else(|| TasksError::TaskNotFound(task_id.to_string()))
-}
-
-/// Check if a specific task is ready to work on
-pub fn is_task_ready(workspace_root: &Path, task_id: &str) -> Result<bool, TasksError> {
-    let ready = get_ready_tasks(workspace_root)?;
-    Ok(ready.iter().any(|t| t.id == task_id))
-}
-
-/// Get tasks that are in progress
-pub fn get_in_progress_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
-    let tasks = load_tasks(workspace_root)?;
-    Ok(tasks.into_iter().filter(|t| t.status == "in_progress").collect())
-}
-
-/// Get tasks that are ready to work on
-///
-/// A task is ready when ALL conditions are met:
-/// 1. status == "open"
-/// 2. All tasks in depends_on have status == "closed"
-/// 3. No active claim has overlapping footprint
-pub fn get_ready_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
-    let tasks = load_tasks(workspace_root)?;
-
-    // Build a set of closed task IDs for dependency checking
-    let closed_ids: HashSet<String> = tasks
-        .iter()
-        .filter(|t| t.status == "closed")
-        .map(|t| t.id.clone())
-        .collect();
-
-    // Get active footprints from claims
-    let active_footprints = get_active_footprints().unwrap_or_default();
-
-    let mut ready: Vec<Task> = tasks
-        .into_iter()
-        .filter(|task| {
-            // Condition 1: Must be open
-            if task.status != "open" {
-                return false;
-            }
-
-            // Condition 2: All dependencies must be closed
-            if !task.depends_on.iter().all(|dep| closed_ids.contains(dep)) {
-                return false;
-            }
-
-            // Condition 3: No footprint collision with active claims
-            let task_footprint = resolve_footprint(&task.footprint);
-            if footprints_overlap(&task_footprint, &active_footprints) {
-                return false;
-            }
-
-            true
-        })
-        .collect();
-
-    // Sort by priority (lower = higher priority)
-    ready.sort_by_key(|t| t.priority);
-
-    Ok(ready)
 }
 
 // ============================================================================
@@ -480,40 +546,41 @@ fn get_symbols_in_file_with_conn(
 }
 
 /// Get active footprints from all current claims
+#[allow(dead_code)]
 fn get_active_footprints() -> Result<ResolvedFootprint, TasksError> {
     with_db(|conn| {
         let mut resolved = ResolvedFootprint::default();
 
-        // Query active_footprints table
-        let mut stmt = conn
-            .prepare("SELECT pattern, pattern_type, resolved_symbols FROM active_footprints")?;
+        let mut stmt = conn.prepare(
+            "SELECT pattern_type, file_path, symbol, is_wildcard
+             FROM task_footprints tf
+             JOIN tasks t ON t.id = tf.task_id
+             WHERE t.status = 'in_progress' AND t.deleted_at IS NULL",
+        )?;
 
         let rows = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)?,
                 ))
             })?;
 
         for row_result in rows {
-            if let Ok((pattern, pattern_type, resolved_symbols)) = row_result {
+            if let Ok((pattern_type, file_path, symbol, is_wildcard)) = row_result {
                 match pattern_type.as_str() {
                     "modifies" => {
-                        // Add the pattern itself
+                        let pattern = if is_wildcard == 1 {
+                            format!("{}::*", file_path)
+                        } else {
+                            format!("{}::{}", file_path, symbol)
+                        };
                         resolved.symbols.insert(pattern);
-                        // Add resolved symbols if available
-                        if let Some(json) = resolved_symbols {
-                            if let Ok(symbols) = serde_json::from_str::<Vec<String>>(&json) {
-                                for sym in symbols {
-                                    resolved.symbols.insert(sym);
-                                }
-                            }
-                        }
                     }
                     "creates" => {
-                        resolved.creates.insert(pattern);
+                        resolved.creates.insert(file_path);
                     }
                     _ => {}
                 }
@@ -537,72 +604,199 @@ pub struct TaskValidation {
     pub errors: Vec<String>,
 }
 
-/// Validate tasks against symbol index
-pub fn validate_tasks(workspace_root: &Path) -> Result<Vec<TaskValidation>, TasksError> {
-    let tasks = load_tasks(workspace_root)?;
-    let task_ids: HashSet<_> = tasks.iter().map(|t| t.id.as_str()).collect();
+/// Validate tasks using SQLite dependencies and footprints
+pub fn validate_tasks(_workspace_root: &Path) -> Result<Vec<TaskValidation>, TasksError> {
+    let tasks = list_sqlite_tasks(None, None, false)?;
+    let mut validations: HashMap<String, TaskValidation> = tasks
+        .iter()
+        .map(|t| {
+            (
+                t.id.clone(),
+                TaskValidation {
+                    task_id: t.id.clone(),
+                    warnings: Vec::new(),
+                    errors: Vec::new(),
+                },
+            )
+        })
+        .collect();
 
-    let mut validations = Vec::new();
+    // Validate footprint syntax based on normalized entries
+    let footprint_rows: Vec<(String, String, String, String, i32)> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT task_id, pattern_type, file_path, symbol, is_wildcard
+             FROM task_footprints",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i32>(4)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))?;
 
-    for task in &tasks {
-        let mut warnings = Vec::new();
-        let mut errors = Vec::new();
+    for (task_id, pattern_type, file_path, symbol, is_wildcard) in footprint_rows {
+        let Some(validation) = validations.get_mut(&task_id) else {
+            continue;
+        };
 
-        // Check dependencies exist
-        for dep in &task.depends_on {
-            if !task_ids.contains(dep.as_str()) {
-                errors.push(format!("Unknown dependency: {}", dep));
-            }
+        if file_path.trim().is_empty() {
+            validation
+                .errors
+                .push("Footprint has empty file path".to_string());
         }
 
-        // Check circular dependencies (simple check)
-        if task.depends_on.contains(&task.id) {
-            errors.push("Task depends on itself".to_string());
+        if is_wildcard == 0 && symbol.trim().is_empty() {
+            validation
+                .errors
+                .push("Footprint symbol is empty without wildcard".to_string());
         }
 
-        // Validate footprint symbols exist in index
-        for pattern in &task.footprint.modifies {
-            if let Some((file_part, symbol_part)) = pattern.rsplit_once("::") {
-                if symbol_part != "*" {
-                    // Check if exact symbol exists
-                    let exists = with_db(|conn| {
-                        let result = conn.query_row(
-                            "SELECT 1 FROM symbols WHERE fq_name = ?1",
-                            [pattern],
-                            |_| Ok(true),
-                        ).unwrap_or(false);
-                        Ok(result)
-                    }).unwrap_or(false);
-
-                    if !exists {
-                        warnings.push(format!("Symbol not in index (may be new): {}", pattern));
-                    }
-                } else {
-                    // Check if file has any symbols
-                    let count = with_db(|conn| {
-                        let result = conn.query_row(
-                            "SELECT COUNT(*) FROM symbols WHERE file = ?1",
-                            [file_part],
-                            |row| row.get::<_, i32>(0),
-                        ).unwrap_or(0);
-                        Ok(result)
-                    }).unwrap_or(0);
-
-                    if count == 0 {
-                        warnings.push(format!("No indexed symbols in file (may be new): {}", file_part));
-                    }
-                }
-            }
+        if is_wildcard == 1 && !symbol.is_empty() {
+            validation
+                .errors
+                .push("Footprint wildcard has unexpected symbol".to_string());
         }
 
-        validations.push(TaskValidation {
-            task_id: task.id.clone(),
-            warnings,
-            errors,
-        });
+        if pattern_type != "modifies" && pattern_type != "creates" {
+            validation.errors.push(format!(
+                "Footprint has invalid pattern type: {}",
+                pattern_type
+            ));
+        }
     }
 
-    Ok(validations)
+    // Detect dependency cycles
+    let deps: Vec<(String, String)> = with_db(|conn| {
+        let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_dependencies")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))?;
+
+    let mut deps_map: HashMap<String, Vec<String>> = HashMap::new();
+    for (task_id, depends_on) in deps {
+        deps_map.entry(task_id).or_default().push(depends_on);
+    }
+
+    let cycle_tasks = detect_dependency_cycles(&tasks, &deps_map);
+    for task_id in cycle_tasks {
+        if let Some(validation) = validations.get_mut(&task_id) {
+            validation.errors.push("Dependency cycle detected".to_string());
+        }
+    }
+
+    // Check footprint overlaps between open tasks
+    let overlaps: Vec<(String, String, String)> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT t1.id, t2.id, fp1.file_path
+             FROM task_footprints fp1
+             JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
+               AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
+             JOIN tasks t1 ON t1.id = fp1.task_id
+             JOIN tasks t2 ON t2.id = fp2.task_id
+             WHERE t1.id < t2.id
+               AND t1.status = 'open'
+               AND t2.status = 'open'
+               AND t1.deleted_at IS NULL
+               AND t2.deleted_at IS NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))?;
+
+    for (task_a, task_b, file_path) in overlaps {
+        if let Some(validation) = validations.get_mut(&task_a) {
+            validation
+                .warnings
+                .push(format!("Footprint overlaps with {} on {}", task_b, file_path));
+        }
+        if let Some(validation) = validations.get_mut(&task_b) {
+            validation
+                .warnings
+                .push(format!("Footprint overlaps with {} on {}", task_a, file_path));
+        }
+    }
+
+    let mut ordered = Vec::new();
+    for task in tasks {
+        if let Some(validation) = validations.remove(&task.id) {
+            ordered.push(validation);
+        }
+    }
+
+    Ok(ordered)
+}
+
+fn detect_dependency_cycles(
+    tasks: &[SqliteTask],
+    deps: &HashMap<String, Vec<String>>,
+) -> HashSet<String> {
+    let mut visiting: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut in_cycle: HashSet<String> = HashSet::new();
+
+    fn dfs(
+        node: &str,
+        deps: &HashMap<String, Vec<String>>,
+        visiting: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+        stack: &mut Vec<String>,
+        in_cycle: &mut HashSet<String>,
+    ) {
+        if visiting.contains(node) {
+            if let Some(pos) = stack.iter().position(|n| n == node) {
+                for id in &stack[pos..] {
+                    in_cycle.insert(id.clone());
+                }
+            }
+            return;
+        }
+        if visited.contains(node) {
+            return;
+        }
+
+        visiting.insert(node.to_string());
+        stack.push(node.to_string());
+
+        if let Some(next) = deps.get(node) {
+            for dep in next {
+                dfs(dep, deps, visiting, visited, stack, in_cycle);
+            }
+        }
+
+        stack.pop();
+        visiting.remove(node);
+        visited.insert(node.to_string());
+    }
+
+    for task in tasks {
+        dfs(&task.id, deps, &mut visiting, &mut visited, &mut stack, &mut in_cycle);
+    }
+
+    in_cycle
 }
 
 // ============================================================================
@@ -643,7 +837,7 @@ tasks:
 }
 
 // ============================================================================
-// SQLite Task Operations (tasks_v2)
+// SQLite Task Operations (tasks)
 // ============================================================================
 
 /// Normalize a TaskFootprint into NormalizedFootprint entries for SQLite storage
@@ -735,7 +929,7 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
 
         // Check for duplicate task ID
         let task_exists: bool = conn.query_row(
-            "SELECT 1 FROM tasks_v2 WHERE id = ?1",
+            "SELECT 1 FROM tasks WHERE id = ?1",
             [&input.id],
             |_| Ok(true),
         ).unwrap_or(false);
@@ -751,12 +945,15 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
         // SAVEPOINT works even if no transaction is active (SQLite auto-starts one)
         conn.execute("SAVEPOINT create_task", [])?;
 
-        let result = (|| -> rusqlite::Result<i64> {
+        // Infer task type from title/description
+        let task_type = infer_task_type(&input.title, input.description.as_deref());
+
+        let result = (|| -> rusqlite::Result<(i64, SqliteTaskType)> {
             // Insert task as draft
             conn.execute(
-                "INSERT INTO tasks_v2 (id, epic_id, title, description, priority, status, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?6)",
-                params![input.id, input.epic_id, input.title, input.description, input.priority, now],
+                "INSERT INTO tasks (id, epic_id, title, description, priority, status, task_type, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?7)",
+                params![input.id, input.epic_id, input.title, input.description, input.priority, task_type.as_str(), now],
             )?;
 
             // Insert dependencies (trigger validates same-epic constraint)
@@ -781,15 +978,15 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
             // Explicitly set updated_at to avoid staleness from trigger
             let flip_time = chrono::Utc::now().timestamp_millis();
             conn.execute(
-                "UPDATE tasks_v2 SET status = 'open', updated_at = ?2 WHERE id = ?1",
+                "UPDATE tasks SET status = 'open', updated_at = ?2 WHERE id = ?1",
                 params![input.id, flip_time],
             )?;
 
-            Ok(flip_time)
+            Ok((flip_time, task_type))
         })();
 
         match result {
-            Ok(flip_time) => {
+            Ok((flip_time, task_type)) => {
                 conn.execute("RELEASE create_task", [])?;
                 Ok(SqliteTask {
                     id: input.id,
@@ -798,10 +995,9 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                     description: input.description,
                     priority: input.priority,
                     status: SqliteTaskStatus::Open,
+                    task_type,
                     claimed_by: None,
                     claimed_at: None,
-                    lease_expires_at: None,
-                    heartbeat_at: None,
                     created_at: now,
                     updated_at: flip_time,
                     deleted_at: None,
@@ -835,28 +1031,25 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
 /// Returns None if no ready tasks available.
 pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
-    let lease_expires = now + 300_000; // 5 minute lease
 
     with_db(|conn| {
         // Atomic claim with embedded readiness check
         // This is a complex query but it runs as a single atomic UPDATE
         conn.execute(
             r#"
-            UPDATE tasks_v2
+            UPDATE tasks
             SET status = 'in_progress',
                 claimed_by = ?1,
                 claimed_at = ?2,
-                lease_expires_at = ?3,
-                heartbeat_at = ?2,
                 updated_at = ?2
             WHERE id = (
-                SELECT t.id FROM tasks_v2 t
+                SELECT t.id FROM tasks t
                 WHERE t.status = 'open'
                   AND t.deleted_at IS NULL
                   -- All deps are closed OR deleted
                   AND NOT EXISTS (
                       SELECT 1 FROM task_dependencies td
-                      JOIN tasks_v2 dep ON dep.id = td.depends_on
+                      JOIN tasks dep ON dep.id = td.depends_on
                       WHERE td.task_id = t.id
                         AND dep.status != 'closed'
                         AND dep.deleted_at IS NULL
@@ -866,7 +1059,7 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
                       SELECT 1 FROM task_footprints fp1
                       JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
                         AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
-                      JOIN tasks_v2 other ON other.id = fp2.task_id
+                      JOIN tasks other ON other.id = fp2.task_id
                       WHERE fp1.task_id = t.id
                         AND other.id != t.id
                         AND other.status = 'in_progress'
@@ -876,7 +1069,7 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
                 LIMIT 1
             )
             "#,
-            params![agent_id, now, lease_expires],
+            params![agent_id, now],
         )?;
 
         // Check if we claimed anything
@@ -887,13 +1080,14 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
 
         // Fetch the claimed task
         let task = conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
-                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
-             FROM tasks_v2 WHERE claimed_by = ?1 AND status = 'in_progress'
+            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+                    created_at, updated_at, deleted_at
+             FROM tasks WHERE claimed_by = ?1 AND status = 'in_progress'
              ORDER BY claimed_at DESC LIMIT 1",
             [agent_id],
             |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -901,13 +1095,12 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             },
         )?;
@@ -922,27 +1115,24 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
 /// Returns error if task is not ready (deps not satisfied, footprint collision, etc.)
 pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
-    let lease_expires = now + 300_000; // 5 minute lease
 
     with_db(|conn| {
         // Atomic claim with readiness check
         let affected = conn.execute(
             r#"
-            UPDATE tasks_v2
+            UPDATE tasks
             SET status = 'in_progress',
                 claimed_by = ?1,
                 claimed_at = ?2,
-                lease_expires_at = ?3,
-                heartbeat_at = ?2,
                 updated_at = ?2
-            WHERE id = ?4
+            WHERE id = ?3
               AND status = 'open'
               AND deleted_at IS NULL
               -- All deps are closed OR deleted
               AND NOT EXISTS (
                   SELECT 1 FROM task_dependencies td
-                  JOIN tasks_v2 dep ON dep.id = td.depends_on
-                  WHERE td.task_id = ?4
+                  JOIN tasks dep ON dep.id = td.depends_on
+                  WHERE td.task_id = ?3
                     AND dep.status != 'closed'
                     AND dep.deleted_at IS NULL
               )
@@ -951,20 +1141,20 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
                   SELECT 1 FROM task_footprints fp1
                   JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
                     AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
-                  JOIN tasks_v2 other ON other.id = fp2.task_id
-                  WHERE fp1.task_id = ?4
-                    AND other.id != ?4
+                  JOIN tasks other ON other.id = fp2.task_id
+                  WHERE fp1.task_id = ?3
+                    AND other.id != ?3
                     AND other.status = 'in_progress'
                     AND other.deleted_at IS NULL
               )
             "#,
-            params![agent_id, now, lease_expires, task_id],
+            params![agent_id, now, task_id],
         )?;
 
         if affected == 0 {
             // Check why claim failed
             let task_status: Option<String> = conn.query_row(
-                "SELECT status FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
+                "SELECT status FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
                 [task_id],
                 |row| row.get(0),
             ).ok();
@@ -987,12 +1177,13 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
 
         // Fetch the claimed task
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
-                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
-             FROM tasks_v2 WHERE id = ?1",
+            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+                    created_at, updated_at, deleted_at
+             FROM tasks WHERE id = ?1",
             [task_id],
             |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -1000,13 +1191,12 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             },
         )
@@ -1023,43 +1213,16 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
     })
 }
 
-/// Send a heartbeat for a claimed task (extends lease)
-pub fn heartbeat_sqlite_task(task_id: &str, agent_id: &str) -> Result<(), TasksError> {
-    let now = chrono::Utc::now().timestamp_millis();
-    let lease_expires = now + 300_000; // 5 minute lease
-
-    with_db(|conn| {
-        let affected = conn.execute(
-            "UPDATE tasks_v2
-             SET heartbeat_at = ?1, lease_expires_at = ?2, updated_at = ?1
-             WHERE id = ?3 AND claimed_by = ?4 AND status = 'in_progress' AND deleted_at IS NULL",
-            params![now, lease_expires, task_id, agent_id],
-        )?;
-
-        if affected == 0 {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!("Task {} not owned by {} or not in_progress", task_id, agent_id)),
-            ));
-        }
-
-        Ok(())
-    })
-    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
-}
-
 /// Release a SQLite task (mark as closed, clear claim)
 pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
     with_db(|conn| {
         let affected = conn.execute(
-            "UPDATE tasks_v2
+            "UPDATE tasks
              SET status = 'closed',
                  claimed_by = NULL,
                  claimed_at = NULL,
-                 lease_expires_at = NULL,
-                 heartbeat_at = NULL,
                  updated_at = ?1
              WHERE id = ?2 AND claimed_by = ?3 AND status = 'in_progress'",
             params![now, task_id, agent_id],
@@ -1074,12 +1237,13 @@ pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, 
 
         // Fetch the released task
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
-                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
-             FROM tasks_v2 WHERE id = ?1",
+            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+                    created_at, updated_at, deleted_at
+             FROM tasks WHERE id = ?1",
             [task_id],
             |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -1087,41 +1251,15 @@ pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, 
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Closed),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             },
         )
-    })
-    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
-}
-
-/// Reclaim stale SQLite tasks (called by orchestrator)
-///
-/// Tasks with expired leases are reset to 'open' status.
-/// Returns the number of tasks reclaimed.
-pub fn reclaim_stale_sqlite_tasks() -> Result<usize, TasksError> {
-    let now = chrono::Utc::now().timestamp_millis();
-
-    with_db(|conn| {
-        let affected = conn.execute(
-            "UPDATE tasks_v2
-             SET status = 'open',
-                 claimed_by = NULL,
-                 claimed_at = NULL,
-                 lease_expires_at = NULL,
-                 heartbeat_at = NULL,
-                 updated_at = ?1
-             WHERE status = 'in_progress' AND lease_expires_at < ?1 AND deleted_at IS NULL",
-            params![now],
-        )?;
-
-        Ok(affected)
     })
     .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
 }
@@ -1157,9 +1295,9 @@ pub fn list_sqlite_tasks(
         };
 
         let sql = format!(
-            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
-                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
-             FROM tasks_v2 {} ORDER BY priority, created_at",
+            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+                    created_at, updated_at, deleted_at
+             FROM tasks {} ORDER BY priority, created_at",
             where_clause
         );
 
@@ -1173,6 +1311,7 @@ pub fn list_sqlite_tasks(
         let tasks = stmt
             .query_map(params_ref.as_slice(), |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -1180,13 +1319,12 @@ pub fn list_sqlite_tasks(
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -1205,17 +1343,16 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
         let epic_filter = if has_epic_filter { "AND t.epic_id = ?1" } else { "" };
 
         let sql = format!(r#"
-            SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status,
-                   t.claimed_by, t.claimed_at, t.lease_expires_at, t.heartbeat_at,
-                   t.created_at, t.updated_at, t.deleted_at
-            FROM tasks_v2 t
+            SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status, t.task_type,
+                   t.claimed_by, t.claimed_at, t.created_at, t.updated_at, t.deleted_at
+            FROM tasks t
             WHERE t.status = 'open'
               AND t.deleted_at IS NULL
               {}
               -- All deps are closed OR deleted
               AND NOT EXISTS (
                   SELECT 1 FROM task_dependencies td
-                  JOIN tasks_v2 dep ON dep.id = td.depends_on
+                  JOIN tasks dep ON dep.id = td.depends_on
                   WHERE td.task_id = t.id
                     AND dep.status != 'closed'
                     AND dep.deleted_at IS NULL
@@ -1225,7 +1362,7 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
                   SELECT 1 FROM task_footprints fp1
                   JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
                     AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
-                  JOIN tasks_v2 other ON other.id = fp2.task_id
+                  JOIN tasks other ON other.id = fp2.task_id
                   WHERE fp1.task_id = t.id
                     AND other.id != t.id
                     AND other.status = 'in_progress'
@@ -1240,6 +1377,7 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
         let tasks: Vec<SqliteTask> = if let Some(eid) = epic_id {
             stmt.query_map([eid], |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -1247,18 +1385,18 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             })?.filter_map(|r| r.ok()).collect()
         } else {
             stmt.query_map([], |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -1266,13 +1404,12 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             })?.filter_map(|r| r.ok()).collect()
         };
@@ -1289,15 +1426,14 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
     with_db(|conn| {
         // First close the task if not already closed
         conn.execute(
-            "UPDATE tasks_v2 SET status = 'closed', claimed_by = NULL, claimed_at = NULL,
-             lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?1
-             WHERE id = ?2 AND deleted_at IS NULL",
+            "UPDATE tasks SET status = 'closed', claimed_by = NULL, claimed_at = NULL,
+             updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![now, task_id],
         )?;
 
         // Then set deleted_at (trigger enforces closed + unclaimed invariant)
         let affected = conn.execute(
-            "UPDATE tasks_v2 SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            "UPDATE tasks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![now, task_id],
         )?;
 
@@ -1321,12 +1457,13 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
 pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
     with_db(|conn| {
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, claimed_by, claimed_at,
-                    lease_expires_at, heartbeat_at, created_at, updated_at, deleted_at
-             FROM tasks_v2 WHERE id = ?1 AND deleted_at IS NULL",
+            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+                    created_at, updated_at, deleted_at
+             FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
             [task_id],
             |row| {
                 let status_str: String = row.get(5)?;
+                let task_type_str: String = row.get(6)?;
                 Ok(SqliteTask {
                     id: row.get(0)?,
                     epic_id: row.get(1)?,
@@ -1334,13 +1471,12 @@ pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
                     description: row.get(3)?,
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    claimed_by: row.get(6)?,
-                    claimed_at: row.get(7)?,
-                    lease_expires_at: row.get(8)?,
-                    heartbeat_at: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                    deleted_at: row.get(12)?,
+                    task_type: SqliteTaskType::from_str(&task_type_str),
+                    claimed_by: row.get(7)?,
+                    claimed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    deleted_at: row.get(11)?,
                 })
             },
         )
@@ -1357,7 +1493,41 @@ pub fn update_sqlite_task_status(task_id: &str, status: SqliteTaskStatus) -> Res
 
     with_db(|conn| {
         let affected = conn.execute(
-            "UPDATE tasks_v2 SET status = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            params![status.as_str(), now, task_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task not found: {}", task_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Reset a task to a status and clear claim metadata
+pub fn reset_sqlite_task(task_id: &str, status: SqliteTaskStatus) -> Result<(), TasksError> {
+    match status {
+        SqliteTaskStatus::Open | SqliteTaskStatus::Blocked => {}
+        _ => {
+            return Err(TasksError::InvalidStatus(status.as_str().to_string()));
+        }
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks
+             SET status = ?1,
+                 claimed_by = NULL,
+                 claimed_at = NULL,
+                 updated_at = ?2
+             WHERE id = ?3 AND deleted_at IS NULL",
             params![status.as_str(), now, task_id],
         )?;
 
@@ -1436,7 +1606,7 @@ pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result
         let exists_in_sqlite = with_db(|conn| {
             Ok(conn
                 .query_row(
-                    "SELECT 1 FROM tasks_v2 WHERE id = ?1",
+                    "SELECT 1 FROM tasks WHERE id = ?1",
                     [&task.id],
                     |_| Ok(true),
                 )
@@ -1461,7 +1631,7 @@ pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result
                 let dep_exists = with_db(|conn| {
                     Ok(conn
                         .query_row(
-                            "SELECT 1 FROM tasks_v2 WHERE id = ?1 AND epic_id = ?2 AND deleted_at IS NULL",
+                            "SELECT 1 FROM tasks WHERE id = ?1 AND epic_id = ?2 AND deleted_at IS NULL",
                             params![dep, &epic_id],
                             |_| Ok(true),
                         )
@@ -2019,45 +2189,6 @@ tasks:
         // Now second task should be claimable
         let task = claim_sqlite_task("FP-002", "agent-2").unwrap();
         assert_eq!(task.id, "FP-002");
-
-        crate::db::close_db();
-    }
-
-    #[test]
-    fn test_heartbeat_sqlite_task() {
-        let _dir = setup_test_db();
-
-        // Setup
-        crate::epics::create_epic(crate::epics::CreateEpicInput {
-            id: "HB-EPIC".to_string(),
-            title: "Heartbeat Epic".to_string(),
-            description: None,
-            created_by: "human".to_string(),
-        }).unwrap();
-
-        create_sqlite_task(CreateSqliteTaskInput {
-            id: "HB-001".to_string(),
-            epic_id: "HB-EPIC".to_string(),
-            title: "Heartbeat Task".to_string(),
-            description: None,
-            priority: 5,
-            depends_on: vec![],
-            footprint: TaskFootprint::default(),
-        }).unwrap();
-
-        // Claim task
-        let task = claim_sqlite_task("HB-001", "agent-1").unwrap();
-        let original_heartbeat = task.heartbeat_at;
-
-        // Small delay to ensure timestamp changes
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        // Send heartbeat
-        heartbeat_sqlite_task("HB-001", "agent-1").unwrap();
-
-        // Heartbeat from wrong agent should fail
-        let result = heartbeat_sqlite_task("HB-001", "agent-2");
-        assert!(result.is_err());
 
         crate::db::close_db();
     }

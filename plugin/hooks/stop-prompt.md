@@ -15,7 +15,7 @@ This returns JSON with:
 - `active`: boolean - whether a session is active
 - `session`: object (when active) containing:
   - `mode`: "agent" | "orchestrator" - session type
-  - `bead_id`: string (agent mode only) - the assigned bead
+  - `task_id`: string (agent mode only) - the assigned task
   - `max_concurrent`: number (orchestrator mode only) - max parallel agents
   - `started_at`: ISO timestamp
 - `path`: string - path to session file
@@ -27,7 +27,7 @@ Approve exit - this is not a bacchus-managed session.
 
 ### If session.mode = "agent"
 
-1. Run: `bd show <bead_id> --json` (using session.bead_id from session status)
+1. Run: `bacchus task show <task_id>` (using session.task_id from session status)
 2. Check the `status` field:
    - If `status` is "closed" → APPROVE exit
    - If `status` is anything else → BLOCK exit
@@ -40,15 +40,15 @@ Consider blocking reasons:
 
 ### If session.mode = "orchestrator"
 
-1. Run: `bd status --json` to get project stats
-2. Run: `bd ready --json` to get ready beads
+1. Run: `bacchus task list` to get project stats
+2. Run: `bacchus task list --ready` to get ready tasks
 3. Run: `bacchus list` to get active agents
 
 Decision matrix (use session.max_concurrent from session status):
-- Ready beads exist AND active agents < max_concurrent → BLOCK (spawn more agents)
-- In-progress beads exist → BLOCK (wait for completion)
-- Only blocked beads remain → APPROVE (needs manual intervention)
-- All beads closed → APPROVE (work complete)
+- Ready tasks exist AND active agents < max_concurrent → BLOCK (spawn more agents)
+- In-progress tasks exist → BLOCK (wait for completion)
+- Only blocked tasks remain → APPROVE (needs manual intervention)
+- All tasks closed → APPROVE (work complete)
 
 ## Response Format
 
@@ -67,7 +67,7 @@ Respond with JSON only:
 ```json
 {
   "decision": "block",
-  "reason": "Bead beads-abc123 status is 'in_progress'. Continue working until complete, then run 'bd close beads-abc123'."
+  "reason": "Task TASK-123 status is 'in_progress'. Continue working until complete, then run 'bacchus release TASK-123 --status done'."
 }
 ```
 
@@ -75,7 +75,7 @@ Respond with JSON only:
 ```json
 {
   "decision": "block",
-  "reason": "3 ready beads available. Spawn agents with 'bacchus claim <bead_id> worker-N' for: beads-abc, beads-def, beads-ghi"
+  "reason": "3 ready tasks available. Spawn agents with 'bacchus claim <task_id> worker-N' for: TASK-abc, TASK-def, TASK-ghi"
 }
 ```
 
@@ -83,6 +83,6 @@ Respond with JSON only:
 ```json
 {
   "decision": "approve",
-  "reason": "All 5 beads closed. Work complete."
+  "reason": "All 5 tasks closed. Work complete."
 }
 ```

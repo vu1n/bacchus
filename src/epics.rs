@@ -395,7 +395,7 @@ pub fn enforce_epic_lifecycle() -> Result<Vec<(String, EpicStatus, EpicStatus)>,
             let mut stmt = conn.prepare(
                 "SELECT id FROM epics WHERE status = 'planning'
                  AND id IN (
-                     SELECT DISTINCT epic_id FROM tasks_v2
+                     SELECT DISTINCT epic_id FROM tasks
                      WHERE status IN ('open', 'in_progress', 'blocked', 'closed')
                      AND deleted_at IS NULL
                  )"
@@ -420,7 +420,7 @@ pub fn enforce_epic_lifecycle() -> Result<Vec<(String, EpicStatus, EpicStatus)>,
             let mut stmt = conn.prepare(
                 "SELECT id FROM epics WHERE status = 'active'
                  AND id NOT IN (
-                     SELECT DISTINCT epic_id FROM tasks_v2
+                     SELECT DISTINCT epic_id FROM tasks
                      WHERE status IN ('draft', 'open', 'in_progress', 'blocked')
                      AND deleted_at IS NULL
                  )"
@@ -476,7 +476,7 @@ pub fn get_epic_with_counts(epic_id: &str) -> Result<EpicWithCounts, EpicsError>
                 SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress,
                 SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked,
                 SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed
-             FROM tasks_v2 WHERE epic_id = ?1 AND deleted_at IS NULL",
+             FROM tasks WHERE epic_id = ?1 AND deleted_at IS NULL",
             [epic_id],
             |row| {
                 Ok(TaskCounts {

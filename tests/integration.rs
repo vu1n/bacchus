@@ -71,37 +71,37 @@ mod worktree_tests {
         let (_temp, repo_path) = init_test_repo();
         let worktrees_dir = repo_path.join(".bacchus/worktrees");
 
-        // Create worktree for test-bead-1
+        // Create worktree for test-task-1
         let output = Command::new("git")
-            .args(["worktree", "add", "-b", "bacchus/test-bead-1"])
-            .arg(worktrees_dir.join("test-bead-1"))
+            .args(["worktree", "add", "-b", "bacchus/test-task-1"])
+            .arg(worktrees_dir.join("test-task-1"))
             .current_dir(&repo_path)
             .output()
             .unwrap();
 
         assert!(output.status.success(), "Worktree creation failed");
-        assert!(worktrees_dir.join("test-bead-1").exists());
+        assert!(worktrees_dir.join("test-task-1").exists());
 
         // Verify branch exists
         let output = Command::new("git")
-            .args(["branch", "--list", "bacchus/test-bead-1"])
+            .args(["branch", "--list", "bacchus/test-task-1"])
             .current_dir(&repo_path)
             .output()
             .unwrap();
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("bacchus/test-bead-1"));
+        assert!(stdout.contains("bacchus/test-task-1"));
     }
 
     #[test]
     fn test_worktree_modification_and_merge() {
         let (_temp, repo_path) = init_test_repo();
         let worktrees_dir = repo_path.join(".bacchus/worktrees");
-        let worktree_path = worktrees_dir.join("test-bead-2");
+        let worktree_path = worktrees_dir.join("test-task-2");
 
         // Create worktree
         Command::new("git")
-            .args(["worktree", "add", "-b", "bacchus/test-bead-2"])
+            .args(["worktree", "add", "-b", "bacchus/test-task-2"])
             .arg(&worktree_path)
             .current_dir(&repo_path)
             .output()
@@ -130,7 +130,7 @@ mod worktree_tests {
             .unwrap();
 
         let output = Command::new("git")
-            .args(["merge", "bacchus/test-bead-2"])
+            .args(["merge", "bacchus/test-task-2"])
             .current_dir(&repo_path)
             .output()
             .unwrap();
@@ -145,11 +145,11 @@ mod worktree_tests {
     fn test_worktree_removal() {
         let (_temp, repo_path) = init_test_repo();
         let worktrees_dir = repo_path.join(".bacchus/worktrees");
-        let worktree_path = worktrees_dir.join("test-bead-3");
+        let worktree_path = worktrees_dir.join("test-task-3");
 
         // Create worktree
         Command::new("git")
-            .args(["worktree", "add", "-b", "bacchus/test-bead-3"])
+            .args(["worktree", "add", "-b", "bacchus/test-task-3"])
             .arg(&worktree_path)
             .current_dir(&repo_path)
             .output()
@@ -170,31 +170,31 @@ mod worktree_tests {
 
         // Delete branch
         Command::new("git")
-            .args(["branch", "-D", "bacchus/test-bead-3"])
+            .args(["branch", "-D", "bacchus/test-task-3"])
             .current_dir(&repo_path)
             .output()
             .unwrap();
 
         // Verify branch is gone
         let output = Command::new("git")
-            .args(["branch", "--list", "bacchus/test-bead-3"])
+            .args(["branch", "--list", "bacchus/test-task-3"])
             .current_dir(&repo_path)
             .output()
             .unwrap();
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(!stdout.contains("bacchus/test-bead-3"));
+        assert!(!stdout.contains("bacchus/test-task-3"));
     }
 
     #[test]
     fn test_merge_conflict_detection() {
         let (_temp, repo_path) = init_test_repo();
         let worktrees_dir = repo_path.join(".bacchus/worktrees");
-        let worktree_path = worktrees_dir.join("test-bead-conflict");
+        let worktree_path = worktrees_dir.join("test-task-conflict");
 
         // Create worktree
         Command::new("git")
-            .args(["worktree", "add", "-b", "bacchus/test-bead-conflict"])
+            .args(["worktree", "add", "-b", "bacchus/test-task-conflict"])
             .arg(&worktree_path)
             .current_dir(&repo_path)
             .output()
@@ -228,7 +228,7 @@ mod worktree_tests {
 
         // Attempt merge (should fail)
         let output = Command::new("git")
-            .args(["merge", "bacchus/test-bead-conflict"])
+            .args(["merge", "bacchus/test-task-conflict"])
             .current_dir(&repo_path)
             .output()
             .unwrap();
@@ -436,7 +436,7 @@ mod workflow_tests {
     use super::*;
 
     #[test]
-    fn test_next_without_ready_beads() {
+    fn test_next_without_ready_tasks() {
         let (temp, repo_path) = init_test_repo();
         let db_path = temp.path().join("test.db");
 

@@ -1,7 +1,7 @@
 //! Abort tool - abort a failed merge for a task
 //!
 //! Restores the repository to pre-merge state when a merge conflict occurs.
-//! Uses SQLite-based task management (tasks_v2 table).
+//! Uses SQLite-based task management.
 
 use crate::tasks::{self, TasksError};
 use crate::worktree;
