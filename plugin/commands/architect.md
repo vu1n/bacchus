@@ -46,41 +46,26 @@ bacchus context
 
 ### 3. Create Tasks
 
-Break down the epic into atomic tasks:
-
-```bash
-# Create tasks with dependencies and footprints
-bacchus task add \
-  --id AUTH-001 \
-  --title "Implement JWT token generation" \
-  --description "Create JWT signing/verification utilities" \
-  --priority 1 \
-  --deps ""
-
-bacchus task add \
-  --id AUTH-002 \
-  --title "Add authentication middleware" \
-  --priority 2 \
-  --deps AUTH-001
-```
-
-Or edit `.bacchus/tasks.yaml` directly with full footprint information:
+Break down the epic into atomic tasks by editing `.bacchus/tasks.yaml`:
 
 ```yaml
+version: 1
+
 tasks:
   - id: AUTH-001
     title: "Implement JWT token generation"
+    description: "Create JWT signing/verification utilities"
     priority: 1
     status: open
     depends_on: []
     footprint:
-      modifies:
-        - "src/auth/jwt.rs::*"
+      modifies: []
       creates:
         - "src/auth/jwt.rs"
 
   - id: AUTH-002
     title: "Add authentication middleware"
+    description: "Create middleware to validate JWT tokens on requests"
     priority: 2
     status: open
     depends_on: [AUTH-001]
@@ -91,9 +76,28 @@ tasks:
         - "src/middleware/auth.rs"
 ```
 
-### 4. Mark Message Processed
+Then import the tasks:
 
-After creating tasks, the epic status will auto-transition from `planning` to `active`.
+```bash
+bacchus task import --epic-id <epic_id>
+```
+
+### 4. Verify Tasks
+
+After creating tasks:
+
+```bash
+# List all tasks
+bacchus task list
+
+# Check ready tasks
+bacchus task list --ready
+
+# Validate footprints
+bacchus task validate
+```
+
+The epic status will auto-transition from `planning` to `active` when tasks are imported.
 
 ## Epic Lifecycle
 
@@ -139,8 +143,11 @@ bacchus epic show <epic_id>
 # List epics
 bacchus epic list
 
-# Create tasks
-bacchus task add --id X --title Y --deps Z
+# Initialize tasks file
+bacchus task init
+
+# Import tasks to SQLite
+bacchus task import --epic-id <epic_id>
 
 # Validate task footprints against symbol index
 bacchus task validate

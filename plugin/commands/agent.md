@@ -30,7 +30,7 @@ The stop hook will now prevent you from stopping until `{{task_id}}` is closed.
 Get rich, type-aware context for your task:
 
 ```bash
-bacchus context {{task_id}}
+bacchus context --task-id {{task_id}}
 ```
 
 This provides:
@@ -104,5 +104,5 @@ bacchus session stop
 Now start by getting your task context:
 
 ```bash
-bacchus context {{task_id}}
+bacchus context --task-id {{task_id}}
 ```

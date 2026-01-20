@@ -1,6 +1,6 @@
 {
   "name": "bacchus",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Multi-agent coordination with persistent stop hooks. Agents keep working until tasks are closed. Orchestrator spawns agents for ready work.",
   "author": "vu1n",
   "repository": "https://github.com/vu1n/bacchus",
@@ -12,6 +12,10 @@
     "bacchus-orchestrate": {
       "description": "Start orchestrator that spawns agents for ready tasks until all work is complete.",
       "file": "../commands/orchestrate.md"
+    },
+    "bacchus-architect": {
+      "description": "Start architect agent that breaks down epics into tasks.",
+      "file": "../commands/architect.md"
     },
     "bacchus-cancel": {
       "description": "Cancel active bacchus agents and orchestrator.",

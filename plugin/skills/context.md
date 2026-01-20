@@ -10,16 +10,16 @@ Generate a focused context summary for the current working state.
 ## Usage
 
 ```bash
+# Global context (orchestrator view)
 bacchus context
-```
 
-This command auto-detects mode:
-- **Repo root**: Global view (all claims, ready work, project stats)
-- **In worktree**: Task view (specific task objectives, related symbols)
+# Task-specific context (agent view)
+bacchus context --task-id <TASK_ID>
+```
 
 ## Global Context (Orchestrator)
 
-When run from repo root, shows:
+When run without `--task-id`, shows:
 - Active claims and their age
 - Ready tasks waiting for agents
 - Blocked tasks needing intervention
@@ -27,15 +27,15 @@ When run from repo root, shows:
 
 ## Task Context (Agent)
 
-When run from a worktree, shows:
-- Task details (title, description, acceptance criteria)
-- Dependencies (what this unblocks)
-- Related symbols in the codebase
-- Suggested starting points
+When run with `--task-id`, shows:
+- Task details (title, description, type, priority)
+- Dependencies (what blocks this, what this unblocks)
+- Footprint (files/symbols to modify/create)
+- Type-specific guidance (bug fix, feature, refactor, etc.)
 
 ## Example Output
 
-**Global Mode**:
+**Global Mode** (`bacchus context`):
 ```markdown
 # Bacchus Status
 
@@ -50,24 +50,34 @@ When run from a worktree, shows:
 - DEPLOY-001: "Deploy" (blocked by AUTH-001)
 ```
 
-**Task Mode**:
+**Task Mode** (`bacchus context --task-id AUTH-001`):
 ```markdown
-# Task: AUTH-001
+# Task: AUTH-001 - Add user authentication
 
-## Objective
-Add user authentication with JWT tokens
+## Overview
+- **Type**: Feature
+- **Priority**: 1
+- **Status**: in_progress
 
-## Acceptance Criteria
-- [ ] Login endpoint returns JWT
-- [ ] Middleware validates tokens
-- [ ] Tests cover happy path and errors
-
-## Related Symbols
-- `src/auth/`: Authentication module
-- `UserService.authenticate()`: Existing stub
+## Description
+Add JWT-based authentication to the API
 
 ## Unblocks
-- DEPLOY-001: "Deploy to production"
+Completing this task will unblock:
+- DEPLOY-001
+
+## Footprint
+**Modifies:**
+- src/auth/handler.rs::AuthHandler
+
+**Creates:**
+- src/auth/middleware.rs
+
+## Guidance
+**Feature Guidance:**
+- Understand the requirements before coding
+- Write tests alongside implementation
+- Consider edge cases and error handling
 ```
 
 ## When to Use
