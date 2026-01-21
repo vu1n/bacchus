@@ -1,9 +1,10 @@
 # Bacchus Agent Archetypes
 #
-# Defines specialized agent prompts for different task types.
-# The orchestrator selects an archetype based on task type, keywords, and file patterns.
+# Defines specialized agent prompts for different agent archetypes.
+# The planner explicitly assigns an archetype to each task.
+# The orchestrator uses the archetype to load the appropriate prompt.
 #
-# To customize: copy to ~/.claude/skills/bacchus/archetypes.yaml and modify.
+# To customize: copy to .bacchus/archetypes.yaml in your project.
 
 version: 1
 

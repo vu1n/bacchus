@@ -111,16 +111,16 @@ bacchus archetype select TASK-001
 
 ### Available Archetypes
 
-| Type | Archetype | Focus |
-|------|-----------|-------|
-| frontend | Frontend Design | UI/UX, components, styling, accessibility |
-| backend | Backend API | APIs, auth, validation, error handling |
-| data | Data Engineer | Pipelines, SQL, schemas, ETL |
-| test | Test Engineer | Coverage, fixtures, e2e, mocks |
-| infra | Infrastructure | CI/CD, containers, cloud, monitoring |
-| review | Code Reviewer | Quality, patterns, correctness |
-| security | Security Specialist | Vulnerabilities, OWASP, secrets |
-| generic | Generic | General development (default) |
+| Key | Name | Focus |
+|-----|------|-------|
+| `frontend` | Frontend Design | UI/UX, components, styling, accessibility |
+| `backend` | Backend API | APIs, auth, validation, error handling |
+| `data` | Data Engineer | Pipelines, SQL, schemas, ETL |
+| `test` | Test Engineer | Coverage, fixtures, e2e, mocks |
+| `infra` | Infrastructure | CI/CD, containers, cloud, monitoring |
+| `review` | Code Reviewer | Quality, patterns, correctness |
+| `security` | Security Specialist | Vulnerabilities, OWASP, secrets |
+| `generic` | Generic | General development (default) |
 
 ### Customizing Archetypes
 
