@@ -236,6 +236,14 @@ Each iteration:
 5. **Handle releases**: Tasks marked `ready_for_release` get merged by orchestrator
 6. **Cleanup stale work**: `bacchus stale --minutes 30 --cleanup`
 
+When session ends (all tasks complete):
+
+```bash
+git push  # Push all completed work to remote
+```
+
+Note: `jj git export` runs automatically after each task completes, keeping local git in sync.
+
 ## Conflict Resolution
 
 If the orchestrator detects merge conflicts:
@@ -279,6 +287,7 @@ bacchus archetype select AUTH-001  # Shows: backend archetype
 bacchus task list
 bacchus list  # Active claims
 
-# 7. All done - session auto-clears or:
+# 7. All done - push to remote and end session
+git push
 bacchus session stop
 ```

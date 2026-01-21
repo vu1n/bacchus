@@ -333,7 +333,7 @@ pub fn advance_main_bookmark(workspace_root: &Path, commit_id: &str) -> Result<(
     Ok(())
 }
 
-/// Complete release: forget workspace and clean up directory
+/// Complete release: forget workspace, clean up directory, sync to git
 pub fn complete_release(workspace_root: &Path, task_id: &str) -> Result<(), WorkspaceError> {
     validate_task_id(task_id)?;
 
@@ -345,6 +345,9 @@ pub fn complete_release(workspace_root: &Path, task_id: &str) -> Result<(), Work
     if workspace_path.exists() {
         std::fs::remove_dir_all(&workspace_path)?;
     }
+
+    // Export jj state to git refs (keeps git in sync after each completed task)
+    let _ = run_jj(workspace_root, &["git", "export"]);
 
     Ok(())
 }
