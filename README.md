@@ -68,9 +68,19 @@ Bacchus coordinates multi-agent work through a **plan → orchestrate → execut
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### How to Run
+
+For fully autonomous multi-agent work, start Claude in yolo mode:
+
+```bash
+claude --dangerously-skip-permissions
+```
+
+This allows the orchestrator and agents to run commands without permission prompts.
+
 ### How to Prompt Claude
 
-For multi-agent parallel work, tell Claude what you want and mention bacchus:
+Tell Claude what you want and mention bacchus:
 
 ```
 "I want to add user authentication with login, logout, and password reset.

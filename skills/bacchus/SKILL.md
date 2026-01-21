@@ -9,7 +9,13 @@ Bacchus coordinates parallel agent work on codebases using isolated jj workspace
 
 ## Quick Start
 
-For parallel work: **plan** -> **import** -> **orchestrate**
+For fully autonomous multi-agent work, start Claude in yolo mode:
+
+```bash
+claude --dangerously-skip-permissions
+```
+
+Then: **plan** -> **import** -> **orchestrate**
 
 ```bash
 # 1. Initialize tasks file
