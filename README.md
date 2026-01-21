@@ -414,6 +414,8 @@ Tasks have two separate classifications:
 `bug_fix` | `feature` | `refactor` | `test` | `docs` | `infra` | `generic`
 
 **Archetype** (Agent specialization - what expertise):
+
+Default archetypes for reference:
 | Archetype | Focus |
 |-----------|-------|
 | `frontend` | UI/UX, components, styling |
@@ -425,7 +427,7 @@ Tasks have two separate classifications:
 | `security` | Vulnerabilities, OWASP |
 | `generic` | General development |
 
-Archetypes are explicitly set by the planner. Full definitions with prompts are in `archetypes.yaml`. Run `bacchus archetype list` to see available archetypes.
+Archetypes are explicitly set by the planner. Bacchus uses `archetypes.yaml` as the source of truth - customize by copying to `.bacchus/archetypes.yaml` in your project.
 
 ## Workflow
 
