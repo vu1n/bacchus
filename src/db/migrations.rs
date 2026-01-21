@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 5,
     status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
-    task_type TEXT NOT NULL DEFAULT 'generic',  -- Task type for context-aware prompting
+    task_type TEXT NOT NULL DEFAULT 'generic',  -- PM workflow type
+    archetype TEXT NOT NULL DEFAULT 'generic',  -- Agent specialization archetype
     claimed_by TEXT,                        -- agent_id who claimed
     claimed_at INTEGER,                     -- Unix timestamp ms
     ready_commit_id TEXT,                   -- jj commit ID when agent marks ready (pre-rebase)
@@ -94,7 +95,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
     CHECK (status IN ('draft', 'open', 'in_progress', 'ready_for_release', 'releasing', 'needs_resolution', 'blocked', 'closed')),
-    CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic'))
+    CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic')),
+    CHECK (archetype IN ('frontend', 'backend', 'data', 'test', 'infra', 'review', 'security', 'generic'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_epic ON tasks(epic_id);

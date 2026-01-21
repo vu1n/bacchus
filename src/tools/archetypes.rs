@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
-use crate::tasks::{get_sqlite_task, SqliteTask, TasksError};
+use crate::tasks::{get_sqlite_task, TasksError};
 
 /// Default archetypes.yaml location (relative to skill dir)
 const DEFAULT_ARCHETYPES_FILENAME: &str = "archetypes.yaml";
@@ -115,78 +115,19 @@ pub fn list_archetypes() -> Result<Vec<(String, Archetype)>, ArchetypeError> {
     Ok(list)
 }
 
-/// Select the best archetype for a task
+/// Select the archetype for a task based on its archetype field
 pub fn select_archetype_for_task(task_id: &str) -> Result<ArchetypeSelection, ArchetypeError> {
     let task = get_sqlite_task(task_id)?;
-    let archetypes = load_archetypes()?;
 
-    select_archetype_for_task_data(&task, &archetypes)
-}
-
-/// Select archetype based on task data (for testing without DB)
-pub fn select_archetype_for_task_data(
-    task: &SqliteTask,
-    archetypes: &ArchetypesFile,
-) -> Result<ArchetypeSelection, ArchetypeError> {
-    let mut best_score = 0;
-    let mut best_name = "generic".to_string();
-    let mut best_reasons: Vec<String> = vec![];
-
-    // Combine title and description for keyword matching
-    let text = format!(
-        "{} {}",
-        task.title.to_lowercase(),
-        task.description.as_deref().unwrap_or("").to_lowercase()
-    );
-
-    // Get task type as string for matching
-    let task_type_str = task.task_type.as_str();
-
-    for (name, archetype) in &archetypes.archetypes {
-        let mut score = 0;
-        let mut reasons: Vec<String> = vec![];
-
-        // Exact task type match is highest priority
-        if name == task_type_str {
-            score += 100;
-            reasons.push(format!("Task type matches: {}", task_type_str));
-        }
-
-        // Keyword matching
-        for keyword in &archetype.keywords {
-            if text.contains(&keyword.to_lowercase()) {
-                score += 10;
-                reasons.push(format!("Keyword match: {}", keyword));
-            }
-        }
-
-        // File pattern matching (if task has footprint info)
-        // Note: This would require loading footprint data from task_footprints table
-        // For now, we skip file pattern matching in the basic implementation
-
-        if score > best_score {
-            best_score = score;
-            best_name = name.clone();
-            best_reasons = reasons;
-        }
-    }
-
-    // Get the selected archetype
-    let archetype = archetypes.archetypes
-        .get(&best_name)
-        .cloned()
-        .ok_or_else(|| ArchetypeError::NotFound(best_name.clone()))?;
-
-    // If no match found, default to generic with a note
-    if best_score == 0 {
-        best_reasons.push("No specific match, using default".to_string());
-    }
+    // Direct lookup by task's archetype field
+    let archetype_name = &task.archetype;
+    let archetype = get_archetype(archetype_name)?;
 
     Ok(ArchetypeSelection {
-        archetype_name: best_name,
+        archetype_name: archetype_name.clone(),
         archetype,
-        score: best_score,
-        reasons: best_reasons,
+        score: 100,
+        reasons: vec!["Planner assigned archetype".to_string()],
     })
 }
 
@@ -268,7 +209,6 @@ pub fn cmd_select_archetype(task_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::SqliteTaskType;
 
     fn create_test_archetypes() -> ArchetypesFile {
         let mut archetypes = HashMap::new();
@@ -303,53 +243,18 @@ mod tests {
         }
     }
 
-    fn create_test_task(title: &str, task_type: SqliteTaskType) -> SqliteTask {
-        SqliteTask {
-            id: "TEST-001".to_string(),
-            epic_id: "TEST".to_string(),
-            title: title.to_string(),
-            description: None,
-            priority: 1,
-            status: crate::tasks::SqliteTaskStatus::Open,
-            task_type,
-            claimed_by: None,
-            claimed_at: None,
-            ready_commit_id: None,
-            release_commit_id: None,
-            release_started_at: None,
-            created_at: 0,
-            updated_at: 0,
-            deleted_at: None,
-        }
+    #[test]
+    fn test_load_archetypes_from_file() {
+        let archetypes = create_test_archetypes();
+        assert!(archetypes.archetypes.contains_key("frontend"));
+        assert!(archetypes.archetypes.contains_key("backend"));
+        assert!(archetypes.archetypes.contains_key("generic"));
     }
 
     #[test]
-    fn test_select_by_task_type() {
+    fn test_archetype_has_prompt() {
         let archetypes = create_test_archetypes();
-        let task = create_test_task("Add login form", SqliteTaskType::Frontend);
-
-        let selection = select_archetype_for_task_data(&task, &archetypes).unwrap();
-        assert_eq!(selection.archetype_name, "frontend");
-        assert!(selection.score >= 100); // Task type match
-    }
-
-    #[test]
-    fn test_select_by_keywords() {
-        let archetypes = create_test_archetypes();
-        // Use Feature type which doesn't match any archetype name, so keywords will determine selection
-        let task = create_test_task("Create React component for dashboard", SqliteTaskType::Feature);
-
-        let selection = select_archetype_for_task_data(&task, &archetypes).unwrap();
-        assert_eq!(selection.archetype_name, "frontend");
-        assert!(selection.reasons.iter().any(|r| r.contains("component") || r.contains("react")));
-    }
-
-    #[test]
-    fn test_select_fallback_to_generic() {
-        let archetypes = create_test_archetypes();
-        let task = create_test_task("Do something unrelated", SqliteTaskType::Generic);
-
-        let selection = select_archetype_for_task_data(&task, &archetypes).unwrap();
-        assert_eq!(selection.archetype_name, "generic");
+        let frontend = archetypes.archetypes.get("frontend").unwrap();
+        assert!(!frontend.prompt.is_empty());
     }
 }

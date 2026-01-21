@@ -47,9 +47,12 @@ version: 1
 
 tasks:
   # Implementation tasks
+  # type = PM workflow (bug_fix, feature, refactor, test, docs, infra, generic)
+  # archetype = Agent specialization (frontend, backend, data, test, infra, review, security, generic)
   - id: TASK-001
     title: "Add login endpoint"
-    type: backend        # frontend | backend | data | test | infra | generic
+    type: feature           # PM workflow type
+    archetype: backend      # Agent specialization
     priority: 1
     status: open
     depends_on: []
@@ -59,7 +62,8 @@ tasks:
 
   - id: TASK-002
     title: "Add login form component"
-    type: frontend
+    type: feature
+    archetype: frontend
     priority: 2
     depends_on: [TASK-001]
     footprint:
@@ -68,20 +72,26 @@ tasks:
   # Review tasks (depend on implementation)
   - id: TASK-001-SECURITY
     title: "Security review of login endpoint"
-    type: security
+    type: feature           # It's a feature task (the review itself)
+    archetype: security     # But needs security expertise
     priority: 3
     depends_on: [TASK-001]
 
   - id: TASK-002-REVIEW
     title: "Code review of login form"
-    type: review
+    type: feature
+    archetype: review
     priority: 3
     depends_on: [TASK-002]
 ```
 
 ## Archetype System
 
-Bacchus uses archetypes to provide specialized prompts for different task types. Archetypes are defined in `archetypes.yaml`.
+Bacchus uses archetypes to provide specialized prompts for agents. The planner explicitly assigns an archetype to each task based on the required expertise. Archetypes are defined in `archetypes.yaml`.
+
+**Type vs Archetype:**
+- `type`: PM workflow category (what kind of work: bug_fix, feature, refactor, test, docs, infra, generic)
+- `archetype`: Agent specialization (what expertise: frontend, backend, data, test, infra, review, security, generic)
 
 ### Archetype Commands
 

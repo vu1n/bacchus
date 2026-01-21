@@ -406,22 +406,26 @@ Stop hooks in `~/.claude/settings.json` prevent premature exit:
 - **Agent mode**: Blocks exit until assigned task is closed
 - **Orchestrator mode**: Blocks exit while work remains
 
-### Agent Archetypes
+### Type vs Archetype
 
-Tasks are assigned archetypes based on their type, which provides specialized prompts:
+Tasks have two separate classifications:
 
-| Type | Archetype | Focus |
-|------|-----------|-------|
-| frontend | Frontend Design | UI/UX, components, styling |
-| backend | Backend API | APIs, auth, validation |
-| data | Data Engineer | Pipelines, SQL, schemas |
-| test | Test Engineer | Coverage, fixtures, e2e |
-| infra | Infrastructure | CI/CD, containers, cloud |
-| review | Code Reviewer | Quality, patterns |
-| security | Security Specialist | Vulnerabilities, OWASP |
-| generic | Generic | General development |
+**Task Type** (PM workflow - what kind of work):
+`bug_fix` | `feature` | `refactor` | `test` | `docs` | `infra` | `generic`
 
-Task types are inferred from title, description, or footprint patterns.
+**Archetype** (Agent specialization - what expertise):
+| Archetype | Focus |
+|-----------|-------|
+| `frontend` | UI/UX, components, styling |
+| `backend` | APIs, auth, validation |
+| `data` | Pipelines, SQL, schemas |
+| `test` | Coverage, fixtures, e2e |
+| `infra` | CI/CD, containers, cloud |
+| `review` | Quality, patterns |
+| `security` | Vulnerabilities, OWASP |
+| `generic` | General development |
+
+Archetypes are explicitly set by the planner - no inference. The orchestrator uses the archetype to load specialized agent prompts.
 
 ## Workflow
 
@@ -530,6 +534,8 @@ tasks:
   - id: AUTH-001
     title: "Implement user authentication"
     description: "Add JWT-based auth"
+    type: feature              # PM workflow: bug_fix | feature | refactor | test | docs | infra | generic
+    archetype: backend         # Agent expertise: frontend | backend | data | test | infra | review | security | generic
     priority: 1
     status: open
     depends_on: []
@@ -541,10 +547,19 @@ tasks:
 
   - id: API-002
     title: "Add rate limiting"
+    type: feature
+    archetype: backend
     priority: 2
     depends_on: [AUTH-001]
     footprint:
       modifies: ["src/middleware/mod.rs::*"]
+
+  - id: AUTH-001-SEC
+    title: "Security review of auth"
+    type: feature              # The review is a feature task
+    archetype: security        # But needs security expertise
+    priority: 3
+    depends_on: [AUTH-001]
 ```
 
 Import with: `bacchus task import --epic-id MY-EPIC`

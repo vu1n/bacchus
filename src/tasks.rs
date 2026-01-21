@@ -47,6 +47,14 @@ pub struct Task {
     /// open | in_progress | blocked | closed
     #[serde(default = "default_status")]
     pub status: String,
+    /// PM workflow type: bug_fix, feature, refactor, test, docs, infra, generic
+    /// If not set, inferred from title/description
+    #[serde(rename = "type", default)]
+    pub task_type: Option<String>,
+    /// Agent archetype: frontend, backend, data, test, infra, review, security, generic
+    /// If not set, defaults to "generic"
+    #[serde(default)]
+    pub archetype: Option<String>,
     /// Task IDs that must be closed first
     #[serde(default)]
     pub depends_on: Vec<String>,
@@ -199,17 +207,10 @@ impl std::fmt::Display for SqliteTaskStatus {
     }
 }
 
-/// Task type for context-aware prompting and archetype selection
+/// Task type for PM workflow categorization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SqliteTaskType {
-    // Domain-based types (for archetype selection)
-    Frontend,
-    Backend,
-    Data,
-    Review,
-    Security,
-    // Action-based types (legacy, still supported)
     BugFix,
     Feature,
     Refactor,
@@ -222,13 +223,6 @@ pub enum SqliteTaskType {
 impl SqliteTaskType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            // Domain-based types
-            SqliteTaskType::Frontend => "frontend",
-            SqliteTaskType::Backend => "backend",
-            SqliteTaskType::Data => "data",
-            SqliteTaskType::Review => "review",
-            SqliteTaskType::Security => "security",
-            // Action-based types
             SqliteTaskType::BugFix => "bug_fix",
             SqliteTaskType::Feature => "feature",
             SqliteTaskType::Refactor => "refactor",
@@ -241,13 +235,6 @@ impl SqliteTaskType {
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            // Domain-based types
-            "frontend" => SqliteTaskType::Frontend,
-            "backend" => SqliteTaskType::Backend,
-            "data" => SqliteTaskType::Data,
-            "review" => SqliteTaskType::Review,
-            "security" => SqliteTaskType::Security,
-            // Action-based types
             "bug_fix" => SqliteTaskType::BugFix,
             "feature" => SqliteTaskType::Feature,
             "refactor" => SqliteTaskType::Refactor,
@@ -261,13 +248,6 @@ impl SqliteTaskType {
     /// Human-readable label for display
     pub fn label(&self) -> &'static str {
         match self {
-            // Domain-based types
-            SqliteTaskType::Frontend => "Frontend",
-            SqliteTaskType::Backend => "Backend",
-            SqliteTaskType::Data => "Data Engineering",
-            SqliteTaskType::Review => "Code Review",
-            SqliteTaskType::Security => "Security",
-            // Action-based types
             SqliteTaskType::BugFix => "Bug Fix",
             SqliteTaskType::Feature => "Feature",
             SqliteTaskType::Refactor => "Refactor",
@@ -275,25 +255,6 @@ impl SqliteTaskType {
             SqliteTaskType::Docs => "Documentation",
             SqliteTaskType::Infra => "Infrastructure",
             SqliteTaskType::Generic => "Generic",
-        }
-    }
-
-    /// Get the archetype name for agent spawning
-    pub fn archetype(&self) -> &'static str {
-        match self {
-            SqliteTaskType::Frontend => "frontend",
-            SqliteTaskType::Backend => "backend",
-            SqliteTaskType::Data => "data",
-            SqliteTaskType::Review => "review",
-            SqliteTaskType::Security => "security",
-            SqliteTaskType::Test => "test",
-            // Map action types to closest archetype
-            SqliteTaskType::BugFix => "generic",
-            SqliteTaskType::Feature => "generic",
-            SqliteTaskType::Refactor => "generic",
-            SqliteTaskType::Docs => "generic",
-            SqliteTaskType::Infra => "backend",
-            SqliteTaskType::Generic => "generic",
         }
     }
 }
@@ -306,85 +267,14 @@ impl std::fmt::Display for SqliteTaskType {
 
 /// Infer task type from title and description
 ///
-/// Checks for domain-based types first (frontend, backend, etc.) which map directly
-/// to agent archetypes, then falls back to action-based types (bug_fix, feature, etc.)
+/// Infers PM workflow type (bug_fix, feature, refactor, test, docs, infra, generic)
+/// based on keywords in the title/description.
 pub fn infer_task_type(title: &str, description: Option<&str>) -> SqliteTaskType {
     let text = format!(
         "{} {}",
         title.to_lowercase(),
         description.unwrap_or("").to_lowercase()
     );
-
-    // Domain-based types (check first for direct archetype mapping)
-
-    // Frontend patterns
-    if text.contains("frontend")
-        || text.contains("ui ")
-        || text.contains(" ui")
-        || text.contains("component")
-        || text.contains("react")
-        || text.contains("vue")
-        || text.contains("svelte")
-        || text.contains("css")
-        || text.contains("style")
-        || text.contains("layout")
-        || text.contains("responsive")
-        || text.contains("a11y")
-        || text.contains("accessibility")
-    {
-        return SqliteTaskType::Frontend;
-    }
-
-    // Backend patterns
-    if text.contains("backend")
-        || text.contains("api ")
-        || text.contains(" api")
-        || text.contains("endpoint")
-        || text.contains("route")
-        || text.contains("handler")
-        || text.contains("middleware")
-        || text.contains("auth")
-        || text.contains("database")
-        || text.contains("query")
-        || text.contains("validation")
-    {
-        return SqliteTaskType::Backend;
-    }
-
-    // Data engineering patterns
-    if text.contains("data")
-        || text.contains("etl")
-        || text.contains("pipeline")
-        || text.contains("migration")
-        || text.contains("schema")
-        || text.contains("sql")
-        || text.contains("analytics")
-    {
-        return SqliteTaskType::Data;
-    }
-
-    // Security patterns
-    if text.contains("security")
-        || text.contains("vulnerability")
-        || text.contains("audit")
-        || text.contains("owasp")
-        || text.contains("injection")
-        || text.contains("xss")
-        || text.contains("csrf")
-        || text.contains("sanitiz")
-    {
-        return SqliteTaskType::Security;
-    }
-
-    // Review patterns
-    if text.contains("review")
-        || text.contains("code review")
-        || text.contains("audit code")
-    {
-        return SqliteTaskType::Review;
-    }
-
-    // Action-based types (fallback)
 
     // Bug fix patterns
     if text.contains("fix")
@@ -462,59 +352,6 @@ pub fn infer_task_type(title: &str, description: Option<&str>) -> SqliteTaskType
     SqliteTaskType::Generic
 }
 
-/// Infer task type from footprint paths
-/// This is used as a secondary inference when title/description don't match
-pub fn infer_task_type_from_footprint(paths: &[String]) -> Option<SqliteTaskType> {
-    for path in paths {
-        let path_lower = path.to_lowercase();
-
-        // Frontend file patterns
-        if path_lower.ends_with(".tsx")
-            || path_lower.ends_with(".jsx")
-            || path_lower.ends_with(".vue")
-            || path_lower.ends_with(".svelte")
-            || path_lower.ends_with(".css")
-            || path_lower.ends_with(".scss")
-            || path_lower.ends_with(".sass")
-            || path_lower.contains("/components/")
-            || path_lower.contains("/pages/")
-            || path_lower.contains("/views/")
-        {
-            return Some(SqliteTaskType::Frontend);
-        }
-
-        // Backend file patterns
-        if path_lower.contains("/api/")
-            || path_lower.contains("/routes/")
-            || path_lower.contains("/handlers/")
-            || path_lower.contains("/middleware/")
-            || path_lower.contains("/controllers/")
-            || path_lower.contains("/services/")
-        {
-            return Some(SqliteTaskType::Backend);
-        }
-
-        // Test file patterns
-        if path_lower.contains("/test")
-            || path_lower.contains("_test.")
-            || path_lower.contains(".test.")
-            || path_lower.contains(".spec.")
-            || path_lower.contains("_spec.")
-        {
-            return Some(SqliteTaskType::Test);
-        }
-
-        // Data patterns
-        if path_lower.contains("/migrations/")
-            || path_lower.contains("/schemas/")
-            || path_lower.ends_with(".sql")
-        {
-            return Some(SqliteTaskType::Data);
-        }
-    }
-    None
-}
-
 /// A task stored in SQLite (tasks table)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SqliteTask {
@@ -525,7 +362,10 @@ pub struct SqliteTask {
     pub description: Option<String>,
     pub priority: i32,
     pub status: SqliteTaskStatus,
+    /// PM workflow type (bug_fix, feature, refactor, test, docs, infra, generic)
     pub task_type: SqliteTaskType,
+    /// Agent archetype (frontend, backend, data, test, infra, review, security, generic)
+    pub archetype: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -553,6 +393,10 @@ pub struct CreateSqliteTaskInput {
     pub title: String,
     pub description: Option<String>,
     pub priority: i32,
+    /// Optional PM workflow type (inferred from title if not provided)
+    pub task_type: Option<SqliteTaskType>,
+    /// Optional archetype (defaults to "generic" if not provided)
+    pub archetype: Option<String>,
     pub depends_on: Vec<String>,
     pub footprint: TaskFootprint,
 }
@@ -1136,15 +980,17 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
         // SAVEPOINT works even if no transaction is active (SQLite auto-starts one)
         conn.execute("SAVEPOINT create_task", [])?;
 
-        // Infer task type from title/description
-        let task_type = infer_task_type(&input.title, input.description.as_deref());
+        // Use provided task_type or infer from title/description
+        let task_type = input.task_type.unwrap_or_else(|| infer_task_type(&input.title, input.description.as_deref()));
+        // Use provided archetype or default to "generic"
+        let archetype = input.archetype.clone().unwrap_or_else(|| "generic".to_string());
 
-        let result = (|| -> rusqlite::Result<(i64, SqliteTaskType)> {
+        let result = (|| -> rusqlite::Result<(i64, SqliteTaskType, String)> {
             // Insert task as draft
             conn.execute(
-                "INSERT INTO tasks (id, epic_id, title, description, priority, status, task_type, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?7)",
-                params![input.id, input.epic_id, input.title, input.description, input.priority, task_type.as_str(), now],
+                "INSERT INTO tasks (id, epic_id, title, description, priority, status, task_type, archetype, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?8, ?8)",
+                params![input.id, input.epic_id, input.title, input.description, input.priority, task_type.as_str(), archetype, now],
             )?;
 
             // Insert dependencies (trigger validates same-epic constraint)
@@ -1173,11 +1019,11 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                 params![input.id, flip_time],
             )?;
 
-            Ok((flip_time, task_type))
+            Ok((flip_time, task_type, archetype))
         })();
 
         match result {
-            Ok((flip_time, task_type)) => {
+            Ok((flip_time, task_type, archetype)) => {
                 conn.execute("RELEASE create_task", [])?;
                 Ok(SqliteTask {
                     id: input.id,
@@ -1187,6 +1033,7 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                     priority: input.priority,
                     status: SqliteTaskStatus::Open,
                     task_type,
+                    archetype,
                     claimed_by: None,
                     claimed_at: None,
                     ready_commit_id: None,
@@ -1274,7 +1121,7 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
 
         // Fetch the claimed task
         let task = conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks WHERE claimed_by = ?1 AND status = 'in_progress'
              ORDER BY claimed_at DESC LIMIT 1",
@@ -1290,14 +1137,15 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             },
         )?;
@@ -1374,7 +1222,7 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
 
         // Fetch the claimed task
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks WHERE id = ?1",
             [task_id],
@@ -1389,14 +1237,15 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             },
         )
@@ -1437,7 +1286,7 @@ pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, 
 
         // Fetch the released task
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks WHERE id = ?1",
             [task_id],
@@ -1452,14 +1301,15 @@ pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, 
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Closed),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             },
         )
@@ -1498,7 +1348,7 @@ pub fn list_sqlite_tasks(
         };
 
         let sql = format!(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks {} ORDER BY priority, created_at",
             where_clause
@@ -1523,14 +1373,15 @@ pub fn list_sqlite_tasks(
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -1549,7 +1400,7 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
         let epic_filter = if has_epic_filter { "AND t.epic_id = ?1" } else { "" };
 
         let sql = format!(r#"
-            SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status, t.task_type,
+            SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status, t.task_type, t.archetype,
                    t.claimed_by, t.claimed_at, t.ready_commit_id, t.release_commit_id, t.release_started_at,
                    t.created_at, t.updated_at, t.deleted_at
             FROM tasks t
@@ -1593,14 +1444,15 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             })?.filter_map(|r| r.ok()).collect()
         } else {
@@ -1615,14 +1467,15 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             })?.filter_map(|r| r.ok()).collect()
         };
@@ -1670,7 +1523,7 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
 pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
     with_db(|conn| {
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
             [task_id],
@@ -1685,14 +1538,15 @@ pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
                     priority: row.get(4)?,
                     status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             },
         )
@@ -1867,12 +1721,16 @@ pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result
         }
 
         // Create the SQLite task
+        // Parse task_type from YAML if provided
+        let task_type = task.task_type.as_ref().map(|t| SqliteTaskType::from_str(t));
         let input = CreateSqliteTaskInput {
             id: task.id.clone(),
             epic_id: epic_id.clone(),
             title: task.title.clone(),
             description: task.description.clone(),
             priority: task.priority,
+            task_type,
+            archetype: task.archetype.clone(),
             depends_on: valid_deps,
             footprint: task.footprint.clone(),
         };
@@ -2079,7 +1937,7 @@ pub fn mark_task_needs_resolution(task_id: &str, conflict_files: &[String]) -> R
 pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks
              WHERE status = 'ready_for_release'
@@ -2100,14 +1958,15 @@ pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
                     status: SqliteTaskStatus::from_str(&status_str)
                         .unwrap_or(SqliteTaskStatus::ReadyForRelease),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -2122,7 +1981,7 @@ pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
 pub fn get_tasks_needing_resolution() -> Result<Vec<SqliteTask>, TasksError> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, epic_id, title, description, priority, status, task_type, claimed_by, claimed_at,
+            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
                     ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
              FROM tasks
              WHERE status = 'needs_resolution'
@@ -2143,14 +2002,15 @@ pub fn get_tasks_needing_resolution() -> Result<Vec<SqliteTask>, TasksError> {
                     status: SqliteTaskStatus::from_str(&status_str)
                         .unwrap_or(SqliteTaskStatus::NeedsResolution),
                     task_type: SqliteTaskType::from_str(&task_type_str),
-                    claimed_by: row.get(7)?,
-                    claimed_at: row.get(8)?,
-                    ready_commit_id: row.get(9)?,
-                    release_commit_id: row.get(10)?,
-                    release_started_at: row.get(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    deleted_at: row.get(14)?,
+                    archetype: row.get(7)?,
+                    claimed_by: row.get(8)?,
+                    claimed_at: row.get(9)?,
+                    ready_commit_id: row.get(10)?,
+                    release_commit_id: row.get(11)?,
+                    release_started_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                    deleted_at: row.get(15)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -2475,6 +2335,8 @@ tasks:
             description: Some("A test task".to_string()),
             priority: 3,
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint::default(),
         };
 
@@ -2506,6 +2368,8 @@ tasks:
             description: None,
             priority: 5,
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint::default(),
         }).unwrap();
 
@@ -2541,6 +2405,8 @@ tasks:
             description: None,
             priority: 10, // Lower priority (higher number)
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint::default(),
         }).unwrap();
 
@@ -2551,6 +2417,8 @@ tasks:
             description: None,
             priority: 1, // Higher priority (lower number)
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint::default(),
         }).unwrap();
 
@@ -2583,6 +2451,8 @@ tasks:
             description: None,
             priority: 5,
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint::default(),
         }).unwrap();
 
@@ -2594,6 +2464,8 @@ tasks:
             description: None,
             priority: 5,
             depends_on: vec!["DEP-001".to_string()],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint::default(),
         }).unwrap();
 
@@ -2632,6 +2504,8 @@ tasks:
             description: None,
             priority: 5,
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint {
                 modifies: vec!["src/auth.rs::Handler".to_string()],
                 creates: vec![],
@@ -2645,6 +2519,8 @@ tasks:
             description: None,
             priority: 5,
             depends_on: vec![],
+            task_type: None,
+            archetype: None,
             footprint: TaskFootprint {
                 modifies: vec!["src/auth.rs::Handler".to_string()], // Same symbol
                 creates: vec![],

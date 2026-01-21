@@ -173,29 +173,34 @@ src/
     └── context/         # Context generation
 ```
 
-## Agent Archetypes
+## Type vs Archetype
 
-Tasks are assigned archetypes based on their `task_type` field, which provides specialized prompts for agents:
+Tasks have two orthogonal classifications:
 
-| Type | Archetype | Focus |
-|------|-----------|-------|
-| `frontend` | Frontend Design | UI/UX, components, CSS, accessibility |
-| `backend` | Backend API | APIs, auth, validation, error handling |
-| `data` | Data Engineer | Pipelines, SQL, schemas, ETL |
-| `test` | Test Engineer | Coverage, fixtures, e2e, mocks |
-| `infra` | Infrastructure | CI/CD, containers, cloud, monitoring |
-| `review` | Code Reviewer | Quality, patterns, correctness |
-| `security` | Security Specialist | Vulnerabilities, OWASP, secrets |
-| `generic` | Generic | General development (default) |
+**task_type** (PM workflow):
+| Type | Purpose |
+|------|---------|
+| `bug_fix` | Fixing defects |
+| `feature` | Adding new functionality |
+| `refactor` | Restructuring without changing behavior |
+| `test` | Adding/improving tests |
+| `docs` | Documentation |
+| `infra` | CI/CD, deployment, infrastructure |
+| `generic` | General work (default) |
 
-### Type Inference
+**archetype** (Agent specialization):
+| Archetype | Focus |
+|-----------|-------|
+| `frontend` | UI/UX, components, CSS, accessibility |
+| `backend` | APIs, auth, validation, error handling |
+| `data` | Pipelines, SQL, schemas, ETL |
+| `test` | Coverage, fixtures, e2e, mocks |
+| `infra` | CI/CD, containers, cloud, monitoring |
+| `review` | Quality, patterns, correctness |
+| `security` | Vulnerabilities, OWASP, secrets |
+| `generic` | General development (default) |
 
-Task types are inferred in this order:
-1. **Explicit**: `type: frontend` in YAML
-2. **Title/Description**: Keywords like "component", "api", "migration"
-3. **Footprint**: File patterns like `*.tsx` → frontend, `/api/` → backend
-
-See `SqliteTaskType` in `src/tasks.rs` for implementation.
+**Key design decision**: Archetype is explicitly set by the planner (no inference). The orchestrator uses the archetype to load specialized agent prompts.
 
 ## Key Modules
 
@@ -212,7 +217,8 @@ pub struct SqliteTask {
     pub description: Option<String>,
     pub priority: i32,
     pub status: String,          // draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
-    pub task_type: SqliteTaskType, // frontend | backend | data | test | review | security | generic (+ legacy types)
+    pub task_type: SqliteTaskType, // PM workflow: bug_fix | feature | refactor | test | docs | infra | generic
+    pub archetype: String,         // Agent specialization: frontend | backend | data | test | infra | review | security | generic
     pub claimed_by: Option<String>,
     pub claimed_at: Option<i64>,
     pub ready_commit_id: Option<String>,    // jj commit ID when marked ready
@@ -342,6 +348,8 @@ tasks:
   - id: AUTH-001
     title: "Implement user authentication"
     description: "Add JWT-based auth to the API"
+    type: feature                  # PM workflow: bug_fix | feature | refactor | test | docs | infra | generic
+    archetype: backend             # Agent expertise: frontend | backend | data | test | infra | review | security | generic
     priority: 1                    # Lower = higher priority (default: 5)
     status: open                   # open | in_progress | blocked | closed
     depends_on: []                 # Task IDs that must be closed first
@@ -352,14 +360,21 @@ tasks:
       creates:                     # New files (virtual footprint)
         - "src/auth/middleware.rs"
 
-  - id: RATE-002
-    title: "Add rate limiting"
+  - id: AUTH-002
+    title: "Add login form"
+    type: feature
+    archetype: frontend
     priority: 2
-    status: open
-    depends_on: [AUTH-001]         # Blocked until AUTH-001 is closed
+    depends_on: [AUTH-001]
     footprint:
-      modifies: ["src/middleware/mod.rs::*"]
-      creates: ["src/middleware/rate_limit.rs"]
+      creates: ["src/components/LoginForm.tsx"]
+
+  - id: AUTH-001-SEC
+    title: "Security review of authentication"
+    type: feature                  # It's a feature task (the review itself)
+    archetype: security            # But needs security expertise
+    priority: 3
+    depends_on: [AUTH-001]
 ```
 
 After import, all operations (claim, release, status changes) happen in SQLite.
@@ -450,7 +465,8 @@ CREATE TABLE tasks (
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 5,
     status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
-    task_type TEXT NOT NULL DEFAULT 'generic',
+    task_type TEXT NOT NULL DEFAULT 'generic',  -- PM workflow type
+    archetype TEXT NOT NULL DEFAULT 'generic',  -- Agent specialization
     claimed_by TEXT,                        -- agent_id who claimed
     claimed_at INTEGER,                     -- Unix timestamp ms
     ready_commit_id TEXT,                   -- jj commit ID when marked ready
@@ -458,7 +474,9 @@ CREATE TABLE tasks (
     release_started_at INTEGER,             -- When orchestrator started release
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    deleted_at INTEGER                      -- Soft delete
+    deleted_at INTEGER,                     -- Soft delete
+    CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic')),
+    CHECK (archetype IN ('frontend', 'backend', 'data', 'test', 'infra', 'review', 'security', 'generic'))
 );
 ```
 

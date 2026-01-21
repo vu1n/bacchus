@@ -12,6 +12,7 @@ pub struct TaskContext {
     pub title: String,
     pub description: Option<String>,
     pub task_type: SqliteTaskType,
+    pub archetype: String,
     pub priority: i32,
     pub status: String,
     pub claimed_by: Option<String>,
@@ -113,6 +114,7 @@ pub fn get_task_context(task_id: &str) -> Result<TaskContext, String> {
         title: task.title,
         description: task.description,
         task_type: task.task_type,
+        archetype: task.archetype,
         priority: task.priority,
         status: task.status.as_str().to_string(),
         claimed_by: task.claimed_by,
@@ -133,6 +135,7 @@ pub fn format_task_context(ctx: &TaskContext) -> String {
     // Task metadata
     out.push_str("## Overview\n\n");
     out.push_str(&format!("- **Type**: {}\n", ctx.task_type.label()));
+    out.push_str(&format!("- **Archetype**: {}\n", ctx.archetype));
     out.push_str(&format!("- **Priority**: {}\n", ctx.priority));
     out.push_str(&format!("- **Status**: {}\n", ctx.status));
     if let Some(ref agent) = ctx.claimed_by {
@@ -208,52 +211,10 @@ pub fn format_task_context(ctx: &TaskContext) -> String {
     out
 }
 
-/// Get task-type-specific guidance
+/// Get task-type-specific guidance (PM workflow types only)
+/// Domain-specific guidance is now provided by archetype prompts
 fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
     match task_type {
-        // Domain-based types (archetypes)
-        SqliteTaskType::Frontend => r#"**Frontend Design Guidance:**
-- Prioritize user experience and accessibility
-- Follow design system patterns in the codebase
-- Write semantic HTML with proper ARIA labels
-- Test across viewports for responsive design
-- Use existing component patterns
-- Consider animation and transitions thoughtfully"#.to_string(),
-
-        SqliteTaskType::Backend => r#"**Backend API Guidance:**
-- Design APIs for extensibility and consistency
-- Validate all inputs at system boundaries
-- Handle errors gracefully with appropriate status codes
-- Write efficient database queries
-- Follow existing patterns in the codebase
-- Consider authentication/authorization requirements"#.to_string(),
-
-        SqliteTaskType::Data => r#"**Data Engineering Guidance:**
-- Design for idempotency in pipelines
-- Handle nulls and edge cases explicitly
-- Optimize for query patterns
-- Document data lineage and transformations
-- Validate data at boundaries
-- Consider schema migration impacts"#.to_string(),
-
-        SqliteTaskType::Review => r#"**Code Review Guidance:**
-- Review for correctness first, style second
-- Provide specific, actionable feedback
-- Check for edge cases and error paths
-- Verify tests cover the changes
-- Look for security implications
-- Suggest improvements with examples"#.to_string(),
-
-        SqliteTaskType::Security => r#"**Security Specialist Guidance:**
-- Assume all input is malicious
-- Check authentication on every endpoint
-- Verify authorization checks exist
-- Look for hardcoded secrets and credentials
-- Review crypto implementations carefully
-- Check for information disclosure risks
-- Consider OWASP Top 10 vulnerabilities"#.to_string(),
-
-        // Action-based types (legacy)
         SqliteTaskType::BugFix => r#"**Bug Fix Guidance:**
 - First, reproduce the bug to understand it
 - Identify the root cause before making changes

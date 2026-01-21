@@ -243,6 +243,8 @@ pub fn show_task(_workspace_root: &Path, task_id: &str) -> Result<TaskShowOutput
         description: sqlite_task.description,
         priority: sqlite_task.priority,
         status: sqlite_task.status.as_str().to_string(),
+        task_type: Some(sqlite_task.task_type.as_str().to_string()),
+        archetype: Some(sqlite_task.archetype),
         depends_on: depends_on.clone(),
         footprint,
     };
