@@ -109,27 +109,24 @@ bacchus archetype prompt security
 bacchus archetype select TASK-001
 ```
 
-### Available Archetypes
+### Discovering Archetypes
 
-| Key | Name | Focus |
-|-----|------|-------|
-| `frontend` | Frontend Design | UI/UX, components, styling, accessibility |
-| `backend` | Backend API | APIs, auth, validation, error handling |
-| `data` | Data Engineer | Pipelines, SQL, schemas, ETL |
-| `test` | Test Engineer | Coverage, fixtures, e2e, mocks |
-| `infra` | Infrastructure | CI/CD, containers, cloud, monitoring |
-| `review` | Code Reviewer | Quality, patterns, correctness |
-| `security` | Security Specialist | Vulnerabilities, OWASP, secrets |
-| `generic` | Generic | General development (default) |
+Archetypes are defined in `archetypes.yaml`. Use CLI commands to explore:
+
+```bash
+bacchus archetype list                    # List all archetypes
+bacchus archetype show frontend           # See details for one
+```
 
 ### Customizing Archetypes
 
-Copy `archetypes.yaml` to `.bacchus/archetypes.yaml` in your project to customize:
+Copy to your project to customize:
 
 ```bash
 cp ~/.claude/skills/bacchus/archetypes.yaml .bacchus/archetypes.yaml
-# Edit .bacchus/archetypes.yaml as needed
 ```
+
+Project-level `.bacchus/archetypes.yaml` takes precedence over the skill default.
 
 ## Orchestrator Mode
 

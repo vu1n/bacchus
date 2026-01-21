@@ -200,7 +200,7 @@ Tasks have two orthogonal classifications:
 | `security` | Vulnerabilities, OWASP, secrets |
 | `generic` | General development (default) |
 
-**Key design decision**: Archetype is explicitly set by the planner (no inference). The orchestrator uses the archetype to load specialized agent prompts.
+**Key design decision**: Archetype is explicitly set by the planner (no inference). Full definitions with prompts are in `archetypes.yaml`.
 
 ## Key Modules
 

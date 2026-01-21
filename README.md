@@ -425,7 +425,7 @@ Tasks have two separate classifications:
 | `security` | Vulnerabilities, OWASP |
 | `generic` | General development |
 
-Archetypes are explicitly set by the planner - no inference. The orchestrator uses the archetype to load specialized agent prompts.
+Archetypes are explicitly set by the planner. Full definitions with prompts are in `archetypes.yaml`. Run `bacchus archetype list` to see available archetypes.
 
 ## Workflow
 
