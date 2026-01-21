@@ -39,35 +39,40 @@ cp target/release/bacchus ~/.local/bin/
 curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/uninstall.sh | bash
 ```
 
-## Quick Start
+## How It Works
 
-```bash
-# Initialize jj repo (if not already)
-jj git init --colocate  # or jj init
+Bacchus coordinates multi-agent work through a **plan → orchestrate → execute** flow:
 
-# Initialize tasks
-bacchus task init
-# Edit .bacchus/tasks.yaml to define tasks
-bacchus task import --epic-id MY-EPIC
-
-# Get next ready task (creates workspace, claims it)
-bacchus next agent-1
-
-# Or claim a specific task
-bacchus claim TASK-42 agent-1
-
-# Work in the isolated workspace (use -R flag, don't cd)
-jj -R .bacchus/workspaces/TASK-42 status
-# ... make changes (auto-snapshotted by jj) ...
-jj -R .bacchus/workspaces/TASK-42 describe -m "Implement feature"
-
-# Mark ready for release (orchestrator will merge)
-bacchus release TASK-42 --status done
 ```
+┌─────────────────────────────────────────────────────────────────────┐
+│  1. PLAN                                                            │
+│     User request → /bacchus-planner or /bacchus-architect          │
+│     Breaks down work into tasks with dependencies                   │
+│     Outputs: .bacchus/tasks.yaml                                    │
+├─────────────────────────────────────────────────────────────────────┤
+│  2. IMPORT                                                          │
+│     bacchus task import --epic-id <EPIC>                           │
+│     Loads tasks from YAML into SQLite                               │
+│     Calculates ready tasks (no blockers, no footprint conflicts)   │
+├─────────────────────────────────────────────────────────────────────┤
+│  3. ORCHESTRATE                                                     │
+│     /bacchus-orchestrate spawns agents for ready tasks             │
+│     Monitors progress, handles merges, manages conflicts            │
+├─────────────────────────────────────────────────────────────────────┤
+│  4. EXECUTE                                                         │
+│     Each agent: claim → work in jj workspace → release             │
+│     Orchestrator: rebase → merge to main → close task              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Key roles:**
+- **Planner/Architect**: Breaks down requests into atomic tasks with dependencies
+- **Orchestrator**: Spawns agents, monitors progress, handles merges
+- **Agent**: Works on a single task in an isolated workspace
 
 ## Quickstart Guide
 
-This guide walks through setting up Bacchus for a multi-agent workflow on an existing project.
+This guide walks through setting up Bacchus for a multi-agent workflow.
 
 ### Step 1: Initialize Your Repository
 
@@ -87,9 +92,17 @@ jj describe -m "Initial commit"
 jj new
 ```
 
-### Step 2: Define Your Tasks
+### Step 2: Plan Your Tasks
 
-Create a task definition file:
+You can create tasks manually or use the planner:
+
+**Option A: Use the planner (recommended for complex work)**
+```
+/bacchus-planner
+```
+The planner analyzes your request and creates tasks with proper dependencies.
+
+**Option B: Create tasks manually**
 
 ```bash
 bacchus task init
@@ -249,13 +262,23 @@ bacchus stale --minutes 30
 bacchus stale --minutes 30 --cleanup
 ```
 
-**Using with Claude Code plugin:**
+**Full workflow with Claude Code plugin:**
 ```bash
-# Start agent session (stop hook keeps you working)
-/bacchus-agent AUTH-001
+# 1. Plan: break down your request into tasks
+/bacchus-planner
+# (creates .bacchus/tasks.yaml with task breakdown)
 
-# Or run as orchestrator (spawns multiple agents)
+# 2. Import tasks to SQLite
+bacchus task import --epic-id MY-FEATURE
+
+# 3. Orchestrate: spawn agents and monitor
 /bacchus-orchestrate --max_concurrent 3
+# (orchestrator handles everything from here)
+```
+
+**Single task mode:**
+```bash
+/bacchus-agent AUTH-001
 ```
 
 ## Commands
@@ -316,31 +339,43 @@ bacchus stale --minutes 30 --cleanup
 
 ## Claude Code Plugin
 
-The plugin provides stop hooks that keep agents working until tasks complete:
+The plugin provides commands and stop hooks for multi-agent coordination:
 
-### Agent Mode
-
-```
-/bacchus-agent TASK-42
-```
-
-Starts an agent session. The stop hook blocks exit until the task is closed.
-
-### Orchestrator Mode
+### Planning Commands
 
 ```
-/bacchus-orchestrate --max_concurrent 3
+/bacchus-planner
 ```
-
-Spawns agents for ready tasks and monitors progress. Blocks exit while work remains.
-
-### Cancel Session
+Breaks down a complex request into atomic tasks with dependencies. Creates `.bacchus/tasks.yaml`.
 
 ```
-/bacchus-cancel
+/bacchus-architect <agent_id>
 ```
+Persistent architect agent that processes epics and creates task breakdowns.
 
-Clears session and allows normal exit.
+### Execution Commands
+
+```
+/bacchus-agent <task_id>
+```
+Starts an agent session on a specific task. The stop hook blocks exit until the task is closed.
+
+```
+/bacchus-orchestrate [--max_concurrent N]
+```
+Spawns agents for ready tasks and monitors progress. Handles merges and conflicts. Blocks exit while work remains.
+
+### Utility Commands
+
+```
+/bacchus-cancel [--cleanup]
+```
+Clears session and allows normal exit. Use `--cleanup` to also remove stale workspaces.
+
+```
+/bacchus-context
+```
+Generate context summary for the current session (global or task-specific).
 
 ## Workflow
 
