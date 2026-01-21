@@ -132,6 +132,23 @@ Project-level `.bacchus/archetypes.yaml` takes precedence over the skill default
 
 When orchestrating, spawn agents using the Task tool with archetype-specific prompts.
 
+### Prerequisites
+
+Before spawning agents, ensure jj is initialized:
+
+```bash
+# Check if jj is initialized
+if ! jj root 2>/dev/null; then
+  # Initialize jj in colocated mode (works with existing git repo)
+  jj git init --colocate
+  jj config set --repo user.name "Bacchus"
+  jj config set --repo user.email "bacchus@localhost"
+  jj bookmark create main -r @
+  jj describe -m "Initial commit"
+  jj new
+fi
+```
+
 ### Spawning Agents
 
 1. Get the archetype for a task:
@@ -139,12 +156,15 @@ When orchestrating, spawn agents using the Task tool with archetype-specific pro
 bacchus archetype select TASK-001
 ```
 
-2. Use the Task tool with the archetype prompt:
+2. Spawn agent with Task tool in background, using `--dangerously-skip-permissions` for autonomous execution:
+
 ```
 Task tool:
   subagent_type: "general-purpose"
   run_in_background: true
   prompt: |
+    Run with: --dangerously-skip-permissions
+
     [Archetype prompt from bacchus archetype prompt <type>]
 
     ## Your Task
@@ -178,6 +198,8 @@ Task tool:
     bacchus release {task_id} --status done
     ```
 ```
+
+**Note**: Agents run in yolo mode (`--dangerously-skip-permissions`) to work autonomously without permission prompts.
 
 ## Session Management
 
