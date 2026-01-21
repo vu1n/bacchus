@@ -1,4 +1,4 @@
-//! Claim task tool - claims a specific task by ID, creates worktree
+//! Claim task tool - claims a specific task by ID, creates jj workspace
 //!
 //! Unlike `next`, this claims a specific task rather than the next ready one.
 //! By default, only claims ready tasks (open, no blockers). Use --force to override.
@@ -6,7 +6,7 @@
 use crate::db::with_db;
 use crate::tasks::{self, SqliteTaskStatus};
 use crate::tools::eval::{self, EventType};
-use crate::worktree;
+use crate::workspace;
 use rusqlite::params;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,7 @@ pub struct ClaimOutput {
     pub task_id: String,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub worktree_path: Option<String>,
-    pub branch: Option<String>,
+    pub workspace_path: Option<String>,
     pub message: String,
 }
 
@@ -44,8 +43,7 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
                 task_id: task_id.to_string(),
                 title: Some(task.title),
                 description: task.description,
-                worktree_path: None,
-                branch: None,
+                workspace_path: None,
                 message: format!("Task {} is already closed", task_id),
             });
         }
@@ -85,13 +83,13 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
 
     match claim_result {
         Ok(task) => {
-            // Create worktree for the task
-            let wt = worktree::create_worktree(workspace_root, task_id).map_err(|e| {
+            // Create jj workspace for the task
+            let ws = workspace::create_workspace(workspace_root, task_id).map_err(|e| {
                 // Rollback: release the SQLite claim
                 let _ = tasks::release_sqlite_task(task_id, agent_id);
                 rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
-                    Some(format!("Failed to create worktree: {}", e)),
+                    Some(format!("Failed to create workspace: {}", e)),
                 )
             })?;
 
@@ -108,9 +106,8 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
                 task_id: task.id,
                 title: Some(task.title),
                 description: task.description,
-                worktree_path: Some(wt.path.to_string_lossy().to_string()),
-                branch: Some(wt.branch),
-                message: format!("Claimed {} - work in {}", task_id, wt.path.display()),
+                workspace_path: Some(ws.path.to_string_lossy().to_string()),
+                message: format!("Claimed {} - work in {}", task_id, ws.path.display()),
             })
         }
         Err(tasks::TasksError::NotReady(msg)) => {
@@ -120,8 +117,7 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
                 task_id: task_id.to_string(),
                 title: task.as_ref().map(|t| t.title.clone()),
                 description: task.and_then(|t| t.description),
-                worktree_path: None,
-                branch: None,
+                workspace_path: None,
                 message: format!(
                     "Task {} is not ready: {}. Use --force to override.",
                     task_id, msg
@@ -133,8 +129,7 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
             task_id: task_id.to_string(),
             title: None,
             description: None,
-            worktree_path: None,
-            branch: None,
+            workspace_path: None,
             message: format!("Task {} not found", task_id),
         }),
         Err(e) => Err(rusqlite::Error::SqliteFailure(

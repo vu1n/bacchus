@@ -1,10 +1,10 @@
-//! Resolve tool - complete a merge after manual conflict resolution
+//! Resolve tool - mark task ready for release after resolving conflicts
 //!
-//! Finishes the merge, removes worktree, and updates task status.
-//! Uses SQLite-based task management.
+//! In jj workflow, after manually resolving conflicts in the workspace,
+//! this validates the workspace and marks the task ready for release again.
 
 use crate::tasks::{self, SqliteTaskStatus};
-use crate::worktree;
+use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -12,7 +12,8 @@ use std::path::Path;
 pub struct ResolveOutput {
     pub success: bool,
     pub task_id: String,
-    pub merged: bool,
+    pub ready_for_release: bool,
+    pub commit_id: Option<String>,
     pub message: String,
 }
 
@@ -27,7 +28,8 @@ pub fn resolve_merge(
             return Ok(ResolveOutput {
                 success: false,
                 task_id: task_id.to_string(),
-                merged: false,
+                ready_for_release: false,
+                commit_id: None,
                 message: format!("Task {} not found", task_id),
             });
         }
@@ -38,68 +40,90 @@ pub fn resolve_merge(
         return Ok(ResolveOutput {
             success: false,
             task_id: task_id.to_string(),
-            merged: false,
+            ready_for_release: false,
+            commit_id: None,
             message: format!("No claim found for {}", task_id),
         });
     }
 
     let agent_id = task.claimed_by.clone().unwrap_or_default();
 
-    // 2. Check we're in a merge state
-    if !worktree::is_in_merge_conflict(workspace_root)? {
+    // 2. Check task is in needs_resolution status (or in_progress if continuing work)
+    if task.status != SqliteTaskStatus::NeedsResolution && task.status != SqliteTaskStatus::InProgress {
         return Ok(ResolveOutput {
             success: false,
             task_id: task_id.to_string(),
-            merged: false,
-            message: "Not in a merge state. Use 'bacchus release --status done' instead.".to_string(),
+            ready_for_release: false,
+            commit_id: None,
+            message: format!(
+                "Task {} is in '{}' status. Use 'bacchus release --status done' for normal completion.",
+                task_id,
+                task.status.as_str()
+            ),
         });
     }
 
-    // 3. Verify the merge is for this task's branch
-    let merge_branch = worktree::get_merge_branch(workspace_root)?;
-    let expected = format!("bacchus/{}", task_id);
+    // 3. Check for remaining conflicts in workspace
+    if workspace::has_conflicts(workspace_root, task_id).unwrap_or(false) {
+        let files = workspace::get_conflict_files(workspace_root, task_id).unwrap_or_default();
+        return Ok(ResolveOutput {
+            success: false,
+            task_id: task_id.to_string(),
+            ready_for_release: false,
+            commit_id: None,
+            message: format!(
+                "Unresolved conflicts remain in: {}. Use 'jj resolve' to fix them.",
+                files.join(", ")
+            ),
+        });
+    }
 
-    if let Some(ref branch) = merge_branch {
-        if branch != &expected {
+    // 4. Validate single-commit workflow
+    let commit_id = match workspace::validate_single_commit(workspace_root, task_id) {
+        Ok(id) => id,
+        Err(workspace::WorkspaceError::NoCommits(..)) => {
             return Ok(ResolveOutput {
                 success: false,
                 task_id: task_id.to_string(),
-                merged: false,
+                ready_for_release: false,
+                commit_id: None,
+                message: format!("Task {} has no commits. Make changes before resolving.", task_id),
+            });
+        }
+        Err(workspace::WorkspaceError::MultipleCommits(_, count)) => {
+            return Ok(ResolveOutput {
+                success: false,
+                task_id: task_id.to_string(),
+                ready_for_release: false,
+                commit_id: None,
                 message: format!(
-                    "Current merge is for '{}', not '{}'. Resolve the correct task.",
-                    branch, expected
+                    "Task {} has {} commits. Squash to single commit before resolving.",
+                    task_id, count
                 ),
             });
         }
-    }
+        Err(e) => {
+            return Ok(ResolveOutput {
+                success: false,
+                task_id: task_id.to_string(),
+                ready_for_release: false,
+                commit_id: None,
+                message: format!("Failed to validate workspace: {}", e),
+            });
+        }
+    };
 
-    // 4. Check for unresolved conflicts
-    if worktree::has_unresolved_conflicts(workspace_root)? {
-        return Ok(ResolveOutput {
-            success: false,
-            task_id: task_id.to_string(),
-            merged: false,
-            message: "Unresolved conflicts remain. Fix all conflicts and stage changes with 'git add'.".to_string(),
-        });
-    }
-
-    // 5. Complete the merge
-    worktree::complete_merge(workspace_root)?;
-
-    // 6. Remove worktree (non-force since we merged)
-    worktree::remove_worktree(workspace_root, task_id, false)?;
-
-    // 7. Release SQLite task (marks as closed and clears claim)
-    if !agent_id.is_empty() {
-        tasks::release_sqlite_task(task_id, &agent_id)?;
-    } else {
-        tasks::update_sqlite_task_status(task_id, SqliteTaskStatus::Closed)?;
-    }
+    // 5. Mark task ready for release again
+    tasks::mark_task_ready_for_release(task_id, &agent_id, &commit_id)?;
 
     Ok(ResolveOutput {
         success: true,
         task_id: task_id.to_string(),
-        merged: true,
-        message: format!("Merge completed for {}. Worktree removed, task closed.", task_id),
+        ready_for_release: true,
+        commit_id: Some(commit_id),
+        message: format!(
+            "Conflicts resolved for {}. Task marked ready for release. Orchestrator will merge.",
+            task_id
+        ),
     })
 }

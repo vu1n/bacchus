@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "bacchus")]
-#[command(about = "Worktree-based coordination CLI for multi-agent work")]
+#[command(about = "Workspace-based coordination CLI for multi-agent work")]
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
@@ -16,16 +16,16 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     // ========================================================================
-    // Coordination Commands (worktree-based)
+    // Coordination Commands (jj workspace-based)
     // ========================================================================
 
-    /// Get next ready task, create worktree, claim it
+    /// Get next ready task, create workspace, claim it
     Next {
         /// Your agent ID
         agent_id: String,
     },
 
-    /// Claim a specific task by ID, create worktree
+    /// Claim a specific task by ID, create workspace
     Claim {
         /// The task ID to claim
         task_id: String,
@@ -36,22 +36,22 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Release a claimed task
+    /// Release a claimed task (marks ready for orchestrator merge)
     Release {
         /// The task ID to release
         task_id: String,
-        /// Release status: done (merge), blocked (keep), or failed (discard)
+        /// Release status: done (ready for merge), blocked (keep), or failed (discard)
         #[arg(long, default_value = "done")]
         status: String,
     },
 
-    /// Abort a failed merge for a task
+    /// Abort a release that needs resolution, continue working
     Abort {
-        /// The task ID with a failed merge
+        /// The task ID to abort release for
         task_id: String,
     },
 
-    /// Resolve a merge conflict after manual resolution
+    /// Mark task ready for release after resolving conflicts
     Resolve {
         /// The task ID with resolved conflicts
         task_id: String,
@@ -62,12 +62,12 @@ pub enum Commands {
         /// Minutes without activity to consider stale
         #[arg(short, long, default_value = "15")]
         minutes: i64,
-        /// Clean up stale claims (remove worktrees, reset tasks)
+        /// Clean up stale claims (remove workspaces, reset tasks)
         #[arg(long)]
         cleanup: bool,
     },
 
-    /// List all active claims and worktrees
+    /// List all active claims and workspaces
     List,
 
     /// Review a task before release (advisory checks)

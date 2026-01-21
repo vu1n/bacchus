@@ -1,4 +1,4 @@
-//! Bacchus - Worktree-based coordination CLI for multi-agent work
+//! Bacchus - Workspace-based coordination CLI for multi-agent work
 
 mod cli;
 mod config;
@@ -9,7 +9,8 @@ mod messages;
 mod tasks;
 mod tools;
 mod updater;
-mod worktree;
+mod workspace;
+mod worktree; // TODO: Remove after full jj migration
 
 use clap::Parser;
 use cli::{Cli, Commands, EpicCommands, MessageCommands, SessionCommands, TaskCommands};

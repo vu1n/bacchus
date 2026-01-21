@@ -1,6 +1,6 @@
 # Bacchus Plugin for Claude Code
 
-Multi-agent coordination with persistent stop hooks. Agents keep working until tasks are closed. Orchestrator spawns agents for ready work.
+Multi-agent coordination with persistent stop hooks using jj (Jujutsu) workspaces. Agents keep working until tasks are closed. Orchestrator spawns agents for ready work and handles merging.
 
 ## Installation
 
@@ -16,7 +16,8 @@ Restart Claude Code after installation.
 
 ## Prerequisites
 
-- [bacchus CLI](https://github.com/vu1n/bacchus) v0.4.0+ installed and in PATH
+- [bacchus CLI](https://github.com/vu1n/bacchus) v0.5.0+ installed and in PATH
+- [jj (Jujutsu)](https://martinvonz.github.io/jj/latest/install/) v0.20+ installed
 
 Note: The stop hook gracefully degrades (approves exit) if dependencies are missing or error.
 

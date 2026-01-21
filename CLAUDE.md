@@ -2,14 +2,17 @@
 
 ## Overview
 
-Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. It provides isolated git worktrees for parallel agent work with SQLite-based task management.
+Bacchus is a workspace-based coordination CLI for multi-agent work on codebases. It provides isolated jj workspaces for parallel agent work with SQLite-based task management.
 
 **Key concepts:**
 - **epics** = High-level work containers (groups of related tasks)
 - **tasks** = What needs to be done (stored in SQLite, can import from YAML)
 - **claims** = Who's doing what right now (task.claimed_by in SQLite)
+- **workspaces** = Isolated jj workspaces for each task
 
 ## Architecture
+
+### System Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -31,14 +34,106 @@ Bacchus is a worktree-based coordination CLI for multi-agent work on codebases. 
          │                              │
          ▼                              ▼
 ┌──────────────────────┐    ┌─────────────────────┐
-│ .bacchus/            │    │ git                 │
+│ .bacchus/            │    │ jj                  │
 │ ├── bacchus.db ────────── │ (SQLite: epics,     │
-│ │   tasks, claims)   │    │  Worktrees          │
-│ ├── tasks.yaml ──────────▶│  Branches           │
-│ │   (import only)    │    │  Merges             │
-│ ├── session.json     │    └─────────────────────┘
-│ └── worktrees/       │
+│ │   tasks, claims)   │    │  Workspaces         │
+│ ├── tasks.yaml ──────────▶│  main bookmark      │
+│ │   (import only)    │    └─────────────────────┘
+│ ├── session.json     │
+│ └── workspaces/      │
 └──────────────────────┘
+```
+
+### Agent vs Orchestrator Roles
+
+Bacchus separates concerns between agents (who do work) and orchestrators (who coordinate):
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                           ORCHESTRATOR                                 │
+│  • Monitors task queue for ready work                                 │
+│  • Spawns agent subprocesses for ready tasks                          │
+│  • Picks up ready_for_release tasks and merges them                   │
+│  • Handles conflicts by marking needs_resolution                      │
+│  • Advances main bookmark only after successful rebase                │
+└───────────────────────────────────────────────────────────────────────┘
+        │                    │                    │
+        │ spawn              │ spawn              │ spawn
+        ▼                    ▼                    ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   AGENT 1     │    │   AGENT 2     │    │   AGENT 3     │
+│   AUTH-001    │    │   AUTH-002    │    │   AUTH-003    │
+│               │    │               │    │               │
+│ • claim task  │    │ • claim task  │    │ • claim task  │
+│ • work in ws  │    │ • work in ws  │    │ • work in ws  │
+│ • release     │    │ • release     │    │ • release     │
+│   (mark ready)│    │   (mark ready)│    │   (mark ready)│
+└───────────────┘    └───────────────┘    └───────────────┘
+        │                    │                    │
+        └────────────────────┴────────────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │ ready_for_release│
+                    │     queue        │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │  ORCHESTRATOR   │
+                    │  picks up and   │
+                    │  rebases onto   │
+                    │     main        │
+                    └─────────────────┘
+```
+
+### Release Flow (Detailed)
+
+```
+Agent completes work
+        │
+        ▼
+bacchus release TASK-42 --status done
+        │
+        ├─► Validates single commit in workspace
+        ├─► Checks for existing conflicts
+        ├─► Records commit ID in ready_commit_id
+        └─► Sets status = ready_for_release
+                    │
+                    ▼
+        ┌───────────────────────┐
+        │  Orchestrator polls   │
+        │  for ready_for_release│
+        │  tasks periodically   │
+        └───────────┬───────────┘
+                    │
+                    ▼
+        ┌───────────────────────┐
+        │  start_task_release() │
+        │  • status = releasing │
+        │  • jj rebase onto main│
+        │  • record new commit  │
+        └───────────┬───────────┘
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+     No conflicts        Has conflicts
+          │                   │
+          ▼                   ▼
+    ┌───────────┐      ┌─────────────────┐
+    │ advance   │      │ mark_task_      │
+    │ main      │      │ needs_resolution│
+    │ bookmark  │      └────────┬────────┘
+    └─────┬─────┘               │
+          │                     ▼
+          ▼              Agent resolves with
+    ┌───────────┐        jj resolve, then
+    │ complete_ │        bacchus resolve
+    │ release() │               │
+    │ • closed  │               │
+    │ • cleanup │        (loops back to
+    │   workspace│        ready_for_release)
+    └───────────┘
 ```
 
 ## Source Code Structure
@@ -49,7 +144,8 @@ src/
 ├── cli/mod.rs           # Clap command definitions
 ├── tasks.rs             # SQLite task management + YAML import
 ├── epics.rs             # Epic management
-├── worktree.rs          # Git worktree operations
+├── workspace.rs         # jj workspace operations
+├── worktree.rs          # (deprecated) Git worktree operations
 ├── db/                  # SQLite database (schema, connection)
 ├── indexer/             # Tree-sitter symbol extraction
 ├── updater.rs           # Self-update functionality
@@ -59,11 +155,11 @@ src/
     ├── session.rs       # Session management for stop hooks
     ├── claim.rs         # Claim specific task
     ├── next.rs          # Claim next ready task
-    ├── release.rs       # Release task (merge/cleanup)
+    ├── release.rs       # Release task (mark ready for release)
     ├── stale.rs         # Find/cleanup abandoned claims
     ├── list.rs          # List active claims
-    ├── abort.rs         # Abort merge conflict
-    ├── resolve.rs       # Resolve merge conflict
+    ├── abort.rs         # Reset task from needs_resolution
+    ├── resolve.rs       # Mark resolved task ready for release
     ├── symbols.rs       # Symbol search
     └── context/         # Context generation
 ```
@@ -82,9 +178,12 @@ pub struct SqliteTask {
     pub title: String,
     pub description: Option<String>,
     pub priority: i32,
-    pub status: String,          // draft | open | in_progress | blocked | closed
+    pub status: String,          // draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
     pub claimed_by: Option<String>,
     pub claimed_at: Option<i64>,
+    pub ready_commit_id: Option<String>,    // jj commit ID when marked ready
+    pub release_commit_id: Option<String>,  // jj commit ID after rebase
+    pub release_started_at: Option<i64>,
 }
 
 // Key functions:
@@ -93,12 +192,42 @@ pub fn claim_sqlite_task(task_id, agent_id) -> Result<SqliteTask>
 pub fn claim_next_sqlite_task(agent_id) -> Result<Option<SqliteTask>>
 pub fn release_sqlite_task(task_id, new_status) -> Result<()>
 pub fn get_sqlite_task(task_id) -> Result<SqliteTask>
+
+// jj workflow functions:
+pub fn mark_task_ready_for_release(task_id, agent_id, commit_id) -> Result<()>
+pub fn start_task_release(task_id, release_commit_id) -> Result<()>
+pub fn complete_task_release(task_id) -> Result<()>
+pub fn mark_task_needs_resolution(task_id, conflict_files) -> Result<()>
+pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>>
 ```
 
 **Ready calculation**: A task is ready when:
 1. `status == "open"`
 2. All tasks in `depends_on` have `status == "closed"`
 3. No footprint collision with in-progress tasks
+
+### jj Workspace Operations (`src/workspace.rs`)
+
+jj workspace management for isolated agent work:
+
+```rust
+pub fn create_workspace(workspace_root, task_id) -> Result<WorkspaceInfo>
+pub fn remove_workspace(workspace_root, task_id, force) -> Result<()>
+pub fn validate_single_commit(workspace_root, task_id) -> Result<String>
+pub fn has_conflicts(workspace_root, task_id) -> Result<bool>
+pub fn get_conflict_files(workspace_root, task_id) -> Result<Vec<String>>
+
+// Orchestrator-only operations:
+pub fn rebase_workspace_onto_main(workspace_root, task_id) -> Result<ReleaseResult>
+pub fn advance_main_bookmark(workspace_root, commit_id) -> Result<()>
+pub fn complete_release(workspace_root, task_id) -> Result<()>
+pub fn is_commit_in_main(workspace_root, commit_id) -> Result<bool>
+```
+
+**Key design decisions:**
+- **Orchestrator-only release**: Only orchestrator advances main bookmark
+- **Single-commit per task**: Validated before marking ready
+- **Task ID = Workspace name**: For safe jj revset queries
 
 ### Session Management (`src/tools/session.rs`)
 
@@ -123,15 +252,50 @@ pub fn check_session() -> HookCheckOutput  // For stop hook
 1. `CLAUDE_PROJECT_DIR` env var (set by Claude Code for hooks)
 2. Walk up from CWD looking for `.bacchus` or `.git`
 
-### Worktree Operations (`src/worktree.rs`)
+## Task Status Lifecycle
 
-Git worktree management:
-
-```rust
-pub fn create_worktree(task_id, workspace_root) -> Result<WorktreeInfo>
-pub fn remove_worktree(task_id, workspace_root, force) -> Result<()>
-pub fn merge_worktree(task_id, workspace_root, target_branch) -> Result<()>
 ```
+                   ┌─────────┐
+                   │  draft  │
+                   └────┬────┘
+                        │ (import/open)
+                        ▼
+   ┌─────────────► ┌─────────┐ ◄─────────────┐
+   │               │  open   │               │
+   │               └────┬────┘               │
+   │                    │ (claim)            │
+   │                    ▼                    │
+   │ (failed)      ┌─────────────┐           │ (reset from
+   └───────────────│ in_progress │───────┐   │  needs_resolution)
+                   └──────┬──────┘       │   │
+                          │ (done)       │   │
+                          ▼              │   │
+                   ┌──────────────────┐  │   │
+                   │ ready_for_release│──┼───┘
+                   └────────┬─────────┘  │
+                            │ (orchestrator)
+                            ▼
+                   ┌──────────────┐       │
+                   │  releasing   │       │
+                   └──────┬───────┘       │
+                   ┌──────┴──────┐        │
+             success│            │conflicts│
+                   ▼             ▼         │
+             ┌─────────┐  ┌────────────────┐
+             │ closed  │  │needs_resolution│
+             └─────────┘  └────────────────┘
+```
+
+## Agent Release Workflow
+
+1. Agent completes work in workspace
+2. Agent runs `bacchus release <task_id> --status done`
+   - Validates single commit above main
+   - Checks for conflicts
+   - Marks task `ready_for_release` with commit ID
+3. Orchestrator picks up ready tasks
+4. Orchestrator rebases onto main, advances bookmark
+5. Task marked `closed`, workspace cleaned up
 
 ## Task YAML Format (Import Only)
 
@@ -181,11 +345,12 @@ bacchus session check
         │
         ├─► Agent mode:
         │   └─► Check task status
-        │       ├─► closed → approve (clear session)
+        │       ├─► closed/ready_for_release → approve (clear session)
         │       └─► not closed → block
         │
         └─► Orchestrator mode:
             ├─► ready tasks + capacity → block (spawn agents)
+            ├─► tasks ready_for_release → block (release them)
             ├─► active claims → block (wait)
             ├─► in_progress without claims → block (orphaned)
             └─► all done/blocked → approve (clear session)
@@ -244,17 +409,19 @@ All task state lives in SQLite (`bacchus.db`). YAML is import-only.
 ### Tasks Table
 
 ```sql
-CREATE TABLE tasks_v2 (
+CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
     epic_id TEXT NOT NULL REFERENCES epics(id),
     title TEXT NOT NULL,
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 5,
-    status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | blocked | closed
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
+    task_type TEXT NOT NULL DEFAULT 'generic',
     claimed_by TEXT,                        -- agent_id who claimed
     claimed_at INTEGER,                     -- Unix timestamp ms
-    lease_expires_at INTEGER,
-    heartbeat_at INTEGER,
+    ready_commit_id TEXT,                   -- jj commit ID when marked ready
+    release_commit_id TEXT,                 -- jj commit ID after rebase
+    release_started_at INTEGER,             -- When orchestrator started release
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER                      -- Soft delete
@@ -305,41 +472,117 @@ CREATE TABLE symbols (
 |----------|-------------|
 | `CLAUDE_PROJECT_DIR` | Set by Claude Code, used for workspace root detection |
 | `BACCHUS_DB_PATH` | Override database location |
-| `BACCHUS_WORKTREES` | Override worktrees directory |
+| `BACCHUS_WORKSPACES` | Override workspaces directory |
 
 ## Error Handling
 
 - **Stop hooks fail-open**: If bacchus errors, hooks approve exit (never trap user)
 - **Claim validates readiness**: Must be in ready list unless `--force`
-- **Merge conflicts**: Return structured error, user can resolve/abort
+- **Release conflicts**: Return structured error, orchestrator handles resolution
 
-## Critical: Worktree CWD Footgun
+## Critical: Workspace CWD Footgun
 
-**Never change the main session's working directory to a worktree.**
+**Never change the main session's working directory to a workspace.**
 
-Worktrees are ephemeral - they get deleted on `bacchus release`. If your shell's cwd points to a deleted worktree, all subsequent bash commands will fail with "no such file or directory".
+Workspaces are ephemeral - they get deleted on `bacchus release`. If your shell's cwd points to a deleted workspace, all subsequent bash commands will fail with "no such file or directory".
 
 ```bash
 # BAD - changes cwd to ephemeral directory
-cd .bacchus/worktrees/TASK-42
-git status
-# ... worktree gets deleted ...
+cd .bacchus/workspaces/TASK-42
+jj status
+# ... workspace gets deleted ...
 # Shell is now broken!
 
-# GOOD - use -C flag or absolute paths
-git -C .bacchus/worktrees/TASK-42 status
-git -C .bacchus/worktrees/TASK-42 add .
-git -C .bacchus/worktrees/TASK-42 commit -m "msg"
+# GOOD - use -R flag or absolute paths
+jj -R .bacchus/workspaces/TASK-42 status
+jj -R .bacchus/workspaces/TASK-42 commit -m "msg"
 ```
 
 **Mitigations:**
-1. Always use `git -C <worktree>` instead of `cd <worktree> && git`
+1. Always use `jj -R <workspace>` instead of `cd <workspace> && jj`
 2. Sub-agents spawned via Task tool are isolated - their cwd dying doesn't affect parent
 3. Before session end/summary, verify cwd is the main repo root
-4. Run `git worktree prune` to clean stale worktree refs
+
+## Eval Metrics Framework
+
+Bacchus tracks agent performance metrics for analysis and improvement.
+
+### Event Types
+
+| Event | Description |
+|-------|-------------|
+| `started` | Agent claimed the task |
+| `completed` | Task marked ready_for_release |
+| `failed` | Task released with status=failed |
+| `rework` | Task was re-claimed after previous completion |
+
+### Metrics Table
+
+```sql
+CREATE TABLE task_eval_metrics (
+    id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,  -- started | completed | failed | rework
+    event_data TEXT,           -- JSON with additional context
+    created_at INTEGER NOT NULL
+);
+```
+
+### Commands
+
+```bash
+# View completion metrics for last 7 days
+bacchus eval
+
+# Filter by epic
+bacchus eval --epic AUTH
+
+# Custom time range
+bacchus eval --days 30
+```
+
+### Metrics Reported
+
+- **Completion rate**: `completed / (completed + failed)`
+- **Rework rate**: `rework / completed`
+- **Average time to complete**: Mean duration from started to completed
+- **Tasks per agent**: Distribution of work across agents
+
+## jj-Specific Notes
+
+### Why jj over git worktrees?
+
+1. **Non-blocking conflicts**: jj allows commits with conflicts. Agents can continue working while conflicts exist elsewhere.
+2. **Auto-snapshot**: No explicit `git add` needed. Changes are automatically tracked.
+3. **Simpler rebasing**: `jj rebase` is more intuitive than git's.
+4. **Workspace isolation**: jj workspaces are lighter-weight than git worktrees.
+
+### jj Commands Reference
+
+| Task | Command |
+|------|---------|
+| Check status | `jj -R <workspace> status` |
+| View changes | `jj -R <workspace> diff` |
+| Describe (commit msg) | `jj -R <workspace> describe -m "msg"` |
+| View log | `jj -R <workspace> log` |
+| Resolve conflicts | `jj -R <workspace> resolve` |
+| Rebase onto main | `jj -R <workspace> rebase -d main` |
+
+### Bookmark vs Branch
+
+jj uses **bookmarks** instead of branches. The `main` bookmark points to the integration point where all work is merged.
+
+```bash
+# View bookmarks
+jj bookmark list
+
+# Advance main to commit
+jj bookmark set main -r <commit_id>
+```
 
 ## Dependencies
 
-- **Required**: `git`
+- **Required**: `jj` (Jujutsu VCS) v0.20+
 - **Build**: Rust toolchain, tree-sitter
 - **Runtime**: SQLite (bundled via rusqlite)

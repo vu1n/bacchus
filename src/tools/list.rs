@@ -1,4 +1,4 @@
-//! List active claims and worktrees
+//! List active claims and jj workspaces
 //!
 //! Uses SQLite-based task management.
 
@@ -16,8 +16,7 @@ pub struct ListOutput {
 pub struct ClaimInfo {
     pub task_id: String,
     pub agent_id: String,
-    pub worktree_path: String,
-    pub branch_name: String,
+    pub workspace_path: String,
     pub age_minutes: i64,
 }
 
@@ -47,8 +46,7 @@ pub fn list_claims() -> Result<ListOutput> {
                 Ok(ClaimInfo {
                     task_id: task_id.clone(),
                     agent_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    worktree_path: format!(".bacchus/worktrees/{}", task_id),
-                    branch_name: format!("bacchus/{}", task_id),
+                    workspace_path: format!(".bacchus/workspaces/{}", task_id),
                     age_minutes,
                 })
             })?

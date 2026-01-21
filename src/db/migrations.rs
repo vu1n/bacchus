@@ -83,14 +83,17 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 5,
-    status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | blocked | closed
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
     task_type TEXT NOT NULL DEFAULT 'generic',  -- Task type for context-aware prompting
     claimed_by TEXT,                        -- agent_id who claimed
     claimed_at INTEGER,                     -- Unix timestamp ms
+    ready_commit_id TEXT,                   -- jj commit ID when agent marks ready (pre-rebase)
+    release_commit_id TEXT,                 -- jj commit ID after rebase (for stuck detection)
+    release_started_at INTEGER,             -- When orchestrator started release attempt
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
-    CHECK (status IN ('draft', 'open', 'in_progress', 'blocked', 'closed')),
+    CHECK (status IN ('draft', 'open', 'in_progress', 'ready_for_release', 'releasing', 'needs_resolution', 'blocked', 'closed')),
     CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority);

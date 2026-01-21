@@ -51,12 +51,11 @@ Task tool:
     Then read the task details:
     bacchus task show {task_id}
 
-    Work in the worktree using -C flag (do NOT cd into it):
-    git -C .bacchus/worktrees/{task_id} status
-    git -C .bacchus/worktrees/{task_id} add .
-    git -C .bacchus/worktrees/{task_id} commit -m "message"
+    Work in the jj workspace using -R flag (do NOT cd into it):
+    jj -R .bacchus/workspaces/{task_id} status
+    jj -R .bacchus/workspaces/{task_id} describe -m "Implement feature"
 
-    When complete:
+    When complete (marks ready for orchestrator merge):
     bacchus release {task_id} --status done
 ```
 
@@ -68,9 +67,27 @@ bacchus stale --minutes 30  # Find stuck work
 bacchus task list     # Overall progress
 ```
 
-### 4. Handle Completions
+### 4. Handle Releases
 
-- Check for merge conflicts: `bacchus list` shows status
+Tasks marked `ready_for_release` need to be merged:
+
+```bash
+# Check for tasks ready to merge
+bacchus task list --status ready_for_release
+
+# For each ready task, the orchestrator rebases and merges
+# (This will be handled automatically - agents just mark ready)
+```
+
+### 5. Handle Conflicts
+
+If merge conflicts occur:
+- Task will be marked `needs_resolution`
+- Agent needs to resolve: `jj -R .bacchus/workspaces/{task_id} resolve`
+- Then mark resolved: `bacchus resolve {task_id}`
+
+### 6. Cleanup
+
 - Clean up stale claims: `bacchus stale --minutes 30 --cleanup`
 - Unblock dependencies if needed
 
@@ -78,7 +95,7 @@ bacchus task list     # Overall progress
 
 The hook will:
 - **BLOCK** if ready tasks exist and under max_concurrent
-- **BLOCK** if tasks are in_progress (wait for agents)
+- **BLOCK** if tasks are in_progress or ready_for_release (wait for agents/merge)
 - **APPROVE** if all tasks closed (session auto-clears)
 - **APPROVE** if only blocked tasks remain (needs manual intervention)
 

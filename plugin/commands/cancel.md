@@ -1,9 +1,9 @@
 ---
 name: bacchus-cancel
-description: Cancel active bacchus session and optionally cleanup worktrees.
+description: Cancel active bacchus session and optionally cleanup workspaces.
 arguments:
   - name: cleanup
-    description: If true, also cleanup worktrees and reset tasks (default false)
+    description: If true, also cleanup workspaces and reset tasks (default false)
     required: false
 ---
 
@@ -36,10 +36,10 @@ bacchus list
 For each active claim, decide what to do:
 
 ```bash
-# Keep work for later (preserves worktree)
+# Keep work for later (preserves workspace)
 bacchus release <task_id> --status blocked
 
-# Discard work (removes worktree)
+# Discard work (removes workspace)
 bacchus release <task_id> --status failed
 ```
 
@@ -50,7 +50,7 @@ bacchus release <task_id> --status failed
 bacchus stale --minutes 1 --cleanup
 ```
 
-This removes all worktrees and resets tasks to open.
+This removes all workspaces and resets tasks to open.
 {{/if}}
 
 ## Verify Cleanup

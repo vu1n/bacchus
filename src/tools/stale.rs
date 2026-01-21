@@ -5,7 +5,7 @@
 
 use crate::db::with_db;
 use crate::tasks::{self, SqliteTaskStatus};
-use crate::worktree;
+use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct StaleClaim {
     pub task_id: String,
     pub agent_id: String,
-    pub worktree_path: String,
+    pub workspace_path: String,
     pub claimed_at: i64,
     pub age_minutes: i64,
 }
@@ -55,12 +55,12 @@ pub fn find_stale(
                 let claimed_at = claimed_at.unwrap_or(0);
                 let task_id: String = row.get(0)?;
 
-                let worktree_path = format!(".bacchus/worktrees/{}", task_id);
+                let workspace_path = format!(".bacchus/workspaces/{}", task_id);
 
                 Ok(StaleClaim {
                     task_id,
                     agent_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    worktree_path,
+                    workspace_path,
                     claimed_at,
                     age_minutes: if claimed_at > 0 { (now - claimed_at) / 60000 } else { 0 },
                 })
@@ -75,13 +75,13 @@ pub fn find_stale(
 
     if cleanup {
         for claim in &stale_claims {
-            // Remove worktree (force to discard any changes)
-            if let Err(e) = worktree::remove_worktree(workspace_root, &claim.task_id, true) {
+            // Remove jj workspace (force to discard any changes)
+            if let Err(e) = workspace::remove_workspace(workspace_root, &claim.task_id, true) {
                 eprintln!(
-                    "Warning: Failed to remove worktree for {}: {}",
+                    "Warning: Failed to remove workspace for {}: {}",
                     claim.task_id, e
                 );
-                // Continue anyway - worktree might not exist
+                // Continue anyway - workspace might not exist
             }
 
             // Reset SQLite task to open

@@ -19,7 +19,7 @@ Run these commands to activate the stop hook and claim the task:
 # Start session (activates stop hook)
 bacchus session start agent --task-id "{{task_id}}"
 
-# Claim the task and create worktree
+# Claim the task and create jj workspace
 bacchus claim "{{task_id}}" agent-$$
 ```
 
@@ -39,30 +39,30 @@ This provides:
 - Footprint (files/symbols to modify/create)
 - Type-specific guidance
 
-## Work in the Worktree
+## Work in the Workspace
 
-After claiming, work in the isolated worktree at `.bacchus/worktrees/{{task_id}}/`.
+After claiming, work in the isolated jj workspace at `.bacchus/workspaces/{{task_id}}/`.
 
-> **Warning**: Do NOT `cd` into the worktree. Use `git -C` or absolute paths instead. The worktree is ephemeral and gets deleted on release - if your cwd points there, the shell breaks.
+> **Warning**: Do NOT `cd` into the workspace. Use `jj -R` or absolute paths instead. The workspace is ephemeral and gets deleted on release - if your cwd points there, the shell breaks.
 
 ```bash
-# Use -C flag for git operations
-git -C .bacchus/worktrees/{{task_id}} status
-git -C .bacchus/worktrees/{{task_id}} add .
-git -C .bacchus/worktrees/{{task_id}} commit -m "message"
+# Use -R flag for jj operations (changes are auto-snapshotted)
+jj -R .bacchus/workspaces/{{task_id}} status
+jj -R .bacchus/workspaces/{{task_id}} describe -m "Implement feature"
+jj -R .bacchus/workspaces/{{task_id}} diff
 
-# For other commands, use absolute paths
-cat .bacchus/worktrees/{{task_id}}/src/file.rs
+# For reading files, use absolute paths
+cat .bacchus/workspaces/{{task_id}}/src/file.rs
 ```
 
 ## Your Mission
 
 1. **Understand the task** from the task details
-2. **Implement the solution** in the worktree (use `-C` flag)
-3. **Commit your changes** as you go
+2. **Implement the solution** in the workspace (use `-R` flag)
+3. **Describe your change**: `jj -R <workspace> describe -m "message"`
 4. **Release the task**: `bacchus release {{task_id}} --status done`
 
-The release command will merge the worktree, close the task, and clear the session.
+The release marks the task ready for the orchestrator to merge. The orchestrator will rebase your commit onto main and close the task.
 
 ## Completion Criteria
 
@@ -70,7 +70,7 @@ Before releasing the task:
 - [ ] All acceptance criteria met
 - [ ] Code compiles/builds without errors
 - [ ] Tests pass (if applicable)
-- [ ] Changes committed
+- [ ] Change described with `jj describe`
 
 ## Commands Reference
 
@@ -84,12 +84,19 @@ bacchus task list
 # Check ready tasks
 bacchus task list --ready
 
-# Complete the work
+# Complete the work (marks ready for orchestrator)
 bacchus release {{task_id}} --status done
 
-# If blocked, release without merging
+# If blocked, release without completing
 bacchus release {{task_id}} --status blocked
 ```
+
+## Conflict Resolution
+
+If the orchestrator reports conflicts during merge:
+1. Your task will be marked `needs_resolution`
+2. Resolve conflicts in your workspace: `jj -R .bacchus/workspaces/{{task_id}} resolve`
+3. Mark resolved: `bacchus resolve {{task_id}}`
 
 ## Force Exit
 
