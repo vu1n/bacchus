@@ -17,7 +17,10 @@ curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.s
 
 This installs:
 - `bacchus` binary to `~/.local/bin/`
-- Claude Code plugin to `~/.claude/plugins/bacchus/`
+- Claude Code skill to `~/.claude/skills/bacchus/`
+- Stop hooks in `~/.claude/settings.json`
+
+No additional configuration needed - the skill and hooks are automatically available.
 
 ### Prerequisites
 
@@ -65,10 +68,28 @@ Bacchus coordinates multi-agent work through a **plan → orchestrate → execut
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### How to Prompt Claude
+
+For multi-agent parallel work, tell Claude what you want and mention bacchus:
+
+```
+"I want to add user authentication with login, logout, and password reset.
+Use bacchus to parallelize this work across multiple agents."
+```
+
+Claude will automatically plan the work, import tasks, and spawn agents with appropriate archetypes.
+
+| What you want | What to say |
+|---------------|-------------|
+| Full automation | "Use bacchus to implement X with N agents" |
+| Plan only | "Break down X into tasks for bacchus" |
+| Single task | "Work on task TASK-001 with bacchus" |
+| Check status | "Show bacchus status" |
+
 **Key roles:**
-- **Planner/Architect**: Breaks down requests into atomic tasks with dependencies
+- **Planner**: Breaks down requests into atomic tasks with dependencies
 - **Orchestrator**: Spawns agents, monitors progress, handles merges
-- **Agent**: Works on a single task in an isolated workspace
+- **Agent**: Works on a single task in an isolated workspace (with type-specific archetype)
 
 ## Quickstart Guide
 
@@ -94,13 +115,13 @@ jj new
 
 ### Step 2: Plan Your Tasks
 
-You can create tasks manually or use the planner:
+You can create tasks manually or ask Claude to help plan:
 
-**Option A: Use the planner (recommended for complex work)**
+**Option A: Ask Claude to plan (recommended for complex work)**
 ```
-/bacchus-planner
+"Break down user authentication into tasks for bacchus"
 ```
-The planner analyzes your request and creates tasks with proper dependencies.
+Claude will analyze your request and create tasks with proper dependencies.
 
 **Option B: Create tasks manually**
 
@@ -262,23 +283,22 @@ bacchus stale --minutes 30
 bacchus stale --minutes 30 --cleanup
 ```
 
-**Full workflow with Claude Code plugin:**
-```bash
-# 1. Plan: break down your request into tasks
-/bacchus-planner
-# (creates .bacchus/tasks.yaml with task breakdown)
+**Full workflow with Claude:**
+```
+# Tell Claude what you want:
+"Implement user authentication with bacchus using 3 agents"
 
-# 2. Import tasks to SQLite
-bacchus task import --epic-id MY-FEATURE
-
-# 3. Orchestrate: spawn agents and monitor
-/bacchus-orchestrate --max_concurrent 3
-# (orchestrator handles everything from here)
+# Claude will:
+# 1. Plan: break down into tasks.yaml
+# 2. Import: bacchus task import --epic-id AUTH
+# 3. Orchestrate: spawn agents and monitor progress
 ```
 
-**Single task mode:**
+**Manual orchestration:**
 ```bash
-/bacchus-agent AUTH-001
+# After planning and importing, start orchestrator session
+bacchus session start orchestrator --max-concurrent 3
+# Then ask Claude to spawn agents for ready tasks
 ```
 
 ## Commands
@@ -318,9 +338,35 @@ bacchus task import --epic-id MY-FEATURE
 |---------|-------------|
 | `session start agent --task-id <id>` | Start agent session (enables stop hook) |
 | `session start orchestrator [--max-concurrent N]` | Start orchestrator session |
+| `session start architect --agent-id <id>` | Start architect session |
 | `session stop` | Clear session, allow exit |
 | `session status` | Show current session state |
 | `session check` | Check if exit should be blocked (for hooks) |
+
+### Epic Management
+
+| Command | Description |
+|---------|-------------|
+| `epic list [--status X]` | List epics (open, planning, active, closed) |
+| `epic show <epic_id>` | Show epic details with task counts |
+| `epic create --id X --title Y [--description Z]` | Create a new epic |
+| `epic assign <epic_id> <agent_id>` | Assign epic to architect for breakdown |
+
+### Archetype Management
+
+| Command | Description |
+|---------|-------------|
+| `archetype list` | List available agent archetypes |
+| `archetype show <name>` | Show archetype details and keywords |
+| `archetype prompt <name>` | Get the specialized prompt for an archetype |
+| `archetype select <task_id>` | Select best archetype for a task |
+
+### Messaging
+
+| Command | Description |
+|---------|-------------|
+| `message list [--agent X] [--status Y]` | List agent messages |
+| `message send <agent> <type> <payload>` | Send message to agent |
 
 ### Symbols
 
@@ -328,6 +374,8 @@ bacchus task import --epic-id MY-FEATURE
 |---------|-------------|
 | `index <path>` | Index files for symbol search |
 | `symbols [--pattern X] [--kind Y]` | Search for symbols |
+| `symbols [--file X] [--lang Y]` | Filter by file path or language |
+| `symbols [--search X] [--fuzzy]` | Full-text search with fuzzy matching |
 
 ### Info
 
@@ -336,46 +384,44 @@ bacchus task import --epic-id MY-FEATURE
 | `status` | Show claims, orphaned workspaces, broken claims |
 | `context [--task-id X]` | Generate markdown context for agent |
 | `workflow` | Print protocol documentation |
+| `self-update` | Update bacchus to latest version |
+| `check-update` | Check if newer version is available |
 
-## Claude Code Plugin
+## Claude Code Integration
 
-The plugin provides commands and stop hooks for multi-agent coordination:
+Bacchus integrates with Claude Code through a skill and stop hooks:
 
-### Planning Commands
+### Skill
 
-```
-/bacchus-planner
-```
-Breaks down a complex request into atomic tasks with dependencies. Creates `.bacchus/tasks.yaml`.
+The bacchus skill (`~/.claude/skills/bacchus/SKILL.md`) provides:
+- Workflow guidance for planning, importing, and orchestrating tasks
+- Agent archetype prompts for specialized task execution
+- Command reference for the bacchus CLI
 
-```
-/bacchus-architect <agent_id>
-```
-Persistent architect agent that processes epics and creates task breakdowns.
+The skill is automatically loaded when you mention "bacchus" or multi-agent coordination.
 
-### Execution Commands
+### Stop Hooks
 
-```
-/bacchus-agent <task_id>
-```
-Starts an agent session on a specific task. The stop hook blocks exit until the task is closed.
+Stop hooks in `~/.claude/settings.json` prevent premature exit:
+- **Agent mode**: Blocks exit until assigned task is closed
+- **Orchestrator mode**: Blocks exit while work remains
 
-```
-/bacchus-orchestrate [--max_concurrent N]
-```
-Spawns agents for ready tasks and monitors progress. Handles merges and conflicts. Blocks exit while work remains.
+### Agent Archetypes
 
-### Utility Commands
+Tasks are assigned archetypes based on their type, which provides specialized prompts:
 
-```
-/bacchus-cancel [--cleanup]
-```
-Clears session and allows normal exit. Use `--cleanup` to also remove stale workspaces.
+| Type | Archetype | Focus |
+|------|-----------|-------|
+| frontend | Frontend Design | UI/UX, components, styling |
+| backend | Backend API | APIs, auth, validation |
+| data | Data Engineer | Pipelines, SQL, schemas |
+| test | Test Engineer | Coverage, fixtures, e2e |
+| infra | Infrastructure | CI/CD, containers, cloud |
+| review | Code Reviewer | Quality, patterns |
+| security | Security Specialist | Vulnerabilities, OWASP |
+| generic | Generic | General development |
 
-```
-/bacchus-context
-```
-Generate context summary for the current session (global or task-specific).
+Task types are inferred from title, description, or footprint patterns.
 
 ## Workflow
 

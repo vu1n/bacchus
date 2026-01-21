@@ -10,10 +10,9 @@ mod tasks;
 mod tools;
 mod updater;
 mod workspace;
-mod worktree; // TODO: Remove after full jj migration
 
 use clap::Parser;
-use cli::{Cli, Commands, EpicCommands, MessageCommands, SessionCommands, TaskCommands};
+use cli::{Cli, Commands, ArchetypeCommands, EpicCommands, MessageCommands, SessionCommands, TaskCommands};
 use std::path::PathBuf;
 
 fn main() {
@@ -357,6 +356,26 @@ fn main() {
                 }
             }
         }
+
+        // ====================================================================
+        // Archetype Commands
+        // ====================================================================
+        Commands::Archetype { command } => {
+            match command {
+                ArchetypeCommands::List => {
+                    Ok(tools::cmd_list_archetypes())
+                }
+                ArchetypeCommands::Show { name } => {
+                    Ok(tools::cmd_show_archetype(&name))
+                }
+                ArchetypeCommands::Prompt { name } => {
+                    Ok(tools::cmd_archetype_prompt(&name))
+                }
+                ArchetypeCommands::Select { task_id } => {
+                    Ok(tools::cmd_select_archetype(&task_id))
+                }
+            }
+        }
     };
 
     match result {
@@ -553,14 +572,13 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
                 let task_id: String = row.get(0)?;
                 let claimed_at: Option<i64> = row.get(2)?;
                 let age_minutes = claimed_at.map(|ca| (now_ms - ca) / 60000).unwrap_or(0);
-                let worktree_path = format!(".bacchus/worktrees/{}", task_id);
+                let workspace_path = format!(".bacchus/workspaces/{}", task_id);
                 Ok((serde_json::json!({
                     "task_id": &task_id,
                     "agent_id": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    "worktree_path": &worktree_path,
-                    "branch": format!("bacchus/{}", task_id),
+                    "workspace_path": &workspace_path,
                     "age_minutes": age_minutes
-                }), worktree_path))
+                }), workspace_path))
             })?
             .filter_map(|r| r.ok())
             .collect();
@@ -578,20 +596,20 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             |r| r.get(0),
         ).unwrap_or(0);
 
-        // Check for orphaned worktrees (worktrees on disk without claims)
-        let worktrees_dir = std::env::var("BACCHUS_WORKTREES")
+        // Check for orphaned workspaces (workspaces on disk without claims)
+        let workspaces_dir = std::env::var("BACCHUS_WORKSPACES")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| workspace_root.join(".bacchus/worktrees"));
+            .unwrap_or_else(|_| workspace_root.join(".bacchus/workspaces"));
 
-        let mut orphaned_worktrees: Vec<String> = Vec::new();
-        if worktrees_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&worktrees_dir) {
+        let mut orphaned_workspaces: Vec<String> = Vec::new();
+        if workspaces_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&workspaces_dir) {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
                     if path.is_dir() {
                         if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
                             if !claimed_task_ids.contains(dir_name) {
-                                orphaned_worktrees.push(dir_name.to_string());
+                                orphaned_workspaces.push(dir_name.to_string());
                             }
                         }
                     }
@@ -599,7 +617,7 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             }
         }
 
-        // Check for broken claims (claims where worktree doesn't exist)
+        // Check for broken claims (claims where workspace doesn't exist)
         let broken_claims: Vec<String> = claims.iter()
             .filter(|(_, path)| !workspace_root.join(path).exists())
             .filter_map(|(v, _)| v.get("task_id").and_then(|b| b.as_str()).map(String::from))
@@ -612,7 +630,7 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
             },
             "symbols_indexed": symbols_count,
             "ready_tasks": ready_count,
-            "orphaned_worktrees": orphaned_worktrees,
+            "orphaned_workspaces": orphaned_workspaces,
             "broken_claims": broken_claims
         }))
     })
@@ -648,22 +666,22 @@ bacchus task validate
    ```bash
    bacchus next <agent_id>
    ```
-   - Finds ready task from tasks.yaml (open, dependencies satisfied, no footprint conflicts)
-   - Creates worktree at .bacchus/worktrees/{task_id}/
+   - Finds ready task (open, dependencies satisfied, no footprint conflicts)
+   - Creates jj workspace at .bacchus/workspaces/{task_id}/
    - Claims task, updates status to in_progress
 
 2. **Do Work**
-   Work in the worktree. All changes are isolated on branch bacchus/{task_id}.
+   Work in the workspace. Changes are auto-snapshotted by jj.
 
 3. **Release When Done**
    ```bash
-   # Success - merge to main and cleanup
+   # Success - mark ready for release (orchestrator will merge)
    bacchus release <task_id> --status done
 
-   # Blocked - keep worktree, release claim
+   # Blocked - keep workspace, release claim
    bacchus release <task_id> --status blocked
 
-   # Failed - discard worktree, reset task
+   # Failed - discard workspace, reset task
    bacchus release <task_id> --status failed
    ```
 
@@ -721,7 +739,7 @@ bacchus context --task-id <task_id>
 ```
 
 - Run from repo root for global context.
-- Run inside a worktree for task context.
+- Run inside a workspace for task context.
 
 ## Status
 

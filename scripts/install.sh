@@ -5,7 +5,7 @@ REPO="vu1n/bacchus"
 INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
 SKILL_DIR="$HOME/.claude/skills/bacchus"
-PLUGIN_DIR="$HOME/.claude/plugins/bacchus"
+SETTINGS_FILE="$HOME/.claude/settings.json"
 
 # Colors
 RED='\033[0;31m'
@@ -19,9 +19,10 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # Check dependencies
 check_dependencies() {
-    # git is required for worktree operations
-    if ! command -v git &> /dev/null; then
-        error "git is required for bacchus worktree operations"
+    # jj is required for workspace operations
+    if ! command -v jj &> /dev/null; then
+        warn "jj (Jujutsu) is recommended for bacchus workspace operations"
+        warn "Install from: https://martinvonz.github.io/jj/latest/install/"
     fi
 }
 
@@ -121,57 +122,84 @@ build_from_source() {
     fi
 }
 
-# Install Claude Code plugin (includes hooks, commands, skills)
-# Usage: install_plugin [tag]
+# Install Claude Code skill
+# Usage: install_skill [tag]
 #   tag: Git tag to download from (e.g., v0.4.0). Defaults to 'main' if not provided.
-install_plugin() {
+install_skill() {
     local tag="${1:-main}"
-    info "Installing Claude Code plugin (from $tag)..."
+    info "Installing Claude Code skill (from $tag)..."
 
-    # Remove old skill directory if exists (migrating to plugin)
-    if [ -d "$SKILL_DIR" ]; then
-        warn "Removing old skill directory (migrating to plugin)..."
-        rm -rf "$SKILL_DIR"
+    # Remove old plugin directory if exists (migrating to skill)
+    local old_plugin_dir="$HOME/.claude/plugins/bacchus"
+    if [ -d "$old_plugin_dir" ]; then
+        warn "Removing old plugin directory (migrating to skill)..."
+        rm -rf "$old_plugin_dir"
     fi
 
-    # Create plugin directory
-    mkdir -p "$PLUGIN_DIR"
+    # Create skill directory
+    mkdir -p "$SKILL_DIR"
 
-    # Download plugin files from repo at the specified tag
-    local base_url="https://raw.githubusercontent.com/${REPO}/${tag}/plugin"
+    # Download skill files from repo at the specified tag
+    local base_url="https://raw.githubusercontent.com/${REPO}/${tag}/skills/bacchus"
 
-    # Plugin config
-    mkdir -p "${PLUGIN_DIR}/.claude-plugin"
-    curl -sLf -o "${PLUGIN_DIR}/.claude-plugin/config.json" "${base_url}/.claude-plugin/config.json" || warn "Could not download config.json"
+    curl -sLf -o "${SKILL_DIR}/SKILL.md" "${base_url}/SKILL.md" || warn "Could not download SKILL.md"
+    curl -sLf -o "${SKILL_DIR}/archetypes.yaml" "${base_url}/archetypes.yaml" || warn "Could not download archetypes.yaml"
 
-    # Hooks
-    mkdir -p "${PLUGIN_DIR}/hooks"
-    curl -sLf -o "${PLUGIN_DIR}/hooks/hooks.json" "${base_url}/hooks/hooks.json" || warn "Could not download hooks.json"
-    curl -sLf -o "${PLUGIN_DIR}/hooks/stop-router.sh" "${base_url}/hooks/stop-router.sh" || warn "Could not download stop-router.sh"
-    chmod +x "${PLUGIN_DIR}/hooks/stop-router.sh" 2>/dev/null || true
+    info "Skill installed to: ${SKILL_DIR}"
+    info "Archetypes available at: ${SKILL_DIR}/archetypes.yaml"
+}
 
-    # Scripts
-    mkdir -p "${PLUGIN_DIR}/scripts"
-    curl -sLf -o "${PLUGIN_DIR}/scripts/session.sh" "${base_url}/scripts/session.sh" || warn "Could not download session.sh"
-    chmod +x "${PLUGIN_DIR}/scripts/session.sh" 2>/dev/null || true
+# Add stop hook to settings.json
+install_hooks() {
+    info "Configuring stop hooks..."
 
-    # Commands
-    mkdir -p "${PLUGIN_DIR}/commands"
-    curl -sLf -o "${PLUGIN_DIR}/commands/agent.md" "${base_url}/commands/agent.md" || warn "Could not download agent.md"
-    curl -sLf -o "${PLUGIN_DIR}/commands/orchestrate.md" "${base_url}/commands/orchestrate.md" || warn "Could not download orchestrate.md"
-    curl -sLf -o "${PLUGIN_DIR}/commands/architect.md" "${base_url}/commands/architect.md" || warn "Could not download architect.md"
-    curl -sLf -o "${PLUGIN_DIR}/commands/cancel.md" "${base_url}/commands/cancel.md" || warn "Could not download cancel.md"
+    # The hook command - fail-open design (approve if bacchus errors)
+    local hook_cmd='bacchus session check 2>/dev/null || echo "{\"decision\":\"approve\"}"'
 
-    # Skills
-    mkdir -p "${PLUGIN_DIR}/skills"
-    curl -sLf -o "${PLUGIN_DIR}/skills/planner.md" "${base_url}/skills/planner.md" || warn "Could not download planner.md"
-    curl -sLf -o "${PLUGIN_DIR}/skills/context.md" "${base_url}/skills/context.md" || warn "Could not download context.md"
+    # Check if settings file exists
+    if [ -f "$SETTINGS_FILE" ]; then
+        # Check if jq is available for JSON manipulation
+        if command -v jq &> /dev/null; then
+            # Check if hooks.Stop already exists with our command
+            if jq -e '.hooks.Stop[0].hooks[0].command' "$SETTINGS_FILE" 2>/dev/null | grep -q "bacchus session check"; then
+                info "Stop hook already configured"
+                return
+            fi
 
-    # README
-    curl -sLf -o "${PLUGIN_DIR}/README.md" "${base_url}/README.md" || warn "Could not download README.md"
-
-    info "Plugin installed to: ${PLUGIN_DIR}"
-    info "Available commands: /bacchus-agent, /bacchus-orchestrate, /bacchus-architect, /bacchus-cancel"
+            # Add or merge hooks
+            local tmp_file="${SETTINGS_FILE}.tmp"
+            jq '.hooks.Stop = [{"hooks": [{"type": "command", "command": "'"$hook_cmd"'"}]}]' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
+            info "Stop hook added to existing settings"
+        else
+            warn "jq not found - cannot automatically add hooks to settings.json"
+            warn "Please add the following to $SETTINGS_FILE manually:"
+            echo ""
+            echo '  "hooks": {'
+            echo '    "Stop": [{"hooks": [{"type": "command", "command": "'"$hook_cmd"'"}]}]'
+            echo '  }'
+            echo ""
+        fi
+    else
+        # Create new settings file with hooks
+        mkdir -p "$(dirname "$SETTINGS_FILE")"
+        cat > "$SETTINGS_FILE" << EOF
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$hook_cmd"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+        info "Created settings file with stop hook"
+    fi
 }
 
 # Get latest release tag from GitHub
@@ -220,11 +248,21 @@ main() {
             echo "Add this to your ~/.bashrc or ~/.zshrc"
         fi
 
-        # Install Claude Code plugin from the same release tag
-        install_plugin "$release_tag"
+        # Install Claude Code skill and hooks
+        install_skill "$release_tag"
+        install_hooks
 
         info "Installation complete!"
-        info "Restart Claude Code to activate the plugin"
+        echo ""
+        info "Bacchus is now ready to use:"
+        echo ""
+        echo "  1. The skill is available at: ~/.claude/skills/bacchus/"
+        echo "  2. Stop hooks are configured in: ~/.claude/settings.json"
+        echo ""
+        info "Usage:"
+        echo "  - Ask Claude to 'use bacchus to parallelize this work'"
+        echo "  - Or run 'bacchus task init' to create a task file"
+        echo ""
         "${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || true
     else
         error "Installation failed"

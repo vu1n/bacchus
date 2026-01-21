@@ -16,10 +16,17 @@ Bacchus is a workspace-based coordination CLI for multi-agent work on codebases.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Claude Code Plugin                        │
-│  ~/.claude/plugins/bacchus/                                  │
-│  ├── hooks/stop-router.sh  → bacchus session check          │
-│  └── commands/*.md         → /bacchus-agent, /bacchus-orchestrate
+│                    Claude Code Skill                         │
+│  ~/.claude/skills/bacchus/                                   │
+│  ├── SKILL.md        (workflow, command reference)          │
+│  └── archetypes.yaml (specialized agent prompts)            │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 ~/.claude/settings.json                      │
+│  hooks.Stop → bacchus session check                         │
+│  (prevents exit until task/orchestration complete)          │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -145,7 +152,6 @@ src/
 ├── tasks.rs             # SQLite task management + YAML import
 ├── epics.rs             # Epic management
 ├── workspace.rs         # jj workspace operations
-├── worktree.rs          # (deprecated) Git worktree operations
 ├── db/                  # SQLite database (schema, connection)
 ├── indexer/             # Tree-sitter symbol extraction
 ├── updater.rs           # Self-update functionality
@@ -156,13 +162,40 @@ src/
     ├── claim.rs         # Claim specific task
     ├── next.rs          # Claim next ready task
     ├── release.rs       # Release task (mark ready for release)
+    ├── review.rs        # Advisory review checks before release
     ├── stale.rs         # Find/cleanup abandoned claims
     ├── list.rs          # List active claims
     ├── abort.rs         # Reset task from needs_resolution
     ├── resolve.rs       # Mark resolved task ready for release
     ├── symbols.rs       # Symbol search
+    ├── archetypes.rs    # Agent archetype selection
+    ├── eval.rs          # Eval metrics tracking
     └── context/         # Context generation
 ```
+
+## Agent Archetypes
+
+Tasks are assigned archetypes based on their `task_type` field, which provides specialized prompts for agents:
+
+| Type | Archetype | Focus |
+|------|-----------|-------|
+| `frontend` | Frontend Design | UI/UX, components, CSS, accessibility |
+| `backend` | Backend API | APIs, auth, validation, error handling |
+| `data` | Data Engineer | Pipelines, SQL, schemas, ETL |
+| `test` | Test Engineer | Coverage, fixtures, e2e, mocks |
+| `infra` | Infrastructure | CI/CD, containers, cloud, monitoring |
+| `review` | Code Reviewer | Quality, patterns, correctness |
+| `security` | Security Specialist | Vulnerabilities, OWASP, secrets |
+| `generic` | Generic | General development (default) |
+
+### Type Inference
+
+Task types are inferred in this order:
+1. **Explicit**: `type: frontend` in YAML
+2. **Title/Description**: Keywords like "component", "api", "migration"
+3. **Footprint**: File patterns like `*.tsx` → frontend, `/api/` → backend
+
+See `SqliteTaskType` in `src/tasks.rs` for implementation.
 
 ## Key Modules
 
@@ -179,6 +212,7 @@ pub struct SqliteTask {
     pub description: Option<String>,
     pub priority: i32,
     pub status: String,          // draft | open | in_progress | ready_for_release | releasing | needs_resolution | blocked | closed
+    pub task_type: SqliteTaskType, // frontend | backend | data | test | review | security | generic (+ legacy types)
     pub claimed_by: Option<String>,
     pub claimed_at: Option<i64>,
     pub ready_commit_id: Option<String>,    // jj commit ID when marked ready

@@ -2,6 +2,7 @@
 //!
 //! Each tool corresponds to a CLI command.
 
+pub mod archetypes;
 pub mod context;
 pub mod claim;
 pub mod eval;
@@ -16,6 +17,7 @@ pub mod stale;
 pub mod symbols;
 pub mod task_commands;
 
+pub use archetypes::{cmd_list_archetypes, cmd_show_archetype, cmd_archetype_prompt, cmd_select_archetype};
 pub use context::generate_context;
 pub use claim::claim_task;
 pub use eval::{record_event, generate_eval_report, EventType};

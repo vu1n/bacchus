@@ -173,6 +173,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: MessageCommands,
     },
+
+    /// Manage agent archetypes
+    Archetype {
+        #[command(subcommand)]
+        command: ArchetypeCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -291,5 +297,29 @@ pub enum MessageCommands {
         message_type: String,
         /// JSON payload
         payload: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ArchetypeCommands {
+    /// List available archetypes
+    List,
+
+    /// Select the best archetype for a task
+    Select {
+        /// The task ID to select an archetype for
+        task_id: String,
+    },
+
+    /// Show details for a specific archetype
+    Show {
+        /// The archetype name (e.g., frontend, backend, security)
+        name: String,
+    },
+
+    /// Get the prompt for a specific archetype
+    Prompt {
+        /// The archetype name (e.g., frontend, backend, security)
+        name: String,
     },
 }

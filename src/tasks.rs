@@ -199,10 +199,17 @@ impl std::fmt::Display for SqliteTaskStatus {
     }
 }
 
-/// Task type for context-aware prompting
+/// Task type for context-aware prompting and archetype selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SqliteTaskType {
+    // Domain-based types (for archetype selection)
+    Frontend,
+    Backend,
+    Data,
+    Review,
+    Security,
+    // Action-based types (legacy, still supported)
     BugFix,
     Feature,
     Refactor,
@@ -215,6 +222,13 @@ pub enum SqliteTaskType {
 impl SqliteTaskType {
     pub fn as_str(&self) -> &'static str {
         match self {
+            // Domain-based types
+            SqliteTaskType::Frontend => "frontend",
+            SqliteTaskType::Backend => "backend",
+            SqliteTaskType::Data => "data",
+            SqliteTaskType::Review => "review",
+            SqliteTaskType::Security => "security",
+            // Action-based types
             SqliteTaskType::BugFix => "bug_fix",
             SqliteTaskType::Feature => "feature",
             SqliteTaskType::Refactor => "refactor",
@@ -227,6 +241,13 @@ impl SqliteTaskType {
 
     pub fn from_str(s: &str) -> Self {
         match s {
+            // Domain-based types
+            "frontend" => SqliteTaskType::Frontend,
+            "backend" => SqliteTaskType::Backend,
+            "data" => SqliteTaskType::Data,
+            "review" => SqliteTaskType::Review,
+            "security" => SqliteTaskType::Security,
+            // Action-based types
             "bug_fix" => SqliteTaskType::BugFix,
             "feature" => SqliteTaskType::Feature,
             "refactor" => SqliteTaskType::Refactor,
@@ -240,6 +261,13 @@ impl SqliteTaskType {
     /// Human-readable label for display
     pub fn label(&self) -> &'static str {
         match self {
+            // Domain-based types
+            SqliteTaskType::Frontend => "Frontend",
+            SqliteTaskType::Backend => "Backend",
+            SqliteTaskType::Data => "Data Engineering",
+            SqliteTaskType::Review => "Code Review",
+            SqliteTaskType::Security => "Security",
+            // Action-based types
             SqliteTaskType::BugFix => "Bug Fix",
             SqliteTaskType::Feature => "Feature",
             SqliteTaskType::Refactor => "Refactor",
@@ -247,6 +275,25 @@ impl SqliteTaskType {
             SqliteTaskType::Docs => "Documentation",
             SqliteTaskType::Infra => "Infrastructure",
             SqliteTaskType::Generic => "Generic",
+        }
+    }
+
+    /// Get the archetype name for agent spawning
+    pub fn archetype(&self) -> &'static str {
+        match self {
+            SqliteTaskType::Frontend => "frontend",
+            SqliteTaskType::Backend => "backend",
+            SqliteTaskType::Data => "data",
+            SqliteTaskType::Review => "review",
+            SqliteTaskType::Security => "security",
+            SqliteTaskType::Test => "test",
+            // Map action types to closest archetype
+            SqliteTaskType::BugFix => "generic",
+            SqliteTaskType::Feature => "generic",
+            SqliteTaskType::Refactor => "generic",
+            SqliteTaskType::Docs => "generic",
+            SqliteTaskType::Infra => "backend",
+            SqliteTaskType::Generic => "generic",
         }
     }
 }
@@ -258,12 +305,86 @@ impl std::fmt::Display for SqliteTaskType {
 }
 
 /// Infer task type from title and description
+///
+/// Checks for domain-based types first (frontend, backend, etc.) which map directly
+/// to agent archetypes, then falls back to action-based types (bug_fix, feature, etc.)
 pub fn infer_task_type(title: &str, description: Option<&str>) -> SqliteTaskType {
     let text = format!(
         "{} {}",
         title.to_lowercase(),
         description.unwrap_or("").to_lowercase()
     );
+
+    // Domain-based types (check first for direct archetype mapping)
+
+    // Frontend patterns
+    if text.contains("frontend")
+        || text.contains("ui ")
+        || text.contains(" ui")
+        || text.contains("component")
+        || text.contains("react")
+        || text.contains("vue")
+        || text.contains("svelte")
+        || text.contains("css")
+        || text.contains("style")
+        || text.contains("layout")
+        || text.contains("responsive")
+        || text.contains("a11y")
+        || text.contains("accessibility")
+    {
+        return SqliteTaskType::Frontend;
+    }
+
+    // Backend patterns
+    if text.contains("backend")
+        || text.contains("api ")
+        || text.contains(" api")
+        || text.contains("endpoint")
+        || text.contains("route")
+        || text.contains("handler")
+        || text.contains("middleware")
+        || text.contains("auth")
+        || text.contains("database")
+        || text.contains("query")
+        || text.contains("validation")
+    {
+        return SqliteTaskType::Backend;
+    }
+
+    // Data engineering patterns
+    if text.contains("data")
+        || text.contains("etl")
+        || text.contains("pipeline")
+        || text.contains("migration")
+        || text.contains("schema")
+        || text.contains("sql")
+        || text.contains("analytics")
+    {
+        return SqliteTaskType::Data;
+    }
+
+    // Security patterns
+    if text.contains("security")
+        || text.contains("vulnerability")
+        || text.contains("audit")
+        || text.contains("owasp")
+        || text.contains("injection")
+        || text.contains("xss")
+        || text.contains("csrf")
+        || text.contains("sanitiz")
+    {
+        return SqliteTaskType::Security;
+    }
+
+    // Review patterns
+    if text.contains("review")
+        || text.contains("code review")
+        || text.contains("audit code")
+    {
+        return SqliteTaskType::Review;
+    }
+
+    // Action-based types (fallback)
 
     // Bug fix patterns
     if text.contains("fix")
@@ -334,12 +455,64 @@ pub fn infer_task_type(title: &str, description: Option<&str>) -> SqliteTaskType
         || text.contains("k8s")
         || text.contains("terraform")
         || text.contains("infra")
-        || text.contains("pipeline")
     {
         return SqliteTaskType::Infra;
     }
 
     SqliteTaskType::Generic
+}
+
+/// Infer task type from footprint paths
+/// This is used as a secondary inference when title/description don't match
+pub fn infer_task_type_from_footprint(paths: &[String]) -> Option<SqliteTaskType> {
+    for path in paths {
+        let path_lower = path.to_lowercase();
+
+        // Frontend file patterns
+        if path_lower.ends_with(".tsx")
+            || path_lower.ends_with(".jsx")
+            || path_lower.ends_with(".vue")
+            || path_lower.ends_with(".svelte")
+            || path_lower.ends_with(".css")
+            || path_lower.ends_with(".scss")
+            || path_lower.ends_with(".sass")
+            || path_lower.contains("/components/")
+            || path_lower.contains("/pages/")
+            || path_lower.contains("/views/")
+        {
+            return Some(SqliteTaskType::Frontend);
+        }
+
+        // Backend file patterns
+        if path_lower.contains("/api/")
+            || path_lower.contains("/routes/")
+            || path_lower.contains("/handlers/")
+            || path_lower.contains("/middleware/")
+            || path_lower.contains("/controllers/")
+            || path_lower.contains("/services/")
+        {
+            return Some(SqliteTaskType::Backend);
+        }
+
+        // Test file patterns
+        if path_lower.contains("/test")
+            || path_lower.contains("_test.")
+            || path_lower.contains(".test.")
+            || path_lower.contains(".spec.")
+            || path_lower.contains("_spec.")
+        {
+            return Some(SqliteTaskType::Test);
+        }
+
+        // Data patterns
+        if path_lower.contains("/migrations/")
+            || path_lower.contains("/schemas/")
+            || path_lower.ends_with(".sql")
+        {
+            return Some(SqliteTaskType::Data);
+        }
+    }
+    None
 }
 
 /// A task stored in SQLite (tasks table)

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::worktree;
+use crate::workspace;
 
 mod global;
 mod task;
@@ -9,17 +9,17 @@ mod task;
 pub fn generate_context(task_id_opt: Option<String>, workspace_root: &Path) -> Result<String, String> {
     let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
 
-    // Check if we are inside the .bacchus/worktrees directory of the workspace
-    let worktrees_dir = worktree::get_worktrees_dir(workspace_root);
-    let is_worktree = current_dir.starts_with(&worktrees_dir);
+    // Check if we are inside the .bacchus/workspaces directory of the project
+    let workspaces_dir = workspace::get_workspaces_dir(workspace_root);
+    let is_workspace = current_dir.starts_with(&workspaces_dir);
 
     // Determine the target task_id
     let target_task_id = if let Some(id) = task_id_opt {
         Some(id)
-    } else if is_worktree {
-        // We are in .../.bacchus/worktrees/<TASK_ID>/...
-        // We want the component right after 'worktrees'
-        current_dir.strip_prefix(&worktrees_dir)
+    } else if is_workspace {
+        // We are in .../.bacchus/workspaces/<TASK_ID>/...
+        // We want the component right after 'workspaces'
+        current_dir.strip_prefix(&workspaces_dir)
             .ok()
             .and_then(|p| p.iter().next())
             .map(|s| s.to_string_lossy().to_string())

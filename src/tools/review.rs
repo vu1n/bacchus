@@ -1,13 +1,13 @@
 //! Review tool - checks task completion before release
 //!
 //! Performs advisory checks on a task's work:
-//! - Verifies commits exist in the worktree branch
+//! - Verifies workspace exists
 //! - Runs build/test commands if specified
 //! - Checks footprint compliance
 
 use crate::db::with_db;
 use crate::tasks;
-use crate::worktree;
+use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
@@ -61,47 +61,46 @@ pub fn review_task(
         message: format!("Task {} found with status '{}'", task_id, task.status.as_str()),
     });
 
-    // 2. Check worktree exists
-    let worktree_path = worktree::get_worktrees_dir(workspace_root).join(task_id);
-    let worktree_exists = worktree_path.exists();
+    // 2. Check workspace exists
+    let workspace_path = workspace::get_workspaces_dir(workspace_root).join(task_id);
+    let workspace_exists = workspace_path.exists();
 
     checks.push(ReviewCheck {
-        name: "Worktree exists".to_string(),
-        passed: worktree_exists,
-        message: if worktree_exists {
-            format!("Worktree at {}", worktree_path.display())
+        name: "Workspace exists".to_string(),
+        passed: workspace_exists,
+        message: if workspace_exists {
+            format!("Workspace at {}", workspace_path.display())
         } else {
-            "No worktree found".to_string()
+            "No workspace found".to_string()
         },
     });
 
-    if !worktree_exists {
+    if !workspace_exists {
         return Ok(ReviewOutput {
             task_id: task_id.to_string(),
             passed: false,
             checks,
-            summary: "Review failed: no worktree found".to_string(),
+            summary: "Review failed: no workspace found".to_string(),
         });
     }
 
-    // 3. Check for commits
-    let branch_name = format!("bacchus/{}", task_id);
-    let commits_check = check_branch_commits(workspace_root, &branch_name);
-    checks.push(commits_check.clone());
+    // 3. Check for changes in workspace using jj
+    let changes_check = check_workspace_changes(workspace_root, task_id);
+    checks.push(changes_check.clone());
 
     // 4. Check footprint compliance
-    let footprint_check = check_footprint_compliance(task_id, workspace_root, &branch_name);
+    let footprint_check = check_footprint_compliance(task_id, workspace_root, &workspace_path);
     checks.push(footprint_check);
 
     // 5. Run build command if specified
     if let Some(cmd) = build_cmd {
-        let build_check = run_command_check("Build", cmd, &worktree_path);
+        let build_check = run_command_check("Build", cmd, &workspace_path);
         checks.push(build_check);
     }
 
     // 6. Run test command if specified
     if let Some(cmd) = test_cmd {
-        let test_check = run_command_check("Test", cmd, &worktree_path);
+        let test_check = run_command_check("Test", cmd, &workspace_path);
         checks.push(test_check);
     }
 
@@ -123,41 +122,60 @@ pub fn review_task(
     })
 }
 
-/// Check if the branch has commits beyond main
-fn check_branch_commits(workspace_root: &Path, branch_name: &str) -> ReviewCheck {
-    // Count commits on branch that aren't on main
-    let output = Command::new("git")
-        .args(["rev-list", "--count", &format!("main..{}", branch_name)])
-        .current_dir(workspace_root)
+/// Check if the workspace has changes
+fn check_workspace_changes(workspace_root: &Path, task_id: &str) -> ReviewCheck {
+    let workspace_path = workspace::get_workspaces_dir(workspace_root).join(task_id);
+
+    // Use jj to check for changes
+    let output = Command::new("jj")
+        .args(["log", "-r", "@", "--no-graph", "-T", "change_id"])
+        .current_dir(&workspace_path)
         .output();
 
     match output {
         Ok(out) if out.status.success() => {
-            let count_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let count: i32 = count_str.parse().unwrap_or(0);
+            let change_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
-            ReviewCheck {
-                name: "Commits exist".to_string(),
-                passed: count > 0,
-                message: if count > 0 {
-                    format!("{} commit(s) on branch {}", count, branch_name)
-                } else {
-                    format!("No commits on branch {} beyond main", branch_name)
+            // Check if there are any changes
+            let diff_output = Command::new("jj")
+                .args(["diff", "-r", "@", "--stat"])
+                .current_dir(&workspace_path)
+                .output();
+
+            match diff_output {
+                Ok(diff) if diff.status.success() => {
+                    let diff_str = String::from_utf8_lossy(&diff.stdout);
+                    let has_changes = !diff_str.trim().is_empty();
+
+                    ReviewCheck {
+                        name: "Changes exist".to_string(),
+                        passed: has_changes,
+                        message: if has_changes {
+                            format!("Workspace has changes (change: {})", &change_id[..8.min(change_id.len())])
+                        } else {
+                            "No changes in workspace".to_string()
+                        },
+                    }
+                }
+                _ => ReviewCheck {
+                    name: "Changes exist".to_string(),
+                    passed: false,
+                    message: "Failed to check for changes".to_string(),
                 },
             }
         }
         Ok(out) => ReviewCheck {
-            name: "Commits exist".to_string(),
+            name: "Changes exist".to_string(),
             passed: false,
             message: format!(
-                "Failed to check commits: {}",
+                "Failed to check workspace: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ),
         },
         Err(e) => ReviewCheck {
-            name: "Commits exist".to_string(),
+            name: "Changes exist".to_string(),
             passed: false,
-            message: format!("Failed to run git: {}", e),
+            message: format!("Failed to run jj: {}", e),
         },
     }
 }
@@ -165,8 +183,8 @@ fn check_branch_commits(workspace_root: &Path, branch_name: &str) -> ReviewCheck
 /// Check if changes comply with declared footprint
 fn check_footprint_compliance(
     task_id: &str,
-    workspace_root: &Path,
-    branch_name: &str,
+    _workspace_root: &Path,
+    workspace_path: &Path,
 ) -> ReviewCheck {
     // Get declared footprint
     let footprint: Vec<String> = with_db(|conn| {
@@ -189,10 +207,10 @@ fn check_footprint_compliance(
         };
     }
 
-    // Get files changed on the branch
-    let output = Command::new("git")
-        .args(["diff", "--name-only", &format!("main...{}", branch_name)])
-        .current_dir(workspace_root)
+    // Get files changed in workspace using jj
+    let output = Command::new("jj")
+        .args(["diff", "-r", "@", "--name-only"])
+        .current_dir(workspace_path)
         .output();
 
     match output {
@@ -243,7 +261,7 @@ fn check_footprint_compliance(
         Err(e) => ReviewCheck {
             name: "Footprint compliance".to_string(),
             passed: false,
-            message: format!("Failed to run git: {}", e),
+            message: format!("Failed to run jj: {}", e),
         },
     }
 }

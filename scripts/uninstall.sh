@@ -5,6 +5,7 @@ INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
 SKILL_DIR="$HOME/.claude/skills/bacchus"
 PLUGIN_DIR="$HOME/.claude/plugins/bacchus"
+SETTINGS_FILE="$HOME/.claude/settings.json"
 
 # Colors
 RED='\033[0;31m'
@@ -28,18 +29,44 @@ remove_binary() {
     fi
 }
 
-# Remove Claude Code plugin and skills
-remove_plugin() {
-    # Remove plugin
+# Remove Claude Code skill and plugin
+remove_skill() {
+    # Remove skill directory
+    if [ -d "$SKILL_DIR" ]; then
+        rm -rf "$SKILL_DIR"
+        info "Removed skill: $SKILL_DIR"
+    fi
+
+    # Remove old plugin directory (legacy)
     if [ -d "$PLUGIN_DIR" ]; then
         rm -rf "$PLUGIN_DIR"
         info "Removed plugin: $PLUGIN_DIR"
     fi
+}
 
-    # Remove old skill directory (legacy)
-    if [ -d "$SKILL_DIR" ]; then
-        rm -rf "$SKILL_DIR"
-        info "Removed skills: $SKILL_DIR"
+# Remove stop hooks from settings.json
+remove_hooks() {
+    if [ ! -f "$SETTINGS_FILE" ]; then
+        return
+    fi
+
+    # Check if jq is available for JSON manipulation
+    if command -v jq &> /dev/null; then
+        # Check if our hook exists
+        if jq -e '.hooks.Stop[0].hooks[0].command' "$SETTINGS_FILE" 2>/dev/null | grep -q "bacchus session check"; then
+            # Remove the Stop hook
+            local tmp_file="${SETTINGS_FILE}.tmp"
+            jq 'del(.hooks.Stop)' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
+
+            # If hooks object is now empty, remove it too
+            if jq -e '.hooks | length == 0' "$SETTINGS_FILE" 2>/dev/null; then
+                jq 'del(.hooks)' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
+            fi
+
+            info "Removed stop hook from settings"
+        fi
+    else
+        warn "jq not found - please manually remove bacchus hooks from $SETTINGS_FILE"
     fi
 }
 
@@ -91,11 +118,19 @@ main() {
     echo ""
 
     remove_binary
-    remove_plugin
+    remove_skill
     cleanup_sessions
 
     echo ""
-    read -p "Also remove .bacchus data directories (worktrees, database)? [y/N] " -n 1 -r
+    read -p "Also remove stop hooks from settings.json? [y/N] " -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        remove_hooks
+    fi
+
+    echo ""
+    read -p "Also remove .bacchus data directories (workspaces, database)? [y/N] " -n 1 -r
     echo ""
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -104,7 +139,6 @@ main() {
 
     echo ""
     info "Uninstall complete!"
-    info "Restart Claude Code to complete plugin removal"
 }
 
 main "$@"
