@@ -23,6 +23,17 @@ fn main() {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
 
+    // Fast path for `session check` when no session exists
+    // This avoids creating .bacchus/ in repos that don't use bacchus
+    if let Commands::Session { command: SessionCommands::Check } = &cli.command {
+        let session_path = workspace_root.join(".bacchus/session.json");
+        if !session_path.exists() {
+            // No session file = no bacchus session active, approve immediately
+            println!(r#"{{"decision":"approve","reason":"No bacchus session active"}}"#);
+            return;
+        }
+    }
+
     // Initialize database (check BACCHUS_DB_PATH env var first)
     let db_path = std::env::var("BACCHUS_DB_PATH").ok();
     let db_path_buf = if let Some(p) = db_path {
@@ -30,7 +41,7 @@ fn main() {
     } else {
         workspace_root.join(".bacchus/bacchus.db")
     };
-    
+
     let db_path_str = db_path_buf.to_str().unwrap_or(".bacchus/bacchus.db");
 
     if let Err(e) = db::init_db(Some(db_path_str)) {
