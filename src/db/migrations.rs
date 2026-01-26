@@ -246,6 +246,29 @@ BEGIN
        OR NEW.claimed_by IS NOT NULL
        OR NEW.claimed_at IS NOT NULL;
 END;
+
+-- ============================================================================
+-- Handles (token-saving handle/pointer system for query results)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS handles (
+    handle TEXT PRIMARY KEY,
+    handle_type TEXT NOT NULL,        -- 'symbols', 'context', 'messages', etc.
+    count INTEGER NOT NULL,
+    query TEXT,                       -- Original query that created this handle
+    preview TEXT,                     -- Preview of first few items
+    created_at INTEGER NOT NULL,
+    session_id TEXT                   -- Links to session for cleanup
+);
+CREATE INDEX IF NOT EXISTS idx_handles_type ON handles(handle_type);
+CREATE INDEX IF NOT EXISTS idx_handles_session ON handles(session_id);
+
+CREATE TABLE IF NOT EXISTS handle_data (
+    handle TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    data TEXT NOT NULL,               -- JSON serialized
+    PRIMARY KEY (handle, idx),
+    FOREIGN KEY (handle) REFERENCES handles(handle) ON DELETE CASCADE
+);
 "#;
 
 #[cfg(test)]
@@ -258,7 +281,7 @@ mod tests {
         init_schema(&conn).unwrap();
 
         // Verify tables exist
-        let tables = ["symbols", "epics", "tasks", "task_dependencies", "task_footprints", "agent_messages"];
+        let tables = ["symbols", "epics", "tasks", "task_dependencies", "task_footprints", "agent_messages", "handles", "handle_data"];
         for table in tables {
             let count: i32 = conn
                 .query_row(

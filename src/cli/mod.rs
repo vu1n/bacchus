@@ -119,6 +119,9 @@ pub enum Commands {
         /// Enable fuzzy matching for typo tolerance
         #[arg(long)]
         fuzzy: bool,
+        /// Return a handle instead of full results (token-saving mode)
+        #[arg(long)]
+        handle: bool,
     },
 
     /// Index a file or directory for symbol search
@@ -178,6 +181,12 @@ pub enum Commands {
     Archetype {
         #[command(subcommand)]
         command: ArchetypeCommands,
+    },
+
+    /// Manage query result handles (token-saving pointers)
+    Handle {
+        #[command(subcommand)]
+        command: HandleCommands,
     },
 }
 
@@ -321,5 +330,44 @@ pub enum ArchetypeCommands {
     Prompt {
         /// The archetype name (e.g., frontend, backend, security)
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HandleCommands {
+    /// Expand a handle to retrieve its data
+    Expand {
+        /// The handle to expand (e.g., $sym1)
+        handle: String,
+        /// Max results to return
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: i32,
+        /// Offset for pagination
+        #[arg(long, default_value = "0")]
+        offset: i32,
+    },
+
+    /// Filter a handle by criteria, creating a new handle
+    Filter {
+        /// The handle to filter (e.g., $sym1)
+        handle: String,
+        /// Filter by kind (for symbol handles)
+        #[arg(long)]
+        kind: Option<String>,
+        /// Filter by file pattern (for symbol handles)
+        #[arg(long)]
+        file: Option<String>,
+    },
+
+    /// List all active handles
+    List,
+
+    /// Clear all handles (manual cleanup)
+    Clear,
+
+    /// Get info about a specific handle
+    Info {
+        /// The handle to inspect (e.g., $sym1)
+        handle: String,
     },
 }

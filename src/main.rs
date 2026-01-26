@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod db;
 mod epics;
+mod handles;
 mod indexer;
 mod messages;
 mod tasks;
@@ -12,7 +13,7 @@ mod updater;
 mod workspace;
 
 use clap::Parser;
-use cli::{Cli, Commands, ArchetypeCommands, EpicCommands, MessageCommands, SessionCommands, TaskCommands};
+use cli::{Cli, Commands, ArchetypeCommands, EpicCommands, HandleCommands, MessageCommands, SessionCommands, TaskCommands};
 use std::path::PathBuf;
 
 fn main() {
@@ -124,7 +125,7 @@ fn main() {
         // ====================================================================
         // Symbol Commands
         // ====================================================================
-        Commands::Symbols { pattern, kind, file, lang, limit, search, fuzzy } => {
+        Commands::Symbols { pattern, kind, file, lang, limit, search, fuzzy, handle } => {
             let input = tools::FindSymbolsInput {
                 pattern,
                 kind,
@@ -133,8 +134,13 @@ fn main() {
                 limit: Some(limit),
                 search,
                 fuzzy,
+                handle,
             };
-            tools::find_symbols(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+            if handle {
+                tools::find_symbols_handle(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+            } else {
+                tools::find_symbols(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+            }
         }
 
         Commands::Index { path } => {
@@ -384,6 +390,56 @@ fn main() {
                 }
                 ArchetypeCommands::Select { task_id } => {
                     Ok(tools::cmd_select_archetype(&task_id))
+                }
+            }
+        }
+
+        // ====================================================================
+        // Handle Commands (token-saving query results)
+        // ====================================================================
+        Commands::Handle { command } => {
+            match command {
+                HandleCommands::Expand { handle, limit, offset } => {
+                    handles::expand_handle(&handle, Some(limit), Some(offset))
+                        .map(|data| serde_json::to_string_pretty(&data).unwrap())
+                }
+                HandleCommands::Filter { handle, kind, file } => {
+                    handles::filter_handle(
+                        &handle,
+                        |v| {
+                            let kind_match = kind.as_ref().map_or(true, |k| {
+                                v["kind"].as_str() == Some(k.as_str())
+                            });
+                            let file_match = file.as_ref().map_or(true, |f| {
+                                v["file"].as_str().map_or(false, |vf| {
+                                    if f.contains('*') {
+                                        let pattern = f.replace('*', "");
+                                        vf.contains(&pattern)
+                                    } else {
+                                        vf.contains(f)
+                                    }
+                                })
+                            });
+                            kind_match && file_match
+                        },
+                        |v| v["fq_name"].as_str().unwrap_or("?").to_string(),
+                    )
+                    .map(|stub| serde_json::to_string_pretty(&stub).unwrap())
+                }
+                HandleCommands::List => {
+                    handles::list_handles()
+                        .map(|handles| serde_json::to_string_pretty(&handles).unwrap())
+                }
+                HandleCommands::Clear => {
+                    handles::clear_all_handles()
+                        .map(|count| serde_json::json!({
+                            "success": true,
+                            "cleared": count
+                        }).to_string())
+                }
+                HandleCommands::Info { handle } => {
+                    handles::get_handle_info(&handle)
+                        .map(|info| serde_json::to_string_pretty(&info).unwrap())
                 }
             }
         }

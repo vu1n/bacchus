@@ -29,6 +29,6 @@ pub use abort::abort_merge;
 pub use review::review_task;
 pub use session::{start_session, stop_session, session_status, check_session};
 pub use stale::find_stale;
-pub use symbols::{find_symbols, FindSymbolsInput};
+pub use symbols::{find_symbols, find_symbols_handle, FindSymbolsInput, FindSymbolsHandleOutput};
 pub use task_commands::{list_tasks, show_task, validate_tasks, init_tasks, import_tasks};
 

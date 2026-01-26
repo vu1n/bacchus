@@ -84,11 +84,25 @@ draft → open → in_progress → ready_for_release → releasing → closed
                  failed                        needs_resolution
 ```
 
+## Token-Saving Handles
+
+Use `--handle` flag to return compact pointers instead of full data:
+
+```bash
+bacchus symbols --search "auth" --handle   # Returns $sym1
+bacchus handle expand $sym1 --limit 5      # Get actual data
+bacchus handle filter $sym1 --kind fn      # Returns $sym2
+bacchus handle clear                       # Cleanup
+```
+
+Handles are session-scoped and auto-cleared on `session stop`.
+
 ## Source Structure
 
 ```
 src/
 ├── main.rs           # CLI entry, routing
+├── handles.rs        # Token-saving handle system
 ├── tasks.rs          # SQLite task ops, YAML import
 ├── workspace.rs      # jj workspace ops
 ├── db/               # Schema, migrations
@@ -96,6 +110,7 @@ src/
     ├── claim.rs      # Claim task
     ├── release.rs    # Release task
     ├── session.rs    # Stop hook integration
+    ├── symbols.rs    # Symbol search (supports handles)
     └── archetypes.rs # Archetype selection
 ```
 
@@ -133,6 +148,22 @@ CREATE TABLE tasks (
     ready_commit_id TEXT,
     CHECK (task_type IN ('bug_fix','feature','refactor','test','docs','infra','generic')),
     CHECK (archetype IN ('frontend','backend','data','test','infra','review','security','generic'))
+);
+
+-- Token-saving handle system
+CREATE TABLE handles (
+    handle TEXT PRIMARY KEY,        -- $sym1, $ctx2, etc.
+    handle_type TEXT NOT NULL,      -- symbols, context, messages
+    count INTEGER NOT NULL,
+    query TEXT,                     -- Original query
+    session_id TEXT                 -- For session cleanup
+);
+
+CREATE TABLE handle_data (
+    handle TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    data TEXT NOT NULL,             -- JSON serialized
+    PRIMARY KEY (handle, idx)
 );
 ```
 

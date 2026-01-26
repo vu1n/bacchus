@@ -44,6 +44,25 @@ bacchus task list --ready
 | `bacchus session start orchestrator` | Start orchestrator session |
 | `bacchus session stop` | Clear session |
 
+## Handle Commands (Token-Saving)
+
+Use handles to reduce token overhead when searching symbols:
+
+| Command | Purpose |
+|---------|---------|
+| `bacchus symbols --handle` | Return handle instead of full data |
+| `bacchus handle expand <handle> [-n N]` | Retrieve data from handle |
+| `bacchus handle filter <handle> --kind X` | Filter creating new handle |
+| `bacchus handle list` | List active handles |
+| `bacchus handle clear` | Clear all handles |
+
+**Example:**
+```bash
+bacchus symbols --search "validate" --handle  # Returns $sym1
+bacchus handle expand $sym1 --limit 5         # Get first 5 results
+bacchus handle filter $sym1 --kind function   # Returns $sym2 (filtered)
+```
+
 ## Planning Tasks
 
 Create `.bacchus/tasks.yaml`:

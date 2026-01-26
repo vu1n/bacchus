@@ -1,6 +1,7 @@
 //! Symbol tools for querying
 
 use crate::db::with_db;
+use crate::handles::{create_handle, HandleStub, HandleType};
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 use strsim::jaro_winkler;
@@ -21,11 +22,20 @@ pub struct FindSymbolsInput {
     pub limit: Option<i32>,
     pub search: Option<String>,
     pub fuzzy: bool,
+    #[serde(default)]
+    pub handle: bool,  // Return handle instead of full results
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FindSymbolsOutput {
     pub symbols: Vec<SymbolInfo>,
+    pub total_count: i32,
+}
+
+/// Output when handle mode is enabled
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FindSymbolsHandleOutput {
+    pub handle: HandleStub,
     pub total_count: i32,
 }
 
@@ -130,6 +140,60 @@ pub fn find_symbols(input: &FindSymbolsInput) -> Result<FindSymbolsOutput> {
             symbols,
             total_count,
         })
+    })
+}
+
+/// Find symbols and return a handle instead of full data
+pub fn find_symbols_handle(input: &FindSymbolsInput) -> Result<FindSymbolsHandleOutput> {
+    // First get all matching symbols (with higher limit for handle mode)
+    let modified_input = FindSymbolsInput {
+        pattern: input.pattern.clone(),
+        kind: input.kind.clone(),
+        file: input.file.clone(),
+        language: input.language.clone(),
+        limit: Some(input.limit.unwrap_or(1000).max(1000)), // Higher limit for handles
+        search: input.search.clone(),
+        fuzzy: input.fuzzy,
+        handle: false,
+    };
+
+    let result = find_symbols(&modified_input)?;
+
+    // Build query description for the handle
+    let mut query_parts = Vec::new();
+    if let Some(ref p) = input.pattern {
+        query_parts.push(format!("pattern:{}", p));
+    }
+    if let Some(ref k) = input.kind {
+        query_parts.push(format!("kind:{}", k));
+    }
+    if let Some(ref f) = input.file {
+        query_parts.push(format!("file:{}", f));
+    }
+    if let Some(ref s) = input.search {
+        query_parts.push(format!("search:{}", s));
+    }
+    let query = if query_parts.is_empty() {
+        None
+    } else {
+        Some(query_parts.join(" "))
+    };
+
+    // Convert symbols to JSON values
+    let data: Vec<serde_json::Value> = result
+        .symbols
+        .into_iter()
+        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null))
+        .collect();
+
+    // Create handle
+    let handle = create_handle(HandleType::Symbols, &data, query.as_deref(), |v| {
+        v["fq_name"].as_str().unwrap_or("?").to_string()
+    })?;
+
+    Ok(FindSymbolsHandleOutput {
+        handle,
+        total_count: result.total_count,
     })
 }
 
@@ -270,6 +334,7 @@ mod tests {
             limit: Some(10),
             search: None,
             fuzzy: false,
+            handle: false,
         };
 
         let result = find_symbols(&input).unwrap();

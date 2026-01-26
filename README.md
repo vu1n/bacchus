@@ -386,6 +386,42 @@ bacchus session start orchestrator --max-concurrent 3
 | `symbols [--pattern X] [--kind Y]` | Search for symbols |
 | `symbols [--file X] [--lang Y]` | Filter by file path or language |
 | `symbols [--search X] [--fuzzy]` | Full-text search with fuzzy matching |
+| `symbols --handle` | Return handle instead of full results (token-saving) |
+
+### Handles (Token-Saving)
+
+Handles provide compact pointers to query results, reducing token overhead by 90%+.
+
+| Command | Description |
+|---------|-------------|
+| `handle expand <handle> [-n N] [--offset M]` | Retrieve data from handle with pagination |
+| `handle filter <handle> [--kind X] [--file Y]` | Filter handle creating new handle |
+| `handle list` | List all active handles |
+| `handle clear` | Clear all handles |
+| `handle info <handle>` | Get metadata about a handle |
+
+**Example workflow:**
+```bash
+# Search returns a handle instead of full data
+$ bacchus symbols --search "auth" --handle
+{
+  "handle": "$sym1",
+  "count": 47,
+  "preview": ["auth::login", "auth::logout", "auth::verify"]
+}
+
+# Expand to get actual data (on demand)
+$ bacchus handle expand $sym1 --limit 5
+
+# Filter to narrow results
+$ bacchus handle filter $sym1 --kind function
+# Returns: $sym2 with 32 functions
+
+# Clean up when done
+$ bacchus handle clear
+```
+
+Handles are session-scoped and automatically cleared on `bacchus session stop`.
 
 ### Info
 

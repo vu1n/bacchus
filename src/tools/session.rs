@@ -3,6 +3,7 @@
 //! Manages .bacchus/session.json for persistent session state.
 
 use crate::db::with_db;
+use crate::handles;
 use crate::tasks;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -107,11 +108,33 @@ pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32, age
     Ok(format!("Started {} session", mode))
 }
 
-/// Stop the session
+/// Stop the session and clean up session-scoped handles
 pub fn stop_session() -> Result<String, String> {
     if let Some(path) = session_path() {
         if path.exists() {
+            // Read session to get session ID before removing
+            let session_id = match fs::read_to_string(&path) {
+                Ok(content) => {
+                    serde_json::from_str::<Session>(&content)
+                        .ok()
+                        .map(|s| s.started_at)
+                }
+                Err(_) => None,
+            };
+
+            // Remove session file
             fs::remove_file(&path).map_err(|e| e.to_string())?;
+
+            // Clear handles for this session
+            let handles_cleared = if let Some(sid) = session_id {
+                handles::clear_session_handles(&sid).unwrap_or(0)
+            } else {
+                0
+            };
+
+            if handles_cleared > 0 {
+                return Ok(format!("Session stopped. Cleared {} handle(s).", handles_cleared));
+            }
             return Ok("Session stopped".to_string());
         }
     }
