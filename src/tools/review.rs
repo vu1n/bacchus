@@ -9,6 +9,7 @@ use crate::db::with_db;
 use crate::tasks;
 use crate::workspace;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -193,17 +194,35 @@ fn check_footprint_compliance(
     _workspace_root: &Path,
     workspace_path: &Path,
 ) -> ReviewCheck {
-    // Get declared footprint
-    let footprint: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare("SELECT file_path FROM task_footprints WHERE task_id = ?1")?;
+    // Get declared footprint rules
+    let rules: Vec<FootprintRule> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT pattern_type, file_path, symbol, is_wildcard
+             FROM task_footprints
+             WHERE task_id = ?1",
+        )?;
         let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .query_map([task_id], |row| {
+                let pattern_type: String = row.get(0)?;
+                let file_path: String = row.get(1)?;
+                let symbol: String = row.get(2)?;
+                let is_wildcard: i32 = row.get(3)?;
+                Ok(FootprintRule {
+                    pattern_type,
+                    file_path: normalize_path(&file_path),
+                    symbol: if is_wildcard == 1 || symbol.trim().is_empty() {
+                        None
+                    } else {
+                        Some(symbol)
+                    },
+                })
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
     .unwrap_or_default();
 
-    if footprint.is_empty() {
+    if rules.is_empty() {
         return ReviewCheck {
             name: "Footprint compliance".to_string(),
             passed: true,
@@ -211,67 +230,385 @@ fn check_footprint_compliance(
         };
     }
 
-    // Get files changed in workspace using jj
-    let output = Command::new("jj")
-        .args(["diff", "-r", "@", "--name-only"])
-        .current_dir(workspace_path)
-        .output();
+    let changed_files = match collect_changed_files_with_hunks(workspace_path) {
+        Ok(files) => files,
+        Err(e) => {
+            return ReviewCheck {
+                name: "Footprint compliance".to_string(),
+                passed: false,
+                message: e,
+            };
+        }
+    };
 
-    match output {
-        Ok(out) if out.status.success() => {
-            let changed_files: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .collect();
+    let mut violations = Vec::new();
+    let mut symbol_cache: HashMap<(String, String), Vec<LineRange>> = HashMap::new();
 
-            // Check if all changed files are in footprint
-            let mut violations = Vec::new();
-            for file in &changed_files {
-                let normalized_file = file.trim_start_matches("./");
-                let in_footprint = footprint
-                    .iter()
-                    .map(|fp| fp.trim_start_matches("./"))
-                    .any(|fp| fp == normalized_file);
-                if !in_footprint {
-                    violations.push(file.clone());
+    for changed in &changed_files {
+        let file_rules: Vec<&FootprintRule> = rules
+            .iter()
+            .filter(|r| r.file_path == changed.path)
+            .collect();
+
+        if file_rules.is_empty() {
+            violations.push(format!("{} (not declared in footprint)", changed.path));
+            continue;
+        }
+
+        let allows_create = file_rules.iter().any(|r| r.pattern_type == "creates");
+        let allows_file_wildcard = file_rules
+            .iter()
+            .any(|r| r.pattern_type == "modifies" && r.symbol.is_none());
+
+        if changed.is_new && allows_create {
+            continue;
+        }
+
+        if allows_file_wildcard {
+            continue;
+        }
+
+        let symbol_rules: Vec<&str> = file_rules
+            .iter()
+            .filter(|r| r.pattern_type == "modifies")
+            .filter_map(|r| r.symbol.as_deref())
+            .collect();
+
+        if symbol_rules.is_empty() {
+            if allows_create && !changed.is_new {
+                if changed.is_deleted {
+                    violations.push(format!(
+                        "{} (listed under creates, but file was deleted; declare modifies for deletions)",
+                        changed.path
+                    ));
+                } else {
+                    violations.push(format!(
+                        "{} (listed under creates, but modified an existing file; declare modifies)",
+                        changed.path
+                    ));
                 }
             }
+            continue;
+        }
 
-            if violations.is_empty() {
-                ReviewCheck {
-                    name: "Footprint compliance".to_string(),
-                    passed: true,
-                    message: format!(
-                        "All {} changed files within declared footprint",
-                        changed_files.len()
-                    ),
+        if changed.hunks.is_empty() {
+            violations.push(format!(
+                "{} (non-line diff cannot be validated against symbol-level footprint; declare {}::* if intended)",
+                changed.path, changed.path
+            ));
+            continue;
+        }
+
+        let mut allowed_ranges = Vec::new();
+        let mut missing_symbols = Vec::new();
+        let mut symbol_lookup_failed = false;
+
+        for symbol in symbol_rules {
+            let key = (changed.path.clone(), symbol.to_string());
+            if let Some(cached) = symbol_cache.get(&key) {
+                if cached.is_empty() {
+                    missing_symbols.push(symbol.to_string());
+                } else {
+                    allowed_ranges.extend(cached.iter().copied());
                 }
-            } else {
-                ReviewCheck {
-                    name: "Footprint compliance".to_string(),
-                    passed: false,
-                    message: format!(
-                        "{} file(s) changed outside footprint: {}",
-                        violations.len(),
-                        violations.join(", ")
-                    ),
+                continue;
+            }
+
+            match load_symbol_ranges(&changed.path, symbol) {
+                Ok(ranges) => {
+                    if ranges.is_empty() {
+                        missing_symbols.push(symbol.to_string());
+                    } else {
+                        allowed_ranges.extend(ranges.iter().copied());
+                    }
+                    symbol_cache.insert(key, ranges);
+                }
+                Err(e) => {
+                    symbol_lookup_failed = true;
+                    violations.push(format!(
+                        "{} (failed loading symbol '{}' from index: {})",
+                        changed.path, symbol, e
+                    ));
                 }
             }
         }
-        Ok(out) => ReviewCheck {
+
+        if symbol_lookup_failed {
+            continue;
+        }
+
+        if !missing_symbols.is_empty() {
+            violations.push(format!(
+                "{} (declared symbol(s) missing from index: {}; run `bacchus index {}`)",
+                changed.path,
+                missing_symbols.join(", "),
+                changed.path
+            ));
+            continue;
+        }
+
+        let mut out_of_bounds = Vec::new();
+        for hunk in &changed.hunks {
+            if !hunk_overlaps_any(hunk, &allowed_ranges) {
+                out_of_bounds.push(render_hunk(hunk));
+            }
+        }
+
+        if !out_of_bounds.is_empty() {
+            violations.push(format!(
+                "{} (changed outside declared symbols at {})",
+                changed.path,
+                out_of_bounds.join(", ")
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        ReviewCheck {
+            name: "Footprint compliance".to_string(),
+            passed: true,
+            message: format!(
+                "All {} changed file(s) comply with declared footprint",
+                changed_files.len()
+            ),
+        }
+    } else {
+        ReviewCheck {
             name: "Footprint compliance".to_string(),
             passed: false,
             message: format!(
-                "Failed to get changed files: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
+                "{} footprint violation(s): {}",
+                violations.len(),
+                violations.join(" | ")
             ),
-        },
-        Err(e) => ReviewCheck {
-            name: "Footprint compliance".to_string(),
-            passed: false,
-            message: format!("Failed to run jj: {}", e),
-        },
+        }
     }
+}
+
+#[derive(Debug, Clone)]
+struct FootprintRule {
+    pattern_type: String,
+    file_path: String,
+    symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LineRange {
+    start: u32,
+    end: u32,
+}
+
+impl LineRange {
+    fn overlaps(&self, other: &LineRange) -> bool {
+        self.start <= other.end && other.start <= self.end
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DiffHunk {
+    old: Option<LineRange>,
+    new: Option<LineRange>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChangedFile {
+    path: String,
+    is_new: bool,
+    is_deleted: bool,
+    hunks: Vec<DiffHunk>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RawChangedFile {
+    old_path: String,
+    new_path: String,
+    is_new: bool,
+    is_deleted: bool,
+    hunks: Vec<DiffHunk>,
+}
+
+fn normalize_path(path: &str) -> String {
+    path.trim()
+        .trim_start_matches("./")
+        .trim_start_matches("a/")
+        .trim_start_matches("b/")
+        .to_string()
+}
+
+fn collect_changed_files_with_hunks(workspace_path: &Path) -> Result<Vec<ChangedFile>, String> {
+    let output = Command::new("jj")
+        .args(["diff", "-r", "@", "--git"])
+        .current_dir(workspace_path)
+        .output()
+        .map_err(|e| format!("Failed to run jj diff --git: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to get changed files: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_jj_git_diff(&text))
+}
+
+fn parse_jj_git_diff(diff: &str) -> Vec<ChangedFile> {
+    let mut out = Vec::new();
+    let mut current: Option<RawChangedFile> = None;
+
+    for line in diff.lines() {
+        if line.starts_with("diff --git ") {
+            if let Some(raw) = current.take() {
+                if let Some(file) = finalize_changed_file(raw) {
+                    out.push(file);
+                }
+            }
+
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let old_path = parts
+                .get(2)
+                .map(|p| p.trim_start_matches("a/").to_string())
+                .unwrap_or_default();
+            let new_path = parts
+                .get(3)
+                .map(|p| p.trim_start_matches("b/").to_string())
+                .unwrap_or_default();
+            current = Some(RawChangedFile {
+                old_path,
+                new_path,
+                ..RawChangedFile::default()
+            });
+            continue;
+        }
+
+        let Some(file) = current.as_mut() else {
+            continue;
+        };
+
+        if let Some(path) = line.strip_prefix("rename from ") {
+            file.old_path = path.to_string();
+            continue;
+        }
+        if let Some(path) = line.strip_prefix("rename to ") {
+            file.new_path = path.to_string();
+            continue;
+        }
+        if line.starts_with("new file mode ") {
+            file.is_new = true;
+            continue;
+        }
+        if line.starts_with("deleted file mode ") {
+            file.is_deleted = true;
+            continue;
+        }
+        if line.starts_with("@@ ") {
+            if let Some(hunk) = parse_hunk_header(line) {
+                file.hunks.push(hunk);
+            }
+        }
+    }
+
+    if let Some(raw) = current.take() {
+        if let Some(file) = finalize_changed_file(raw) {
+            out.push(file);
+        }
+    }
+
+    out
+}
+
+fn finalize_changed_file(raw: RawChangedFile) -> Option<ChangedFile> {
+    let old_path = normalize_path(&raw.old_path);
+    let new_path = normalize_path(&raw.new_path);
+
+    let path = if !new_path.is_empty() && new_path != "/dev/null" {
+        new_path
+    } else {
+        old_path
+    };
+
+    if path.is_empty() || path == "/dev/null" {
+        return None;
+    }
+
+    Some(ChangedFile {
+        path,
+        is_new: raw.is_new || raw.old_path.trim() == "/dev/null",
+        is_deleted: raw.is_deleted || raw.new_path.trim() == "/dev/null",
+        hunks: raw.hunks,
+    })
+}
+
+fn parse_hunk_header(line: &str) -> Option<DiffHunk> {
+    let body = line.strip_prefix("@@ ")?;
+    let end = body.find(" @@")?;
+    let header = &body[..end];
+    let mut parts = header.split_whitespace();
+    let old_spec = parts.next()?;
+    let new_spec = parts.next()?;
+    Some(DiffHunk {
+        old: parse_hunk_side(old_spec, '-'),
+        new: parse_hunk_side(new_spec, '+'),
+    })
+}
+
+fn parse_hunk_side(spec: &str, prefix: char) -> Option<LineRange> {
+    let values = spec.strip_prefix(prefix)?;
+    let (start_raw, count) = match values.split_once(',') {
+        Some((start, count)) => (start, count.parse::<u32>().ok()?),
+        None => (values, 1),
+    };
+
+    if count == 0 {
+        return None;
+    }
+
+    let start: u32 = start_raw.parse().ok()?;
+    let start = start.max(1);
+    Some(LineRange {
+        start,
+        end: start.saturating_add(count).saturating_sub(1),
+    })
+}
+
+fn hunk_overlaps_any(hunk: &DiffHunk, allowed: &[LineRange]) -> bool {
+    allowed.iter().any(|range| {
+        hunk.old.is_some_and(|old| old.overlaps(range))
+            || hunk.new.is_some_and(|new| new.overlaps(range))
+    })
+}
+
+fn render_hunk(hunk: &DiffHunk) -> String {
+    if let Some(new) = hunk.new {
+        return format!("new:{}-{}", new.start, new.end);
+    }
+    if let Some(old) = hunk.old {
+        return format!("old:{}-{}", old.start, old.end);
+    }
+    "unknown".to_string()
+}
+
+fn load_symbol_ranges(file_path: &str, symbol: &str) -> Result<Vec<LineRange>, String> {
+    let fq_name = format!("{}::{}", file_path, symbol);
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT span_start_line, span_end_line
+             FROM symbols
+             WHERE file = ?1
+               AND fq_name = ?2",
+        )?;
+        let rows = stmt
+            .query_map([file_path, fq_name.as_str()], |row| {
+                Ok(LineRange {
+                    start: row.get::<_, u32>(0)?,
+                    end: row.get::<_, u32>(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 /// Run a command and return a check result
@@ -324,5 +661,58 @@ fn run_command_check(name: &str, cmd: &str, working_dir: &Path) -> ReviewCheck {
             passed: false,
             message: format!("Failed to run command: {}", e),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hunk_header_handles_single_line_format() {
+        let hunk = parse_hunk_header("@@ -12 +20 @@ fn demo").unwrap();
+        assert_eq!(hunk.old.unwrap().start, 12);
+        assert_eq!(hunk.old.unwrap().end, 12);
+        assert_eq!(hunk.new.unwrap().start, 20);
+        assert_eq!(hunk.new.unwrap().end, 20);
+    }
+
+    #[test]
+    fn test_parse_jj_git_diff_tracks_new_and_deleted_files() {
+        let diff = r#"diff --git a/src/new.rs b/src/new.rs
+new file mode 100644
+@@ -0,0 +1,3 @@
++fn a() {}
+diff --git a/src/old.rs b/src/old.rs
+deleted file mode 100644
+@@ -5,2 +0,0 @@
+-line
+"#;
+
+        let files = parse_jj_git_diff(diff);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.path == "src/new.rs" && f.is_new));
+        assert!(files.iter().any(|f| f.path == "src/old.rs" && f.is_deleted));
+    }
+
+    #[test]
+    fn test_hunk_overlap_accepts_old_or_new_range() {
+        let allowed = vec![LineRange { start: 10, end: 20 }];
+        let within_old = DiffHunk {
+            old: Some(LineRange { start: 15, end: 16 }),
+            new: Some(LineRange { start: 50, end: 51 }),
+        };
+        let within_new = DiffHunk {
+            old: Some(LineRange { start: 1, end: 2 }),
+            new: Some(LineRange { start: 11, end: 12 }),
+        };
+        let outside = DiffHunk {
+            old: Some(LineRange { start: 1, end: 2 }),
+            new: Some(LineRange { start: 30, end: 40 }),
+        };
+
+        assert!(hunk_overlaps_any(&within_old, &allowed));
+        assert!(hunk_overlaps_any(&within_new, &allowed));
+        assert!(!hunk_overlaps_any(&outside, &allowed));
     }
 }

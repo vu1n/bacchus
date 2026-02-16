@@ -235,6 +235,16 @@ pub enum SessionCommands {
     /// Check if session should block exit (for stop hook)
     Check,
 
+    /// Spawn ready workers once for the active orchestrator session
+    SpawnWorkers {
+        /// Max workers to launch this invocation
+        #[arg(long)]
+        count: Option<usize>,
+        /// Show launch plan without spawning workers
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Remove stale scoped session files and clean orphaned orchestrator leases
     Prune {
         /// Session age threshold in minutes
@@ -271,6 +281,29 @@ pub enum SessionCommands {
         /// Lease renew interval in milliseconds
         #[arg(long, default_value = "30000")]
         interval_ms: u64,
+    },
+
+    /// Internal: run a spawned worker command for a claimed task.
+    #[command(hide = true)]
+    WorkerRun {
+        /// Worker row ID in agent_workers table
+        #[arg(long)]
+        worker_id: i64,
+        /// Orchestrator run ID that spawned this worker
+        #[arg(long)]
+        run_id: String,
+        /// Task ID assigned to worker
+        #[arg(long)]
+        task_id: String,
+        /// Agent ID assigned to worker
+        #[arg(long)]
+        agent_id: String,
+        /// Session scope ID allocated to worker
+        #[arg(long)]
+        scope_id: String,
+        /// Shell command executed by worker
+        #[arg(long)]
+        command: String,
     },
 }
 
@@ -341,6 +374,14 @@ pub enum EpicCommands {
         /// The architect agent ID to assign to
         agent: String,
     },
+
+    /// Update epic status
+    SetStatus {
+        /// The epic ID to update
+        id: String,
+        /// New status: open, planning, active, or closed
+        status: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -364,6 +405,37 @@ pub enum MessageCommands {
         /// JSON payload
         payload: String,
     },
+
+    /// Claim pending messages for an agent
+    Claim {
+        /// Agent ID claiming messages
+        agent: String,
+        /// Max messages to claim
+        #[arg(long, default_value = "10")]
+        limit: i32,
+    },
+
+    /// Mark a processing message as processed
+    Ack {
+        /// Message ID
+        message_id: i64,
+        /// Agent ID that owns processing lock
+        agent: String,
+    },
+
+    /// Mark a processing message as failed
+    Fail {
+        /// Message ID
+        message_id: i64,
+        /// Agent ID that owns processing lock
+        agent: String,
+        /// Optional failure reason
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Reclaim stale processing messages
+    ReclaimStale,
 }
 
 #[derive(Subcommand)]

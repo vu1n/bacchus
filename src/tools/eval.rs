@@ -11,6 +11,7 @@
 use crate::db::with_db;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Event types for tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,8 +60,24 @@ pub struct EvalOutput {
     pub rework_count: i64,
     pub completion_rate: f64,
     pub rework_rate: f64,
+    pub worker_reliability: WorkerReliabilityMetrics,
     pub agent_stats: Vec<AgentStat>,
     pub recent_events: Vec<MetricEvent>,
+}
+
+/// Worker reliability metrics derived from orchestration events.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct WorkerReliabilityMetrics {
+    pub stale_recovered: i64,
+    pub stale_recovered_heartbeat: i64,
+    pub stale_recovered_runtime: i64,
+    pub stale_recovered_pid_dead: i64,
+    pub stale_recovered_state_mismatch: i64,
+    pub kill_attempted: i64,
+    pub kill_succeeded: i64,
+    pub failed_worker_task_reopened: i64,
+    pub worker_exit_ignored: i64,
+    pub fenced_worker_exits: i64,
 }
 
 /// Per-agent statistics
@@ -229,6 +246,81 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
             }
         };
 
+        let worker_reliability = {
+            let epic_filter = if epic_id.is_some() {
+                "AND oe.entity_id IN (SELECT id FROM tasks WHERE epic_id = ?2)"
+            } else {
+                ""
+            };
+            let sql = format!(
+                "SELECT oe.event_type, oe.payload
+                 FROM orchestration_events oe
+                 WHERE oe.created_at >= ?1
+                   AND oe.entity_type = 'task'
+                   AND oe.event_type IN (
+                       'worker_stale_recovered',
+                       'failed_worker_task_reopened',
+                       'worker_exit_ignored',
+                       'worker_exited'
+                   )
+                   {}
+                 ORDER BY oe.created_at DESC",
+                epic_filter
+            );
+
+            let mut stmt = conn.prepare(&sql)?;
+            let rows: Vec<(String, String)> = if let Some(eid) = epic_id {
+                stmt.query_map(params![cutoff, eid], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            } else {
+                stmt.query_map(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+
+            let mut metrics = WorkerReliabilityMetrics::default();
+            for (event_type, payload_str) in rows {
+                let payload: Value = serde_json::from_str(&payload_str).unwrap_or(Value::Null);
+                match event_type.as_str() {
+                    "worker_stale_recovered" => {
+                        metrics.stale_recovered += 1;
+                        if payload["stale_heartbeat"].as_bool().unwrap_or(false) {
+                            metrics.stale_recovered_heartbeat += 1;
+                        }
+                        if payload["runtime_exceeded"].as_bool().unwrap_or(false) {
+                            metrics.stale_recovered_runtime += 1;
+                        }
+                        if payload["pid_dead"].as_bool().unwrap_or(false) {
+                            metrics.stale_recovered_pid_dead += 1;
+                        }
+                        if payload["stale_state"].as_bool().unwrap_or(false) {
+                            metrics.stale_recovered_state_mismatch += 1;
+                        }
+                        if payload["kill_attempted"].as_bool().unwrap_or(false) {
+                            metrics.kill_attempted += 1;
+                        }
+                        if payload["kill_succeeded"].as_bool().unwrap_or(false) {
+                            metrics.kill_succeeded += 1;
+                        }
+                    }
+                    "failed_worker_task_reopened" => {
+                        metrics.failed_worker_task_reopened += 1;
+                    }
+                    "worker_exit_ignored" => {
+                        metrics.worker_exit_ignored += 1;
+                    }
+                    "worker_exited" => {
+                        if payload["fenced"].as_bool().unwrap_or(false) {
+                            metrics.fenced_worker_exits += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            metrics
+        };
+
         Ok(EvalOutput {
             period_days: days,
             total_tasks,
@@ -238,6 +330,7 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
             rework_count,
             completion_rate,
             rework_rate,
+            worker_reliability,
             agent_stats,
             recent_events,
         })
@@ -257,4 +350,92 @@ pub fn was_previously_completed(task_id: &str) -> bool {
         Ok(count > 0)
     })
     .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{close_db, init_db};
+
+    fn setup() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        init_db(Some(db_path.to_str().unwrap())).unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        with_db(|conn| {
+            conn.execute(
+                "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+                 VALUES ('EV-EPIC', 'Eval Epic', 'open', 'test', ?1, ?1)",
+                [now],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, created_at, updated_at)
+                 VALUES ('EV-001', 'EV-EPIC', 'Eval Task', 1, 'open', 'generic', 'generic', ?1, ?1)",
+                [now],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn test_eval_includes_worker_reliability_metrics() {
+        let _dir = setup();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        with_db(|conn| {
+            conn.execute(
+                "INSERT INTO orchestration_events (run_id, actor, event_type, entity_type, entity_id, payload, created_at)
+                 VALUES (?1, 'orchestrator', 'worker_stale_recovered', 'task', 'EV-001', ?2, ?3)",
+                params![
+                    "run-a",
+                    r#"{"stale_heartbeat":true,"runtime_exceeded":true,"pid_dead":false,"stale_state":false,"kill_attempted":true,"kill_succeeded":true}"#,
+                    now
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO orchestration_events (run_id, actor, event_type, entity_type, entity_id, payload, created_at)
+                 VALUES (?1, 'orchestrator', 'worker_stale_recovered', 'task', 'EV-001', ?2, ?3)",
+                params![
+                    "run-a",
+                    r#"{"stale_heartbeat":false,"runtime_exceeded":false,"pid_dead":true,"stale_state":true,"kill_attempted":false,"kill_succeeded":false}"#,
+                    now
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO orchestration_events (run_id, actor, event_type, entity_type, entity_id, payload, created_at)
+                 VALUES (?1, 'orchestrator', 'failed_worker_task_reopened', 'task', 'EV-001', '{}', ?2)",
+                params!["run-a", now],
+            )?;
+            conn.execute(
+                "INSERT INTO orchestration_events (run_id, actor, event_type, entity_type, entity_id, payload, created_at)
+                 VALUES (?1, 'worker', 'worker_exit_ignored', 'task', 'EV-001', '{}', ?2)",
+                params!["run-a", now],
+            )?;
+            conn.execute(
+                "INSERT INTO orchestration_events (run_id, actor, event_type, entity_type, entity_id, payload, created_at)
+                 VALUES (?1, 'worker', 'worker_exited', 'task', 'EV-001', ?2, ?3)",
+                params!["run-a", r#"{"fenced":true}"#, now],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let report = generate_eval_report(None, 7).unwrap();
+        assert_eq!(report.worker_reliability.stale_recovered, 2);
+        assert_eq!(report.worker_reliability.stale_recovered_heartbeat, 1);
+        assert_eq!(report.worker_reliability.stale_recovered_runtime, 1);
+        assert_eq!(report.worker_reliability.stale_recovered_pid_dead, 1);
+        assert_eq!(report.worker_reliability.stale_recovered_state_mismatch, 1);
+        assert_eq!(report.worker_reliability.kill_attempted, 1);
+        assert_eq!(report.worker_reliability.kill_succeeded, 1);
+        assert_eq!(report.worker_reliability.failed_worker_task_reopened, 1);
+        assert_eq!(report.worker_reliability.worker_exit_ignored, 1);
+        assert_eq!(report.worker_reliability.fenced_worker_exits, 1);
+
+        close_db();
+    }
 }

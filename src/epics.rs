@@ -311,6 +311,50 @@ pub fn assign_epic(epic_id: &str, architect_agent: &str) -> Result<Epic, EpicsEr
     })
 }
 
+fn is_valid_status_transition(from: EpicStatus, to: EpicStatus) -> bool {
+    use EpicStatus::*;
+    match from {
+        Open => matches!(to, Planning | Closed),
+        Planning => matches!(to, Open | Active | Closed),
+        Active => matches!(to, Open | Closed),
+        Closed => matches!(to, Open | Active),
+    }
+}
+
+/// Update an epic status with transition validation.
+pub fn update_epic_status(epic_id: &str, status: EpicStatus) -> Result<Epic, EpicsError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let existing = get_epic(epic_id)?;
+    let current = existing.status;
+
+    if current == status {
+        return Ok(existing);
+    }
+    if !is_valid_status_transition(current, status) {
+        return Err(EpicsError::InvalidTransition {
+            from: current.as_str().to_string(),
+            to: status.as_str().to_string(),
+        });
+    }
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE epics SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status.as_str(), now, epic_id],
+        )?;
+        if affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Ok(())
+    })
+    .map_err(|e: rusqlite::Error| match e {
+        rusqlite::Error::QueryReturnedNoRows => EpicsError::NotFound(epic_id.to_string()),
+        other => EpicsError::DbError(other.to_string()),
+    })?;
+
+    get_epic(epic_id)
+}
+
 /// Get epic with task counts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpicWithCounts {
@@ -466,6 +510,45 @@ mod tests {
 
         let result = get_epic("NONEXISTENT");
         assert!(matches!(result, Err(EpicsError::NotFound(_))));
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_update_epic_status_valid_transition() {
+        let _dir = setup_test_db();
+
+        let input = CreateEpicInput {
+            id: "EPIC-STATUS".to_string(),
+            title: "Status Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        };
+        create_epic(input).unwrap();
+
+        let planning = update_epic_status("EPIC-STATUS", EpicStatus::Planning).unwrap();
+        assert_eq!(planning.status, EpicStatus::Planning);
+
+        let active = update_epic_status("EPIC-STATUS", EpicStatus::Active).unwrap();
+        assert_eq!(active.status, EpicStatus::Active);
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_update_epic_status_invalid_transition() {
+        let _dir = setup_test_db();
+
+        let input = CreateEpicInput {
+            id: "EPIC-BAD-STATUS".to_string(),
+            title: "Status Epic".to_string(),
+            description: None,
+            created_by: "human".to_string(),
+        };
+        create_epic(input).unwrap();
+
+        let result = update_epic_status("EPIC-BAD-STATUS", EpicStatus::Active);
+        assert!(matches!(result, Err(EpicsError::InvalidTransition { .. })));
 
         crate::db::close_db();
     }

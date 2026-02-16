@@ -267,6 +267,31 @@ CREATE TABLE IF NOT EXISTS orchestrator_leases (
 );
 CREATE INDEX IF NOT EXISTS idx_orch_leases_expires ON orchestrator_leases(lease_expires_at);
 
+-- ============================================================================
+-- Agent Workers (orchestrator-managed worker process lifecycle)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS agent_workers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,                   -- orchestrator run_id
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    scope_id TEXT NOT NULL,                 -- session scope allocated to worker
+    command TEXT NOT NULL,                  -- command executed by worker wrapper
+    status TEXT NOT NULL DEFAULT 'launching', -- launching | running | completed | failed
+    attempt INTEGER NOT NULL DEFAULT 1,     -- launch attempt number for run_id+task_id
+    pid INTEGER,                            -- OS process id when known
+    error TEXT,                             -- failure reason (if status=failed)
+    exit_code INTEGER,                      -- process exit code (if known)
+    started_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK (status IN ('launching', 'running', 'completed', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_workers_run_status ON agent_workers(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_workers_task ON agent_workers(task_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_workers_active_task
+    ON agent_workers(run_id, task_id)
+    WHERE status IN ('launching', 'running');
+
 -- Soft-delete guard
 DROP TRIGGER IF EXISTS tasks_soft_delete_guard;
 CREATE TRIGGER tasks_soft_delete_guard
@@ -322,6 +347,7 @@ mod tests {
             "agent_messages",
             "orchestration_events",
             "orchestrator_leases",
+            "agent_workers",
             "handles",
             "handle_data",
         ];

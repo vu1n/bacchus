@@ -34,11 +34,14 @@ pub fn claim_task(
     force: bool,
     workspace_root: &Path,
 ) -> Result<ClaimOutput> {
+    let mut rollback_snapshot: Option<tasks::SqliteTask> = None;
+
     // Use the atomic SQLite claim function
     let claim_result: std::result::Result<tasks::SqliteTask, tasks::TasksError> = if force {
         // Force claim bypasses readiness check - manually update status
         // First get the task to verify it exists
         let task = tasks::get_sqlite_task(task_id).map_err(tasks_error_to_rusqlite)?;
+        rollback_snapshot = Some(task.clone());
 
         match task.status {
             SqliteTaskStatus::Open | SqliteTaskStatus::InProgress | SqliteTaskStatus::Blocked => {}
@@ -97,14 +100,41 @@ pub fn claim_task(
     match claim_result {
         Ok(task) => {
             // Create jj workspace for the task
-            let ws = workspace::create_workspace(workspace_root, task_id).map_err(|e| {
-                // Rollback: return task to open state if workspace creation fails.
-                let _ = tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Open);
-                rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(format!("Failed to create workspace: {}", e)),
-                )
-            })?;
+            let ws = match workspace::create_workspace(workspace_root, task_id) {
+                Ok(ws) => ws,
+                Err(e) => {
+                    // Rollback: preserve prior state when force-claiming.
+                    if let Some(prev) = rollback_snapshot {
+                        let now = chrono::Utc::now().timestamp_millis();
+                        let _ = with_db(|conn| {
+                            conn.execute(
+                                "UPDATE tasks
+                                 SET status = ?1,
+                                     claimed_by = ?2,
+                                     claimed_at = ?3,
+                                     claimed_heartbeat_at = ?4,
+                                     updated_at = ?5
+                                 WHERE id = ?6
+                                   AND deleted_at IS NULL",
+                                params![
+                                    prev.status.as_str(),
+                                    prev.claimed_by,
+                                    prev.claimed_at,
+                                    prev.claimed_heartbeat_at,
+                                    now,
+                                    task_id
+                                ],
+                            )
+                        });
+                    } else {
+                        let _ = tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Open);
+                    }
+                    return Err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(format!("Failed to create workspace: {}", e)),
+                    ));
+                }
+            };
 
             // Record eval event (rework if previously completed)
             let event_type = if eval::was_previously_completed(task_id) {

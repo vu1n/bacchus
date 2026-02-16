@@ -584,6 +584,780 @@ tasks:
     }
 
     #[test]
+    fn test_orchestrator_session_auto_spawns_worker_when_configured() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: SWARM-001
+    title: "Spawn worker task"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/swarm.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKER_CMD", "echo worker")
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let check_output = Command::new(bacchus_bin())
+            .args(["session", "check"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKER_CMD", "echo worker")
+            .output()
+            .unwrap();
+        assert!(check_output.status.success());
+        let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+        assert!(
+            check_stdout.contains("Auto-spawn attempted 1 task(s): launched 1"),
+            "Expected auto-spawn launch note, got: {}",
+            check_stdout
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let workers_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_workers WHERE run_id LIKE 'orchestrator-%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(workers_count >= 1);
+
+        let task_status: String = conn
+            .query_row("SELECT status FROM tasks WHERE id = 'SWARM-001'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(task_status, "in_progress");
+    }
+
+    #[test]
+    fn test_session_spawn_workers_command_dry_run_and_launch() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: SWARM-002
+    title: "Spawn worker command task"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/swarm2.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKER_CMD", "echo worker")
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let dry_run_output = Command::new(bacchus_bin())
+            .args(["session", "spawn-workers", "--count", "1", "--dry-run"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(dry_run_output.status.success());
+        let dry_run_json: Value = serde_json::from_slice(&dry_run_output.stdout).unwrap();
+        assert_eq!(dry_run_json["dry_run"], true);
+        let has_candidate = dry_run_json["candidate_tasks"]
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|t| t.as_str() == Some("SWARM-002")));
+        assert!(has_candidate);
+
+        let spawn_output = Command::new(bacchus_bin())
+            .args(["session", "spawn-workers", "--count", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKER_CMD", "echo worker")
+            .output()
+            .unwrap();
+        assert!(spawn_output.status.success());
+        let spawn_json: Value = serde_json::from_slice(&spawn_output.stdout).unwrap();
+        assert!(
+            spawn_json["spawn_summary"]["launched"]
+                .as_i64()
+                .unwrap_or(0)
+                >= 1,
+            "Expected at least one launch: {}",
+            String::from_utf8_lossy(&spawn_output.stdout)
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let workers_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_workers WHERE run_id LIKE 'orchestrator-%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(workers_count >= 1);
+    }
+
+    #[test]
+    fn test_orchestrator_check_recovers_stale_running_worker() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: STALEW-001
+    title: "Recover stale worker"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/stalew.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let session_status = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(session_status.status.success());
+        let session_json: Value = serde_json::from_slice(&session_status.stdout).unwrap();
+        let run_id = session_json["session"]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let stale_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+            - (20 * 60 * 1000);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress',
+                 claimed_by = 'agent-stalew',
+                 claimed_at = ?1,
+                 claimed_heartbeat_at = ?1
+             WHERE id = 'STALEW-001'",
+            [stale_ts],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_workers
+             (run_id, task_id, agent_id, scope_id, command, status, attempt, pid, started_at, updated_at)
+             VALUES (?1, 'STALEW-001', 'agent-stalew', 'scope-stale', 'echo worker', 'running', 1, 42424, ?2, ?2)",
+            rusqlite::params![run_id, stale_ts],
+        )
+        .unwrap();
+
+        let check_output = Command::new(bacchus_bin())
+            .args(["session", "check"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(check_output.status.success());
+        let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+        assert!(
+            check_stdout.contains("Recovered stale workers: 1"),
+            "Expected stale-worker recovery note, got: {}",
+            check_stdout
+        );
+
+        let worker_status: String = conn
+            .query_row(
+                "SELECT status FROM agent_workers WHERE run_id = ?1 AND task_id = 'STALEW-001'",
+                [run_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worker_status, "failed");
+
+        let task_row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, claimed_by FROM tasks WHERE id = 'STALEW-001'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(task_row.0, "open");
+        assert!(task_row.1.is_none());
+
+        let recovery_events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM orchestration_events WHERE event_type = 'worker_stale_recovered' AND run_id = ?1",
+                [run_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(recovery_events >= 1);
+    }
+
+    #[test]
+    fn test_orchestrator_check_recovers_worker_on_runtime_timeout() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: TIMEOUTW-001
+    title: "Recover timed-out worker"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/timeoutw.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let session_status = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(session_status.status.success());
+        let session_json: Value = serde_json::from_slice(&session_status.stdout).unwrap();
+        let run_id = session_json["session"]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let old_started = now_ts - 10_000;
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress',
+                 claimed_by = 'agent-timeoutw',
+                 claimed_at = ?1,
+                 claimed_heartbeat_at = ?1
+             WHERE id = 'TIMEOUTW-001'",
+            [now_ts],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_workers
+             (run_id, task_id, agent_id, scope_id, command, status, attempt, pid, started_at, updated_at)
+             VALUES (?1, 'TIMEOUTW-001', 'agent-timeoutw', 'scope-timeout', 'echo worker', 'running', 1, 43434, ?2, ?2)",
+            rusqlite::params![run_id, old_started],
+        )
+        .unwrap();
+
+        let check_output = Command::new(bacchus_bin())
+            .args(["session", "check"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKER_MAX_RUNTIME_MS", "1000")
+            .output()
+            .unwrap();
+        assert!(check_output.status.success());
+        let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+        assert!(
+            check_stdout.contains("Recovered stale workers: 1"),
+            "Expected timeout recovery note, got: {}",
+            check_stdout
+        );
+
+        let worker_status: String = conn
+            .query_row(
+                "SELECT status FROM agent_workers WHERE run_id = ?1 AND task_id = 'TIMEOUTW-001'",
+                [run_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worker_status, "failed");
+
+        let task_status: String = conn
+            .query_row(
+                "SELECT status FROM tasks WHERE id = 'TIMEOUTW-001'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_status, "open");
+    }
+
+    #[test]
+    fn test_orchestrator_stop_reopens_tasks_for_active_workers() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: STOPW-001
+    title: "Stop session worker reopen"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/stopw.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let session_status = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(session_status.status.success());
+        let session_json: Value = serde_json::from_slice(&session_status.stdout).unwrap();
+        let run_id = session_json["session"]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress',
+                 claimed_by = 'agent-stopw',
+                 claimed_at = ?1,
+                 claimed_heartbeat_at = ?1
+             WHERE id = 'STOPW-001'",
+            [now_ts],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_workers
+             (run_id, task_id, agent_id, scope_id, command, status, attempt, pid, started_at, updated_at)
+             VALUES (?1, 'STOPW-001', 'agent-stopw', 'scope-stop', 'echo worker', 'running', 1, 45454, ?2, ?2)",
+            rusqlite::params![run_id, now_ts],
+        )
+        .unwrap();
+
+        let stop_output = Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(stop_output.status.success());
+
+        let worker_status: String = conn
+            .query_row(
+                "SELECT status FROM agent_workers WHERE run_id = ?1 AND task_id = 'STOPW-001'",
+                [run_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worker_status, "failed");
+
+        let task_row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, claimed_by FROM tasks WHERE id = 'STOPW-001'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(task_row.0, "open");
+        assert!(task_row.1.is_none());
+    }
+
+    #[test]
+    fn test_orchestrator_check_recovers_worker_when_pid_is_dead() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: PIDW-001
+    title: "Recover dead pid worker"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/pidw.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let session_status = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(session_status.status.success());
+        let session_json: Value = serde_json::from_slice(&session_status.stdout).unwrap();
+        let run_id = session_json["session"]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress',
+                 claimed_by = 'agent-pidw',
+                 claimed_at = ?1,
+                 claimed_heartbeat_at = ?1
+             WHERE id = 'PIDW-001'",
+            [now_ts],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_workers
+             (run_id, task_id, agent_id, scope_id, command, status, attempt, pid, started_at, updated_at)
+             VALUES (?1, 'PIDW-001', 'agent-pidw', 'scope-pid', 'echo worker', 'running', 1, 999999, ?2, ?2)",
+            rusqlite::params![run_id, now_ts],
+        )
+        .unwrap();
+
+        let check_output = Command::new(bacchus_bin())
+            .args(["session", "check"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(check_output.status.success());
+        let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+        assert!(
+            check_stdout.contains("Recovered stale workers: 1"),
+            "Expected dead-pid recovery note, got: {}",
+            check_stdout
+        );
+
+        let worker_status: String = conn
+            .query_row(
+                "SELECT status FROM agent_workers WHERE run_id = ?1 AND task_id = 'PIDW-001'",
+                [run_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worker_status, "failed");
+    }
+
+    #[test]
+    fn test_orchestrator_check_reopens_failed_worker_owned_task() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join("test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: FWR-001
+    title: "Reopen failed worker task"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/fwr.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "SWARM"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let session_status = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(session_status.status.success());
+        let session_json: Value = serde_json::from_slice(&session_status.stdout).unwrap();
+        let run_id = session_json["session"]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress',
+                 claimed_by = 'agent-fwr',
+                 claimed_at = ?1,
+                 claimed_heartbeat_at = ?1
+             WHERE id = 'FWR-001'",
+            [now_ts],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_workers
+             (run_id, task_id, agent_id, scope_id, command, status, attempt, started_at, updated_at, error)
+             VALUES (?1, 'FWR-001', 'agent-fwr', 'scope-fwr', 'echo worker', 'failed', 1, ?2, ?2, 'boom')",
+            rusqlite::params![run_id, now_ts],
+        )
+        .unwrap();
+
+        let check_output = Command::new(bacchus_bin())
+            .args(["session", "check"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(check_output.status.success());
+        let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+        assert!(
+            check_stdout.contains("Reopened tasks from failed workers: 1"),
+            "Expected failed-worker reopen note, got: {}",
+            check_stdout
+        );
+
+        let task_row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, claimed_by FROM tasks WHERE id = 'FWR-001'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(task_row.0, "open");
+        assert!(task_row.1.is_none());
+    }
+
+    #[test]
     fn test_status_separates_stale_claims_from_active_count() {
         let temp = TempDir::new().unwrap();
         let db_path = temp.path().join("test.db");

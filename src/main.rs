@@ -11,6 +11,7 @@ mod messages;
 mod tasks;
 mod tools;
 mod updater;
+mod workers;
 mod workspace;
 
 use clap::Parser;
@@ -300,6 +301,13 @@ fn main() {
                 let result = tools::check_session();
                 Ok(serde_json::to_string_pretty(&result).unwrap())
             }
+            SessionCommands::SpawnWorkers { count, dry_run } => {
+                tools::spawn_workers_once(count, dry_run)
+                    .map(|v| serde_json::to_string_pretty(&v).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))
+                    })
+            }
             SessionCommands::Prune { minutes } => tools::prune_sessions(minutes)
                 .map(|v| serde_json::to_string_pretty(&v).unwrap())
                 .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
@@ -318,6 +326,18 @@ fn main() {
             } => tools::run_orchestrator_lease_loop(&run_id, &token, interval_ms)
                 .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
                 .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            SessionCommands::WorkerRun {
+                worker_id,
+                run_id,
+                task_id,
+                agent_id,
+                scope_id,
+                command,
+            } => tools::run_worker_command(
+                worker_id, &run_id, &task_id, &agent_id, &scope_id, &command,
+            )
+            .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+            .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
         },
 
         // ====================================================================
@@ -409,6 +429,20 @@ fn main() {
                         Some(e.to_string()),
                     )
                 }),
+            EpicCommands::SetStatus { id, status } => match epics::EpicStatus::from_str(&status) {
+                Ok(parsed_status) => epics::update_epic_status(&id, parsed_status)
+                    .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        )
+                    }),
+                Err(e) => Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                )),
+            },
         },
 
         // ====================================================================
@@ -453,6 +487,67 @@ fn main() {
                     Some(format!("Invalid JSON payload: {}", e)),
                 )),
             },
+            MessageCommands::Claim { agent, limit } => messages::claim_messages(&agent, limit)
+                .map(|msgs| serde_json::to_string_pretty(&msgs).unwrap())
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                }),
+            MessageCommands::Ack { message_id, agent } => {
+                messages::mark_processed(message_id, &agent)
+                    .map(|_| {
+                        serde_json::json!({
+                            "success": true,
+                            "message_id": message_id,
+                            "agent": agent,
+                            "status": "processed"
+                        })
+                        .to_string()
+                    })
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        )
+                    })
+            }
+            MessageCommands::Fail {
+                message_id,
+                agent,
+                reason,
+            } => messages::mark_failed(message_id, &agent, reason.as_deref())
+                .map(|_| {
+                    serde_json::json!({
+                        "success": true,
+                        "message_id": message_id,
+                        "agent": agent,
+                        "status": "failed"
+                    })
+                    .to_string()
+                })
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                }),
+            MessageCommands::ReclaimStale => messages::reclaim_stale_messages()
+                .map(|(requeued, failed)| {
+                    serde_json::json!({
+                        "success": true,
+                        "requeued": requeued,
+                        "failed": failed
+                    })
+                    .to_string()
+                })
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                }),
         },
 
         // ====================================================================
@@ -892,6 +987,31 @@ bacchus task validate
    bacchus abort <task_id>
    ```
 
+## Orchestrator Session Workflow
+
+```bash
+# Start orchestrator lease/session
+bacchus session start orchestrator --max-concurrent 3
+
+# Optional: configure autonomous worker launch on `session check`
+export BACCHUS_WORKER_CMD='claude'
+export BACCHUS_ORCHESTRATOR_AUTO_SPAWN=1
+export BACCHUS_WORKER_STALE_GRACE_MS=60000
+# Optional runtime safety budget (disabled when unset)
+export BACCHUS_WORKER_MAX_RUNTIME_MS=1800000
+# Optional best-effort stale PID termination
+export BACCHUS_WORKER_KILL_STALE=1
+
+# Manually launch ready workers once
+bacchus session spawn-workers --count 3
+
+# Preview launch candidates and slot pressure without spawning
+bacchus session spawn-workers --count 3 --dry-run
+
+# Stop when done
+bacchus session stop
+```
+
 ## Collision Detection
 
 Tasks can define footprints to prevent parallel agents from modifying the same code:
@@ -936,10 +1056,20 @@ bacchus context --task-id <task_id>
 
 - Run from repo root for global context.
 - Run inside a workspace for task context.
+- Task context includes active footprint collisions and risk hints.
 
 ## Status
 
 ```bash
 bacchus status
 ```
+
+## Review
+
+```bash
+# Advisory checks before release (workspace, changes, footprint, optional build/test)
+bacchus review <task_id> --build-cmd "cargo build" --test-cmd "cargo test -q"
+```
+
+Footprint review is symbol-aware: changed hunks must fall within declared symbol spans.
 "#;

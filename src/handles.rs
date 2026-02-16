@@ -7,37 +7,40 @@ use crate::db::with_db;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Counter for generating unique handle names within a session
 static HANDLE_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// Flag to track if counter has been initialized from DB
-static COUNTER_INITIALIZED: OnceLock<bool> = OnceLock::new();
+static COUNTER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Initialize counter from database max values
 fn ensure_counter_initialized() {
-    COUNTER_INITIALIZED.get_or_init(|| {
-        // Get max handle number from database for each type
-        let max_num = with_db(|conn| {
-            let max: i32 = conn
-                .query_row(
-                    "SELECT COALESCE(MAX(CAST(SUBSTR(handle, 5) AS INTEGER)), 0) FROM handles",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-            Ok(max)
-        })
-        .unwrap_or(0);
+    if COUNTER_INITIALIZED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
 
-        // Set counter to max + 1
-        if max_num > 0 {
-            HANDLE_COUNTER.store((max_num + 1) as u32, Ordering::SeqCst);
-        }
-        true
-    });
+    // Get max handle number from database for each type
+    let max_num = with_db(|conn| {
+        let max: i32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(CAST(SUBSTR(handle, 5) AS INTEGER)), 0) FROM handles",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(max)
+    })
+    .unwrap_or(0);
+
+    // Set counter to max + 1
+    if max_num > 0 {
+        HANDLE_COUNTER.store((max_num + 1) as u32, Ordering::SeqCst);
+    }
 }
 
 /// Types of handles supported
@@ -127,10 +130,6 @@ pub fn create_handle(
     let count = data.len() as i32;
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // Generate unique handle name
-    let num = HANDLE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let handle = format!("{}{}", handle_type.prefix(), num);
-
     // Generate preview (first 3 items)
     let preview: Vec<String> = data.iter().take(3).map(&preview_fn).collect();
     let preview_str = preview.join(", ");
@@ -138,39 +137,58 @@ pub fn create_handle(
     // Get current session ID if active
     let session_id = get_current_session_id();
 
-    with_db(|conn| {
-        // Insert handle metadata
-        conn.execute(
-            "INSERT INTO handles (handle, handle_type, count, query, preview, created_at, session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                &handle,
-                handle_type.as_str(),
-                count,
-                query,
-                &preview_str,
-                now_ms,
-                session_id,
-            ],
-        )?;
-
-        // Insert individual data items
-        for (idx, item) in data.iter().enumerate() {
-            let json = serde_json::to_string(item).unwrap_or_default();
+    // Retry on rare handle collision (e.g., counter reset/race across tests)
+    for _ in 0..8 {
+        let num = HANDLE_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let handle = format!("{}{}", handle_type.prefix(), num);
+        let insert_result = with_db(|conn| {
             conn.execute(
-                "INSERT INTO handle_data (handle, idx, data) VALUES (?1, ?2, ?3)",
-                rusqlite::params![&handle, idx as i32, &json],
+                "INSERT INTO handles (handle, handle_type, count, query, preview, created_at, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    &handle,
+                    handle_type.as_str(),
+                    count,
+                    query,
+                    &preview_str,
+                    now_ms,
+                    session_id,
+                ],
             )?;
-        }
 
-        Ok(HandleStub {
-            handle,
-            handle_type: handle_type.as_str().to_string(),
-            count,
-            query: query.map(String::from),
-            preview,
-        })
-    })
+            for (idx, item) in data.iter().enumerate() {
+                let json = serde_json::to_string(item).unwrap_or_default();
+                conn.execute(
+                    "INSERT INTO handle_data (handle, idx, data) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![&handle, idx as i32, &json],
+                )?;
+            }
+
+            Ok(HandleStub {
+                handle,
+                handle_type: handle_type.as_str().to_string(),
+                count,
+                query: query.map(String::from),
+                preview: preview.clone(),
+            })
+        });
+
+        match insert_result {
+            Ok(stub) => return Ok(stub),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                    || err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
+            {
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(1),
+        Some("Failed to allocate unique handle after retries".to_string()),
+    ))
 }
 
 /// Expand a handle to retrieve its data
@@ -317,6 +335,7 @@ pub fn clear_session_handles(session_id: &str) -> Result<usize> {
 #[cfg(test)]
 pub fn reset_handle_counter() {
     HANDLE_COUNTER.store(1, Ordering::SeqCst);
+    COUNTER_INITIALIZED.store(false, Ordering::SeqCst);
 }
 
 /// Get current session ID from scoped session file if it exists

@@ -51,8 +51,33 @@ bacchus task list --ready
 | `bacchus events --limit 50` | Inspect orchestration event log |
 | `bacchus session start agent --task-id X [--agent-id Y]` | Start agent session (heartbeat loop starts when owner is known) |
 | `bacchus session start orchestrator` | Start orchestrator session |
+| `bacchus session start architect --agent-id X` | Start architect session |
+| `bacchus session spawn-workers [--count N] [--dry-run]` | Launch ready workers once for active orchestrator session |
 | `bacchus session stop` | Clear session |
 | `bacchus session prune [--minutes N]` | Remove stale scoped sessions and orphaned expired leases |
+| `bacchus message claim <agent> --limit N` | Claim architect/agent messages |
+| `bacchus message ack <id> <agent>` | Ack claimed message |
+| `bacchus message fail <id> <agent> --reason X` | Fail claimed message |
+| `bacchus epic set-status <id> <status>` | Move epic through planning/active/closed |
+
+### Autonomous Worker Spawning
+
+Set these when you want orchestrator `session check` to launch workers automatically:
+
+```bash
+export BACCHUS_WORKER_CMD='claude'
+export BACCHUS_ORCHESTRATOR_AUTO_SPAWN=1
+export BACCHUS_WORKER_MAX_RETRIES=3
+export BACCHUS_WORKER_RETRY_BACKOFF_MS=60000
+export BACCHUS_WORKER_STALE_GRACE_MS=60000
+# Optional: fail/reopen workers that exceed runtime budget
+export BACCHUS_WORKER_MAX_RUNTIME_MS=1800000
+# Optional: best-effort terminate stale worker PIDs before reopen
+export BACCHUS_WORKER_KILL_STALE=1
+```
+
+Use `bacchus session spawn-workers --dry-run` to preview ready tasks/slots before launching.
+Stale worker recovery is automatic: stale worker rows are failed and their tasks are reset to `open`.
 
 ## Handle Commands (Token-Saving)
 
@@ -318,6 +343,9 @@ bacchus task import --epic-id AUTH
 
 # 3. Start orchestrator session
 bacchus session start orchestrator --max-concurrent 3
+
+# 3.1 Optionally spawn ready workers immediately
+bacchus session spawn-workers --count 3
 
 # 4. Check ready tasks and their archetypes
 bacchus task list --ready

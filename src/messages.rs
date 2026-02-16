@@ -76,15 +76,12 @@ pub struct SendMessageInput {
 }
 
 /// Constants for message processing
-#[cfg(test)]
 pub const PROCESSING_TIMEOUT_MS: i64 = 300_000; // 5 minutes
-#[cfg(test)]
 pub const MAX_ATTEMPTS: i32 = 3;
 
 /// Errors that can occur when working with messages
 #[derive(Debug, Error)]
 pub enum MessagesError {
-    #[cfg(test)]
     #[error("Message not found: {0}")]
     NotFound(i64),
 
@@ -139,9 +136,9 @@ pub fn send_message(input: SendMessageInput) -> Result<AgentMessage, MessagesErr
 ///
 /// Returns up to `limit` messages, marking them as 'processing'.
 /// Uses atomic UPDATE ... WHERE to prevent race conditions.
-#[cfg(test)]
 pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
+    let limit = limit.clamp(1, 100);
 
     with_db(|conn| {
         // Use savepoint for auto-rollback on error
@@ -233,7 +230,6 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
 }
 
 /// Mark a message as processed
-#[cfg(test)]
 pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -253,6 +249,50 @@ pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesErr
                     message_id, agent_id
                 )),
             ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e: rusqlite::Error| {
+        if e.to_string().contains("not found or not owned") {
+            MessagesError::NotFound(message_id)
+        } else {
+            MessagesError::DbError(e.to_string())
+        }
+    })
+}
+
+/// Mark a message as failed
+pub fn mark_failed(
+    message_id: i64,
+    agent_id: &str,
+    reason: Option<&str>,
+) -> Result<(), MessagesError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE agent_messages
+             SET status = 'failed', processed_at = ?1, processing_by = NULL, locked_at = NULL
+             WHERE id = ?2 AND processing_by = ?3",
+            params![now, message_id, agent_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!(
+                    "Message {} not found or not owned by {}",
+                    message_id, agent_id
+                )),
+            ));
+        }
+
+        if let Some(msg) = reason {
+            eprintln!(
+                "Message {} marked failed by {}: {}",
+                message_id, agent_id, msg
+            );
         }
 
         Ok(())
@@ -334,7 +374,6 @@ pub fn list_messages(
 /// - Marked as 'failed' if attempts >= MAX_ATTEMPTS
 ///
 /// Returns (requeued_count, failed_count)
-#[cfg(test)]
 pub fn reclaim_stale_messages() -> Result<(usize, usize), MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
     let timeout_threshold = now - PROCESSING_TIMEOUT_MS;
@@ -446,6 +485,29 @@ mod tests {
         let processed = list_messages(Some("worker-1"), Some(MessageStatus::Processed)).unwrap();
         assert_eq!(processed.len(), 1);
         assert!(processed[0].processing_by.is_none());
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_mark_failed() {
+        let _dir = setup_test_db();
+
+        let input = SendMessageInput {
+            target_agent: "worker-2".to_string(),
+            message_type: "task_assigned".to_string(),
+            payload: serde_json::json!({}),
+        };
+
+        let _msg = send_message(input).unwrap();
+        let claimed = claim_messages("worker-2", 1).unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        mark_failed(claimed[0].id, "worker-2", Some("validation failed")).unwrap();
+
+        let failed = list_messages(Some("worker-2"), Some(MessageStatus::Failed)).unwrap();
+        assert_eq!(failed.len(), 1);
+        assert!(failed[0].processing_by.is_none());
 
         crate::db::close_db();
     }

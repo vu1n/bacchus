@@ -20,6 +20,8 @@ pub struct TaskContext {
     pub unblocks: Vec<String>,      // Tasks that depend on this
     pub footprint_modifies: Vec<String>, // Symbols this task modifies
     pub footprint_creates: Vec<String>, // Files this task creates
+    pub footprint_conflicts_in_progress: Vec<String>, // In-progress tasks with overlap
+    pub risk_hints: Vec<String>,    // Computed coordination hints
 }
 
 /// Generate rich context for a task
@@ -109,7 +111,27 @@ pub fn get_task_context(task_id: &str) -> Result<TaskContext, String> {
     })
     .map_err(|e: rusqlite::Error| e.to_string())?;
 
-    Ok(TaskContext {
+    let footprint_conflicts_in_progress: Vec<String> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT other.id
+             FROM task_footprints fp1
+             JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
+               AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
+             JOIN tasks other ON other.id = fp2.task_id
+             WHERE fp1.task_id = ?1
+               AND other.id != ?1
+               AND other.status = 'in_progress'
+               AND other.deleted_at IS NULL",
+        )?;
+        let rows = stmt
+            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    })
+    .map_err(|e: rusqlite::Error| e.to_string())?;
+
+    let mut ctx = TaskContext {
         task_id: task.id,
         title: task.title,
         description: task.description,
@@ -122,7 +144,12 @@ pub fn get_task_context(task_id: &str) -> Result<TaskContext, String> {
         unblocks,
         footprint_modifies,
         footprint_creates,
-    })
+        footprint_conflicts_in_progress,
+        risk_hints: Vec::new(),
+    };
+    ctx.risk_hints = build_risk_hints(&ctx);
+
+    Ok(ctx)
 }
 
 /// Format task context as markdown for agent consumption
@@ -186,6 +213,23 @@ pub fn format_task_context(ctx: &TaskContext) -> String {
             for path in &ctx.footprint_creates {
                 out.push_str(&format!("- `{}`\n", path));
             }
+        }
+        out.push('\n');
+    }
+
+    if !ctx.footprint_conflicts_in_progress.is_empty() {
+        out.push_str("## Active Footprint Collisions\n\n");
+        out.push_str("These in-progress tasks overlap this footprint right now:\n\n");
+        for task_id in &ctx.footprint_conflicts_in_progress {
+            out.push_str(&format!("- `{}`\n", task_id));
+        }
+        out.push('\n');
+    }
+
+    if !ctx.risk_hints.is_empty() {
+        out.push_str("## Risk Hints\n\n");
+        for hint in &ctx.risk_hints {
+            out.push_str(&format!("- {}\n", hint));
         }
         out.push('\n');
     }
@@ -276,5 +320,118 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Keep commits focused and well-documented
 - Ask for clarification if requirements are unclear"#
             .to_string(),
+    }
+}
+
+fn build_risk_hints(ctx: &TaskContext) -> Vec<String> {
+    let mut hints = Vec::new();
+
+    if ctx.footprint_modifies.is_empty() && ctx.footprint_creates.is_empty() {
+        hints.push(
+            "No footprint declared, so collision detection will not protect this task.".to_string(),
+        );
+    }
+
+    let wildcard_count = ctx
+        .footprint_modifies
+        .iter()
+        .filter(|p| p.ends_with("::*") || !p.contains("::"))
+        .count();
+    if wildcard_count > 0 {
+        hints.push(format!(
+            "Footprint includes {} file-level wildcard pattern(s), which increases merge and coordination risk.",
+            wildcard_count
+        ));
+    }
+
+    if !ctx.footprint_conflicts_in_progress.is_empty() {
+        hints.push(format!(
+            "{} overlapping task(s) are already in progress; coordinate sequencing before broad edits.",
+            ctx.footprint_conflicts_in_progress.len()
+        ));
+    }
+
+    if ctx.unblocks.len() >= 3 {
+        hints.push(format!(
+            "This task unblocks {} downstream tasks; regressions here will stall multiple agents.",
+            ctx.unblocks.len()
+        ));
+    }
+
+    if ctx.priority <= 2 {
+        hints.push(
+            "High-priority task: validate quickly and report blockers immediately to avoid queue starvation."
+                .to_string(),
+        );
+    }
+
+    if matches!(
+        ctx.task_type,
+        SqliteTaskType::BugFix | SqliteTaskType::Refactor
+    ) {
+        hints.push(
+            "Behavior-sensitive task type: run targeted tests before release to catch regressions."
+                .to_string(),
+        );
+    }
+
+    let description_len = ctx
+        .description
+        .as_ref()
+        .map(|d| d.trim().len())
+        .unwrap_or_default();
+    if description_len < 20 {
+        hints.push(
+            "Task description is brief; confirm scope and acceptance criteria before significant edits."
+                .to_string(),
+        );
+    }
+
+    hints
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_ctx() -> TaskContext {
+        TaskContext {
+            task_id: "T1".to_string(),
+            title: "Demo".to_string(),
+            description: Some("short".to_string()),
+            task_type: SqliteTaskType::Refactor,
+            archetype: "backend".to_string(),
+            priority: 1,
+            status: "open".to_string(),
+            claimed_by: None,
+            blocking_deps: vec![],
+            unblocks: vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            footprint_modifies: vec!["src/lib.rs::*".to_string()],
+            footprint_creates: vec![],
+            footprint_conflicts_in_progress: vec!["T2".to_string()],
+            risk_hints: vec![],
+        }
+    }
+
+    #[test]
+    fn test_build_risk_hints_includes_high_risk_signals() {
+        let ctx = sample_ctx();
+        let hints = build_risk_hints(&ctx);
+        assert!(hints.iter().any(|h| h.contains("wildcard")));
+        assert!(hints.iter().any(|h| h.contains("overlapping task")));
+        assert!(hints.iter().any(|h| h.contains("High-priority")));
+        assert!(hints.iter().any(|h| h.contains("Behavior-sensitive")));
+    }
+
+    #[test]
+    fn test_build_risk_hints_flags_missing_footprint() {
+        let mut ctx = sample_ctx();
+        ctx.footprint_modifies.clear();
+        ctx.unblocks.clear();
+        ctx.priority = 5;
+        ctx.description = Some("This is a sufficiently detailed description.".to_string());
+        ctx.footprint_conflicts_in_progress.clear();
+        let hints = build_risk_hints(&ctx);
+        assert!(hints.iter().any(|h| h.contains("No footprint declared")));
     }
 }

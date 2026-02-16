@@ -43,8 +43,15 @@ pub fn init_db(db_path: Option<&str>) -> Result<()> {
     // Enable foreign keys
     conn.pragma_update(None, "foreign_keys", "ON")?;
 
-    // Initialize schema
-    init_schema(&conn)?;
+    // Initialize schema.
+    // Concurrent process startup can race on trigger creation; treat benign
+    // "trigger ... already exists" errors as success.
+    if let Err(e) = init_schema(&conn) {
+        let msg = e.to_string();
+        if !(msg.contains("trigger") && msg.contains("already exists")) {
+            return Err(e);
+        }
+    }
 
     // Store in thread-local slot
     DB_CONN.with(|slot| {

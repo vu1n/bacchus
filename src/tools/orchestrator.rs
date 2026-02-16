@@ -11,6 +11,21 @@ use std::path::Path;
 
 const RELEASE_LEASE_TIMEOUT_MS: i64 = 10 * 60 * 1000;
 
+fn renew_orchestrator_lease(run_id: Option<&str>) -> Result<(), String> {
+    let Some(run_id) = run_id else {
+        return Ok(());
+    };
+
+    match tasks::try_acquire_orchestrator_lease(run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "Lost orchestrator leader lease while processing releases (run_id={}).",
+            run_id
+        )),
+        Err(e) => Err(format!("Failed to renew orchestrator leader lease: {}", e)),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReleaseTaskResult {
     pub task_id: String,
@@ -45,6 +60,8 @@ pub fn process_ready_releases(
     limit: Option<usize>,
     run_id: Option<&str>,
 ) -> Result<ProcessReleasesOutput, String> {
+    renew_orchestrator_lease(run_id)?;
+
     let now = chrono::Utc::now().timestamp_millis();
     let lease_cutoff = now - RELEASE_LEASE_TIMEOUT_MS;
 
@@ -62,6 +79,8 @@ pub fn process_ready_releases(
     let releasing_tasks = tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Releasing), false)
         .map_err(|e| e.to_string())?;
     for task in releasing_tasks {
+        renew_orchestrator_lease(run_id)?;
+
         if let Some(commit_id) = task.release_commit_id.as_deref() {
             let commit_in_main = match workspace::is_commit_in_main(workspace_root, commit_id) {
                 Ok(v) => v,
@@ -151,6 +170,8 @@ pub fn process_ready_releases(
     let max = limit.unwrap_or(usize::MAX);
 
     for task in ready_tasks.into_iter().take(max) {
+        renew_orchestrator_lease(run_id)?;
+
         let task_id = task.id.clone();
         output.processed += 1;
 

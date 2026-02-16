@@ -33,7 +33,7 @@ pub use resolve::resolve_merge;
 pub use review::review_task;
 pub use session::{
     check_session, prune_sessions, run_agent_heartbeat_loop, run_orchestrator_lease_loop,
-    session_status, start_session, stop_session,
+    run_worker_command, session_status, spawn_workers_once, start_session, stop_session,
 };
 pub use stale::find_stale;
 pub use symbols::{find_symbols, find_symbols_handle, FindSymbolsInput};

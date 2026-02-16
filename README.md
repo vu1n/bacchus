@@ -314,7 +314,11 @@ bacchus stale --minutes 30 --cleanup
 ```bash
 # After planning and importing, start orchestrator session
 bacchus session start orchestrator --max-concurrent 3
-# Then ask Claude to spawn agents for ready tasks
+# Optional: enable autonomous worker spawning from orchestrator checks
+export BACCHUS_WORKER_CMD='claude'
+# Spawn workers on demand
+bacchus session spawn-workers --count 3
+# Then run `bacchus session check` in your stop-hook loop
 ```
 
 ## Commands
@@ -347,8 +351,8 @@ bacchus session start orchestrator --max-concurrent 3
 
 | Command | Description |
 |---------|-------------|
-| `review <task_id> [--build-cmd X] [--test-cmd Y]` | Review task before release |
-| `eval [--epic X] [--days N]` | Show completion metrics |
+| `review <task_id> [--build-cmd X] [--test-cmd Y]` | Review task before release (includes symbol-aware footprint checks) |
+| `eval [--epic X] [--days N]` | Show completion metrics plus worker reliability counters (timeouts, stale recovery, kill attempts/successes) |
 
 ### Session Management
 
@@ -360,6 +364,7 @@ bacchus session start orchestrator --max-concurrent 3
 | `session stop` | Clear session, allow exit |
 | `session status` | Show current session state |
 | `session check` | Check if exit should be blocked (for hooks) |
+| `session spawn-workers [--count N] [--dry-run]` | Launch ready workers once for active orchestrator session |
 | `session prune [--minutes N]` | Remove stale scoped sessions and orphaned expired leases |
 
 ### Epic Management
@@ -370,6 +375,7 @@ bacchus session start orchestrator --max-concurrent 3
 | `epic show <epic_id>` | Show epic details with task counts |
 | `epic create --id X --title Y [--description Z]` | Create a new epic |
 | `epic assign <epic_id> <agent_id>` | Assign epic to architect for breakdown |
+| `epic set-status <epic_id> <status>` | Update epic status (open/planning/active/closed) |
 
 ### Archetype Management
 
@@ -386,6 +392,10 @@ bacchus session start orchestrator --max-concurrent 3
 |---------|-------------|
 | `message list [--agent X] [--status Y]` | List agent messages |
 | `message send <agent> <type> <payload>` | Send message to agent |
+| `message claim <agent> [--limit N]` | Claim pending messages for processing |
+| `message ack <message_id> <agent>` | Mark claimed message as processed |
+| `message fail <message_id> <agent> [--reason X]` | Mark claimed message as failed |
+| `message reclaim-stale` | Requeue/fail stale processing messages |
 
 ### Symbols
 
@@ -564,6 +574,9 @@ bacchus session start agent --task-id TASK-42 --agent-id agent-1
 # Start orchestrator session (blocks while work remains)
 bacchus session start orchestrator --max-concurrent 3
 
+# Launch ready workers once (optional manual trigger)
+bacchus session spawn-workers --count 3
+
 # Check session state
 bacchus session status
 
@@ -577,6 +590,17 @@ bacchus session prune --minutes 240
 Session state is scoped per CLI/session identity in `.bacchus/sessions/<scope>.json`.
 Set `BACCHUS_SESSION_ID` explicitly when running multiple concurrent sessions from the same repo root.
 Only one orchestrator can hold the leader lease at a time; secondary orchestrator starts are rejected.
+
+Autonomous worker spawning controls:
+- `BACCHUS_ORCHESTRATOR_AUTO_SPAWN=1` (default) enables auto-spawn attempts during `session check`.
+- `BACCHUS_WORKER_CMD` sets the worker shell command (required for auto-spawn).
+- `BACCHUS_WORKER_MAX_RETRIES` limits retries per task (default: `3`).
+- `BACCHUS_WORKER_RETRY_BACKOFF_MS` sets retry backoff (default: `60000`).
+- `BACCHUS_WORKER_STALE_GRACE_MS` extends stale-worker recovery grace beyond claim timeout (default: `60000`).
+- `BACCHUS_WORKER_MAX_RUNTIME_MS` optionally fails/reopens long-running workers after this runtime (default: disabled).
+- `BACCHUS_WORKER_KILL_STALE=1` enables best-effort PID termination before failing/reopening stale workers (default: `0`).
+Use `bacchus session spawn-workers --dry-run` to preview ready candidates and slot usage without launching workers.
+When a worker is stale (task heartbeat expired), orchestrator recovers it by marking worker failed and reopening the task.
 
 ## Stale Detection
 
