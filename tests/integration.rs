@@ -492,6 +492,95 @@ tasks:
             show_stdout
         );
     }
+
+    #[test]
+    fn test_orchestrator_session_ignores_stale_claim_capacity() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: STALE-001
+    title: "Stale claimed task"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/a.rs"]
+      creates: []
+  - id: STALE-002
+    title: "Ready task"
+    priority: 2
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/b.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "STALE"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let stale_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+            - (16 * 60 * 1000);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE tasks
+             SET status = 'in_progress',
+                 claimed_by = 'agent-stale',
+                 claimed_at = ?1,
+                 claimed_heartbeat_at = ?1
+             WHERE id = 'STALE-001'",
+            [stale_ts],
+        )
+        .unwrap();
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        let check_output = Command::new(bacchus_bin())
+            .args(["session", "check"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(check_output.status.success());
+
+        let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+        assert!(
+            check_stdout.contains("Ready to spawn 1 agent(s)"),
+            "Expected stale claim to not consume capacity, got: {}",
+            check_stdout
+        );
+    }
 }
 
 // ============================================================================

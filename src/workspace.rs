@@ -379,12 +379,13 @@ pub fn is_commit_in_main(workspace_root: &Path, commit_id: &str) -> Result<bool,
             "-T",
             "commit_id",
         ],
-    )
-    .unwrap_or_default();
+    )?;
 
-    // If output contains our commit ID, it's reachable from main
-    let trimmed = output.trim();
-    Ok(!trimmed.is_empty() && trimmed.contains(commit_id))
+    let commit_id = commit_id.trim();
+    Ok(output
+        .lines()
+        .map(str::trim)
+        .any(|line| !line.is_empty() && line.starts_with(commit_id)))
 }
 
 // ============================================================================
@@ -417,5 +418,12 @@ mod tests {
         let root = PathBuf::from("/test/repo");
         let dir = get_workspaces_dir(&root);
         assert_eq!(dir, PathBuf::from("/test/repo/.bacchus/workspaces"));
+    }
+
+    #[test]
+    fn test_is_commit_in_main_propagates_jj_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = is_commit_in_main(temp.path(), "deadbeef");
+        assert!(result.is_err());
     }
 }

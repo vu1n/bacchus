@@ -297,6 +297,8 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
 
 fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let max_concurrent = session.max_concurrent.unwrap_or(3);
+    let now = chrono::Utc::now().timestamp_millis();
+    let active_cutoff = now - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
 
     // Get workspace root for task lookup
     let workspace_root = match find_workspace_root() {
@@ -329,33 +331,77 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let ready_for_release = tasks::get_tasks_ready_for_release().unwrap_or_default();
     let ready_for_release_count = ready_for_release.len();
 
-    // Get in_progress tasks (may include orphaned work without claims)
-    let in_progress_tasks =
-        tasks::list_sqlite_tasks(None, Some(tasks::SqliteTaskStatus::InProgress), false)
-            .unwrap_or_default();
-    let in_progress_count = in_progress_tasks.len();
-
-    // Get active claims count from tasks (in_progress with claimed_by)
+    // Active claims are heartbeat-fresh claims only.
     let active_count = with_db(|conn| {
         conn.query_row(
             "SELECT COUNT(*) FROM tasks
-             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
-            [],
+             WHERE status = 'in_progress'
+               AND claimed_by IS NOT NULL
+               AND COALESCE(claimed_heartbeat_at, claimed_at, 0) >= ?1
+               AND deleted_at IS NULL",
+            [active_cutoff],
             |r| r.get::<_, i32>(0),
         )
     })
     .unwrap_or(0) as usize;
 
+    // Tasks in_progress without claim owner should still block orchestration.
+    let orphaned_in_progress_ids: Vec<String> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM tasks
+             WHERE status = 'in_progress'
+               AND claimed_by IS NULL
+               AND deleted_at IS NULL
+             ORDER BY priority, created_at",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ids)
+    })
+    .unwrap_or_default();
+    let orphaned_in_progress_count = orphaned_in_progress_ids.len();
+
+    // Stale claimed tasks should not consume orchestrator capacity.
+    let stale_claim_ids: Vec<String> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM tasks
+             WHERE status = 'in_progress'
+               AND claimed_by IS NOT NULL
+               AND COALESCE(claimed_heartbeat_at, claimed_at, 0) < ?1
+               AND deleted_at IS NULL
+             ORDER BY priority, created_at",
+        )?;
+        let rows = stmt.query_map([active_cutoff], |row| row.get(0))?;
+        let ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ids)
+    })
+    .unwrap_or_default();
+    let stale_claim_count = stale_claim_ids.len();
+
     if ready_for_release_count > 0 {
         let task_ids: Vec<_> = ready_for_release.iter().map(|t| t.id.as_str()).collect();
         let mut reason = format!(
-            "{} task(s) still ready_for_release: {}. Run 'bacchus process-releases' to merge.",
+            "{} task(s) still ready_for_release after automatic release attempt: {}. Review failures/conflicts and rerun 'bacchus process-releases' if needed.",
             ready_for_release_count,
             task_ids.join(", ")
         );
         if let Some(note) = &release_note {
             reason = format!("{} {}", note, reason);
         }
+        HookCheckOutput {
+            decision: "block".to_string(),
+            reason,
+        }
+    } else if orphaned_in_progress_count > 0 {
+        let mut reason = format!(
+            "{} task(s) are in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent> --force' or reset status.",
+            orphaned_in_progress_count,
+            orphaned_in_progress_ids.join(", ")
+        );
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
+
         HookCheckOutput {
             decision: "block".to_string(),
             reason,
@@ -377,6 +423,14 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             active_count,
             max_concurrent
         );
+        if stale_claim_count > 0 {
+            reason = format!(
+                "{} Ignoring {} stale claim(s): {}. Run 'bacchus stale --cleanup' to reclaim them.",
+                reason,
+                stale_claim_count,
+                stale_claim_ids.join(", ")
+            );
+        }
         if let Some(note) = &release_note {
             reason = format!("{} {}", note, reason);
         }
@@ -399,13 +453,12 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             decision: "block".to_string(),
             reason,
         }
-    } else if in_progress_count > 0 {
-        // In-progress tasks without claims - orphaned work, block to investigate
-        let task_ids: Vec<_> = in_progress_tasks.iter().map(|t| t.id.as_str()).collect();
+    } else if stale_claim_count > 0 {
+        // No active claims but stale claimed tasks remain.
         let mut reason = format!(
-            "{} task(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent> --force' or reset status in SQLite.",
-            in_progress_count,
-            task_ids.join(", ")
+            "{} stale claim(s) detected: {}. Run 'bacchus stale --cleanup' or reclaim manually.",
+            stale_claim_count,
+            stale_claim_ids.join(", ")
         );
         if let Some(note) = &release_note {
             reason = format!("{} {}", note, reason);

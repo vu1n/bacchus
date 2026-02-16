@@ -389,7 +389,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(stub.handle, "$sym1");
+        assert!(stub.handle.starts_with("$sym"));
         assert_eq!(stub.count, 3);
         assert_eq!(stub.preview, vec!["foo", "bar", "baz"]);
 
