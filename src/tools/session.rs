@@ -8,6 +8,13 @@ use crate::tasks;
 use crate::tools::orchestrator;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
+
+const DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 
 /// Session state stored in .bacchus/session.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +26,10 @@ pub struct Session {
     pub max_concurrent: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>, // For architect mode (persistent identity)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_heartbeat_token: Option<String>,
     pub started_at: String,
 }
 
@@ -66,6 +77,136 @@ fn session_path() -> Option<std::path::PathBuf> {
     find_workspace_root().map(|root| root.join(".bacchus/session.json"))
 }
 
+fn configured_agent_heartbeat_interval_ms() -> u64 {
+    std::env::var("BACCHUS_AGENT_HEARTBEAT_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS)
+}
+
+fn generate_run_id(prefix: &str) -> String {
+    format!(
+        "{}-{}-{}",
+        prefix,
+        chrono::Utc::now().timestamp_millis(),
+        std::process::id()
+    )
+}
+
+fn read_session(path: &Path) -> Result<Session, String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+fn write_session(path: &Path, session: &Session) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn describe_existing_orchestrator_lease() -> Option<String> {
+    let lease = tasks::get_orchestrator_lease().ok().flatten()?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let remaining_ms = (lease.lease_expires_at - now).max(0);
+    Some(format!(
+        "holder={} expires_in={}s",
+        lease.holder_id,
+        remaining_ms / 1000
+    ))
+}
+
+fn spawn_agent_heartbeat_loop(
+    task_id: &str,
+    agent_id: &str,
+    token: &str,
+    interval_ms: u64,
+) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Command::new(exe)
+        .arg("session")
+        .arg("heartbeat-loop")
+        .arg("--task-id")
+        .arg(task_id)
+        .arg("--agent-id")
+        .arg(agent_id)
+        .arg("--token")
+        .arg(token)
+        .arg("--interval-ms")
+        .arg(interval_ms.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Attach (or refresh) a background heartbeat loop for the active agent session.
+///
+/// This is used by `session start agent` and by `claim` when session start happened first.
+pub fn attach_agent_session_heartbeat(task_id: &str, agent_id: &str) -> Result<(), String> {
+    let path = match session_path() {
+        Some(p) if p.exists() => p,
+        _ => return Ok(()),
+    };
+
+    let mut session = read_session(&path)?;
+    if session.mode != "agent" || session.task_id.as_deref() != Some(task_id) {
+        return Ok(());
+    }
+
+    let token = generate_run_id("agent-hb");
+    session.agent_id = Some(agent_id.to_string());
+    session.agent_heartbeat_token = Some(token.clone());
+    write_session(&path, &session)?;
+
+    spawn_agent_heartbeat_loop(
+        task_id,
+        agent_id,
+        &token,
+        configured_agent_heartbeat_interval_ms(),
+    )
+}
+
+/// Internal long-running heartbeat worker.
+pub fn run_agent_heartbeat_loop(
+    task_id: &str,
+    agent_id: &str,
+    token: &str,
+    interval_ms: u64,
+) -> Result<String, String> {
+    let interval = Duration::from_millis(interval_ms.max(100));
+
+    loop {
+        let path = match session_path() {
+            Some(p) if p.exists() => p,
+            _ => break,
+        };
+
+        let session = match read_session(&path) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+
+        // Exit if this loop is no longer the session's active heartbeat owner.
+        if session.mode != "agent"
+            || session.task_id.as_deref() != Some(task_id)
+            || session.agent_id.as_deref() != Some(agent_id)
+            || session.agent_heartbeat_token.as_deref() != Some(token)
+        {
+            break;
+        }
+
+        if tasks::heartbeat_sqlite_task(task_id, agent_id).is_err() {
+            break;
+        }
+
+        thread::sleep(interval);
+    }
+
+    Ok("Agent heartbeat loop exited".to_string())
+}
+
 /// Start a session
 pub fn start_session(
     mode: &str,
@@ -76,6 +217,7 @@ pub fn start_session(
     let root = find_workspace_root().ok_or("No workspace root found")?;
     let bacchus_dir = root.join(".bacchus");
     fs::create_dir_all(&bacchus_dir).map_err(|e| e.to_string())?;
+    let session_file = bacchus_dir.join("session.json");
 
     let session = match mode {
         "agent" => {
@@ -88,16 +230,35 @@ pub fn start_session(
                 task_id: Some(task_id.to_string()),
                 max_concurrent: None,
                 agent_id: agent_id.map(String::from).or(claim_owner),
+                run_id: Some(generate_run_id("agent")),
+                agent_heartbeat_token: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
-        "orchestrator" => Session {
-            mode: "orchestrator".to_string(),
-            task_id: None,
-            max_concurrent: Some(max_concurrent),
-            agent_id: None,
-            started_at: chrono::Utc::now().to_rfc3339(),
-        },
+        "orchestrator" => {
+            let run_id = generate_run_id("orchestrator");
+            let acquired =
+                tasks::try_acquire_orchestrator_lease(&run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS)
+                    .map_err(|e| e.to_string())?;
+            if !acquired {
+                let details = describe_existing_orchestrator_lease()
+                    .unwrap_or_else(|| "holder=unknown".to_string());
+                return Err(format!(
+                    "Another orchestrator leader lease is active ({}).",
+                    details
+                ));
+            }
+
+            Session {
+                mode: "orchestrator".to_string(),
+                task_id: None,
+                max_concurrent: Some(max_concurrent),
+                agent_id: None,
+                run_id: Some(run_id),
+                agent_heartbeat_token: None,
+                started_at: chrono::Utc::now().to_rfc3339(),
+            }
+        }
         "architect" => {
             let agent_id = agent_id.ok_or("agent_id required for architect mode")?;
             Session {
@@ -105,6 +266,8 @@ pub fn start_session(
                 task_id: None,
                 max_concurrent: None,
                 agent_id: Some(agent_id.to_string()),
+                run_id: Some(generate_run_id("architect")),
+                agent_heartbeat_token: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
@@ -116,29 +279,52 @@ pub fn start_session(
         }
     };
 
-    let json = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
-    fs::write(bacchus_dir.join("session.json"), &json).map_err(|e| e.to_string())?;
+    if let Err(e) = write_session(&session_file, &session) {
+        if session.mode == "orchestrator" {
+            if let Some(run_id) = session.run_id.as_deref() {
+                let _ = tasks::release_orchestrator_lease(run_id);
+            }
+        }
+        return Err(e);
+    }
 
-    Ok(format!("Started {} session", mode))
+    let mut message = format!("Started {} session", mode);
+    if mode == "agent" {
+        if let (Some(task), Some(owner)) = (session.task_id.as_deref(), session.agent_id.as_deref())
+        {
+            if let Err(e) = attach_agent_session_heartbeat(task, owner) {
+                message = format!("{} (heartbeat loop unavailable: {})", message, e);
+            }
+        }
+    }
+
+    Ok(message)
 }
 
 /// Stop the session and clean up session-scoped handles
 pub fn stop_session() -> Result<String, String> {
     if let Some(path) = session_path() {
         if path.exists() {
-            // Read session to get session ID before removing
-            let session_id = match fs::read_to_string(&path) {
-                Ok(content) => serde_json::from_str::<Session>(&content)
-                    .ok()
-                    .map(|s| s.started_at),
-                Err(_) => None,
-            };
+            let session = read_session(&path).ok();
+
+            if let Some(s) = session.as_ref() {
+                if s.mode == "orchestrator" {
+                    if let Some(run_id) = s.run_id.as_deref() {
+                        let _ = tasks::release_orchestrator_lease(run_id);
+                    }
+                }
+            }
 
             // Remove session file
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
+            match fs::remove_file(&path) {
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(e.to_string()),
+            }
 
             // Clear handles for this session
-            let handles_cleared = if let Some(sid) = session_id {
+            let handles_cleared = if let Some(sid) = session.as_ref().map(|s| s.started_at.clone())
+            {
                 handles::clear_session_handles(&sid).unwrap_or(0)
             } else {
                 0
@@ -160,8 +346,7 @@ pub fn stop_session() -> Result<String, String> {
 pub fn session_status() -> Result<serde_json::Value, String> {
     if let Some(path) = session_path() {
         if path.exists() {
-            let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let session: Session = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let session = read_session(&path)?;
             return Ok(serde_json::json!({
                 "active": true,
                 "session": session,
@@ -179,20 +364,12 @@ pub fn session_status() -> Result<serde_json::Value, String> {
 pub fn check_session() -> HookCheckOutput {
     // Read session file
     let session = match session_path() {
-        Some(path) if path.exists() => match fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str::<Session>(&content) {
-                Ok(s) => s,
-                Err(_) => {
-                    return HookCheckOutput {
-                        decision: "approve".to_string(),
-                        reason: "Invalid session file".to_string(),
-                    }
-                }
-            },
+        Some(path) if path.exists() => match read_session(&path) {
+            Ok(s) => s,
             Err(_) => {
                 return HookCheckOutput {
                     decision: "approve".to_string(),
-                    reason: "Cannot read session file".to_string(),
+                    reason: "Invalid session file".to_string(),
                 }
             }
         },
@@ -240,8 +417,8 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
     // Check task status
     match tasks::get_sqlite_task(task_id) {
         Ok(task) => {
-            if let Some(session_agent_id) = session.agent_id.as_deref() {
-                if let Some(owner) = task.claimed_by.as_deref() {
+            if let Some(owner) = task.claimed_by.as_deref() {
+                if let Some(session_agent_id) = session.agent_id.as_deref() {
                     if owner != session_agent_id {
                         let _ = stop_session();
                         return HookCheckOutput {
@@ -252,6 +429,8 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
                             ),
                         };
                     }
+                } else {
+                    let _ = attach_agent_session_heartbeat(task_id, owner);
                 }
             }
 
@@ -299,6 +478,26 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let max_concurrent = session.max_concurrent.unwrap_or(3);
     let now = chrono::Utc::now().timestamp_millis();
     let active_cutoff = now - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
+    let run_id = session
+        .run_id
+        .as_deref()
+        .unwrap_or(session.started_at.as_str());
+
+    let lease_acquired =
+        tasks::try_acquire_orchestrator_lease(run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS)
+            .unwrap_or(false);
+    if !lease_acquired {
+        let details =
+            describe_existing_orchestrator_lease().unwrap_or_else(|| "holder=unknown".to_string());
+        let _ = stop_session();
+        return HookCheckOutput {
+            decision: "approve".to_string(),
+            reason: format!(
+                "Another orchestrator leader lease is active ({}). Session cleared.",
+                details
+            ),
+        };
+    }
 
     // Get workspace root for task lookup
     let workspace_root = match find_workspace_root() {
@@ -312,18 +511,19 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     };
 
     // Best-effort release processing: integrates completed agent work before scheduling more.
-    let release_note = match orchestrator::process_ready_releases(&workspace_root, Some(20)) {
-        Ok(summary) if summary.processed > 0 => Some(format!(
-            "Processed releases: reconciled {}, merged {}, conflicts {}, failed {}.",
-            summary.reconciled, summary.merged, summary.conflicts, summary.failed
-        )),
-        Ok(summary) if summary.reconciled > 0 => Some(format!(
-            "Processed releases: reconciled {}, merged {}, conflicts {}, failed {}.",
-            summary.reconciled, summary.merged, summary.conflicts, summary.failed
-        )),
-        Ok(_) => None,
-        Err(e) => Some(format!("Release processing error: {}.", e)),
-    };
+    let release_note =
+        match orchestrator::process_ready_releases(&workspace_root, Some(20), Some(run_id)) {
+            Ok(summary) if summary.processed > 0 => Some(format!(
+                "Processed releases: reconciled {}, merged {}, conflicts {}, failed {}.",
+                summary.reconciled, summary.merged, summary.conflicts, summary.failed
+            )),
+            Ok(summary) if summary.reconciled > 0 => Some(format!(
+                "Processed releases: reconciled {}, merged {}, conflicts {}, failed {}.",
+                summary.reconciled, summary.merged, summary.conflicts, summary.failed
+            )),
+            Ok(_) => None,
+            Err(e) => Some(format!("Release processing error: {}.", e)),
+        };
 
     // Get project stats
     let ready_tasks = tasks::get_ready_sqlite_tasks(None).unwrap_or_default();

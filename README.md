@@ -70,13 +70,19 @@ Bacchus coordinates multi-agent work through a **plan → orchestrate → execut
 
 ### How to Run
 
-For fully autonomous multi-agent work, start Claude in yolo mode:
+Ralph mode is the default recommendation (permissioned, auditable runs):
+
+```bash
+claude
+```
+
+Yolo mode is optional for trusted local repos:
 
 ```bash
 claude --dangerously-skip-permissions
 ```
 
-This allows the orchestrator and agents to run commands without permission prompts.
+In both modes, keep `bacchus` stop hooks enabled so sessions enforce task completion and orchestration safety.
 
 ### How to Prompt Claude
 
@@ -348,7 +354,7 @@ bacchus session start orchestrator --max-concurrent 3
 
 | Command | Description |
 |---------|-------------|
-| `session start agent --task-id <id>` | Start agent session (enables stop hook) |
+| `session start agent --task-id <id> [--agent-id <agent>]` | Start agent session (enables stop hook and background heartbeat when owner known) |
 | `session start orchestrator [--max-concurrent N]` | Start orchestrator session |
 | `session start architect --agent-id <id>` | Start architect session |
 | `session stop` | Clear session, allow exit |
@@ -551,8 +557,8 @@ bacchus process-releases
 Sessions enable stop hooks that prevent premature exit:
 
 ```bash
-# Start agent session (blocks until task closed)
-bacchus session start agent --task-id TASK-42
+# Start agent session (blocks until task closed; pass agent id for immediate heartbeat loop)
+bacchus session start agent --task-id TASK-42 --agent-id agent-1
 
 # Start orchestrator session (blocks while work remains)
 bacchus session start orchestrator --max-concurrent 3
@@ -565,6 +571,7 @@ bacchus session stop
 ```
 
 Session state is stored in `.bacchus/session.json`.
+Only one orchestrator can hold the leader lease at a time; secondary orchestrator starts are rejected.
 
 ## Stale Detection
 

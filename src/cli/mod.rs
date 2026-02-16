@@ -234,6 +234,23 @@ pub enum SessionCommands {
 
     /// Check if session should block exit (for stop hook)
     Check,
+
+    /// Internal: background loop to keep an agent claim heartbeat fresh.
+    #[command(hide = true)]
+    HeartbeatLoop {
+        /// Task ID for the agent claim
+        #[arg(long)]
+        task_id: String,
+        /// Agent ID that owns the claim
+        #[arg(long)]
+        agent_id: String,
+        /// Unique token that fences stale heartbeat workers
+        #[arg(long)]
+        token: String,
+        /// Heartbeat interval in milliseconds
+        #[arg(long, default_value = "30000")]
+        interval_ms: u64,
+    },
 }
 
 #[derive(Subcommand)]

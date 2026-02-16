@@ -31,7 +31,9 @@ pub use orchestrator::process_ready_releases;
 pub use release::release_task;
 pub use resolve::resolve_merge;
 pub use review::review_task;
-pub use session::{check_session, session_status, start_session, stop_session};
+pub use session::{
+    check_session, run_agent_heartbeat_loop, session_status, start_session, stop_session,
+};
 pub use stale::find_stale;
 pub use symbols::{find_symbols, find_symbols_handle, FindSymbolsInput};
 pub use task_commands::{import_tasks, init_tasks, list_tasks, show_task, validate_tasks};

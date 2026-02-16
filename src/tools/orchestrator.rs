@@ -43,6 +43,7 @@ pub struct ProcessReleasesOutput {
 pub fn process_ready_releases(
     workspace_root: &Path,
     limit: Option<usize>,
+    run_id: Option<&str>,
 ) -> Result<ProcessReleasesOutput, String> {
     let now = chrono::Utc::now().timestamp_millis();
     let lease_cutoff = now - RELEASE_LEASE_TIMEOUT_MS;
@@ -62,7 +63,22 @@ pub fn process_ready_releases(
         .map_err(|e| e.to_string())?;
     for task in releasing_tasks {
         if let Some(commit_id) = task.release_commit_id.as_deref() {
-            if workspace::is_commit_in_main(workspace_root, commit_id).unwrap_or(false) {
+            let commit_in_main = match workspace::is_commit_in_main(workspace_root, commit_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    output.failed += 1;
+                    output.results.push(ReleaseTaskResult {
+                        task_id: task.id.clone(),
+                        status: "failed".to_string(),
+                        message: format!("Failed to verify commit on main: {}", e),
+                        commit_id: Some(commit_id.to_string()),
+                        conflict_files: Vec::new(),
+                    });
+                    continue;
+                }
+            };
+
+            if commit_in_main {
                 if let Err(e) = tasks::complete_task_release(&task.id) {
                     output.failed += 1;
                     output.results.push(ReleaseTaskResult {
@@ -77,7 +93,7 @@ pub fn process_ready_releases(
 
                 let _ = workspace::complete_release(workspace_root, &task.id);
                 let _ = events::record_event(
-                    None,
+                    run_id,
                     "orchestrator",
                     "release_reconciled",
                     "task",
@@ -111,7 +127,7 @@ pub fn process_ready_releases(
                 });
             } else {
                 let _ = events::record_event(
-                    None,
+                    run_id,
                     "orchestrator",
                     "release_reset_timeout",
                     "task",
@@ -140,7 +156,7 @@ pub fn process_ready_releases(
 
         let ready_commit = task.ready_commit_id.clone().unwrap_or_default();
         let _ = events::record_event(
-            None,
+            run_id,
             "orchestrator",
             "release_start",
             "task",
@@ -152,7 +168,7 @@ pub fn process_ready_releases(
         if let Err(e) = tasks::start_task_release(&task_id) {
             output.failed += 1;
             let _ = events::record_event(
-                None,
+                run_id,
                 "orchestrator",
                 "release_failed",
                 "task",
@@ -174,7 +190,7 @@ pub fn process_ready_releases(
             Ok(ReleaseResult::Conflicts { files }) => {
                 let _ = tasks::mark_task_needs_resolution(&task.id, &files);
                 let _ = events::record_event(
-                    None,
+                    run_id,
                     "orchestrator",
                     "release_conflict",
                     "task",
@@ -195,7 +211,7 @@ pub fn process_ready_releases(
                 if let Err(e) = tasks::set_task_release_commit(&task.id, &commit_id) {
                     let _ = tasks::reset_task_release_to_ready(&task.id);
                     let _ = events::record_event(
-                        None,
+                        run_id,
                         "orchestrator",
                         "release_failed",
                         "task",
@@ -217,7 +233,7 @@ pub fn process_ready_releases(
                 if let Err(e) = workspace::advance_main_bookmark(workspace_root, &commit_id) {
                     let _ = tasks::reset_task_release_to_ready(&task.id);
                     let _ = events::record_event(
-                        None,
+                        run_id,
                         "orchestrator",
                         "release_failed",
                         "task",
@@ -238,7 +254,7 @@ pub fn process_ready_releases(
 
                 if let Err(e) = tasks::complete_task_release(&task.id) {
                     let _ = events::record_event(
-                        None,
+                        run_id,
                         "orchestrator",
                         "release_failed",
                         "task",
@@ -263,7 +279,7 @@ pub fn process_ready_releases(
                 };
 
                 let _ = events::record_event(
-                    None,
+                    run_id,
                     "orchestrator",
                     "release_merged",
                     "task",
@@ -284,7 +300,7 @@ pub fn process_ready_releases(
             Err(e) => {
                 let _ = tasks::reset_task_release_to_ready(&task.id);
                 let _ = events::record_event(
-                    None,
+                    run_id,
                     "orchestrator",
                     "release_failed",
                     "task",

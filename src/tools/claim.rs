@@ -6,6 +6,7 @@
 use crate::db::with_db;
 use crate::tasks::{self, SqliteTaskStatus};
 use crate::tools::eval::{self, EventType};
+use crate::tools::session;
 use crate::workspace;
 use rusqlite::params;
 use rusqlite::Result;
@@ -112,6 +113,13 @@ pub fn claim_task(
                 EventType::Started
             };
             let _ = eval::record_event(task_id, agent_id, event_type, None);
+            let heartbeat_warning =
+                session::attach_agent_session_heartbeat(task_id, agent_id).err();
+
+            let mut message = format!("Claimed {} - work in {}", task_id, ws.path.display());
+            if let Some(warn) = heartbeat_warning {
+                message = format!("{} (heartbeat loop unavailable: {})", message, warn);
+            }
 
             Ok(ClaimOutput {
                 success: true,
@@ -119,7 +127,7 @@ pub fn claim_task(
                 title: Some(task.title),
                 description: task.description,
                 workspace_path: Some(ws.path.to_string_lossy().to_string()),
-                message: format!("Claimed {} - work in {}", task_id, ws.path.display()),
+                message,
             })
         }
         Err(tasks::TasksError::NotReady(msg)) => {

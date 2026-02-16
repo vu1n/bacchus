@@ -210,6 +210,9 @@ impl std::fmt::Display for SqliteTaskStatus {
 
 /// In-progress claims with heartbeat older than this are treated as stale for scheduling.
 pub const CLAIM_HEARTBEAT_TIMEOUT_MS: i64 = 15 * 60 * 1000;
+/// Default leader lease TTL for orchestrator sessions.
+pub const ORCHESTRATOR_LEASE_TTL_MS: i64 = 90 * 1000;
+const ORCHESTRATOR_LEASE_NAME: &str = "global";
 
 /// Task type for PM workflow categorization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -390,6 +393,14 @@ pub struct SqliteTask {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestratorLease {
+    pub lease_name: String,
+    pub holder_id: String,
+    pub lease_expires_at: i64,
+    pub updated_at: i64,
 }
 
 const TASK_SELECT_COLUMNS: &str =
@@ -1407,6 +1418,66 @@ pub fn heartbeat_sqlite_task(task_id: &str, agent_id: &str) -> Result<(), TasksE
     .map_err(|e| TasksError::DbError(e.to_string()))
 }
 
+/// Try to acquire (or renew) the global orchestrator leader lease.
+///
+/// Returns `Ok(true)` when the caller now holds the lease, `Ok(false)` if a different
+/// holder still has a non-expired lease.
+pub fn try_acquire_orchestrator_lease(holder_id: &str, ttl_ms: i64) -> Result<bool, TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let expires_at = now + ttl_ms.max(1);
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "INSERT INTO orchestrator_leases (lease_name, holder_id, lease_expires_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(lease_name) DO UPDATE SET
+                holder_id = excluded.holder_id,
+                lease_expires_at = excluded.lease_expires_at,
+                updated_at = excluded.updated_at
+             WHERE orchestrator_leases.holder_id = excluded.holder_id
+                OR orchestrator_leases.lease_expires_at < excluded.updated_at",
+            params![ORCHESTRATOR_LEASE_NAME, holder_id, expires_at, now],
+        )?;
+        Ok(affected > 0)
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Release the global orchestrator lease if owned by the given holder.
+pub fn release_orchestrator_lease(holder_id: &str) -> Result<(), TasksError> {
+    with_db(|conn| {
+        conn.execute(
+            "DELETE FROM orchestrator_leases WHERE lease_name = ?1 AND holder_id = ?2",
+            params![ORCHESTRATOR_LEASE_NAME, holder_id],
+        )?;
+        Ok(())
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Fetch current orchestrator lease, if present.
+pub fn get_orchestrator_lease() -> Result<Option<OrchestratorLease>, TasksError> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT lease_name, holder_id, lease_expires_at, updated_at
+             FROM orchestrator_leases
+             WHERE lease_name = ?1",
+        )?;
+
+        let mut rows = stmt.query([ORCHESTRATOR_LEASE_NAME])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(OrchestratorLease {
+                lease_name: row.get(0)?,
+                holder_id: row.get(1)?,
+                lease_expires_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            }));
+        }
+        Ok(None)
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
 /// Import tasks from YAML to SQLite
 ///
 /// Reads `.bacchus/tasks.yaml` and creates corresponding tasks in SQLite.
@@ -2219,6 +2290,51 @@ tasks:
         assert!(task.is_some());
         let task = task.unwrap();
         assert_eq!(task.id, "NEXT-HIGH");
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_orchestrator_lease_acquire_and_release() {
+        let _dir = setup_test_db();
+
+        assert!(try_acquire_orchestrator_lease("run-a", ORCHESTRATOR_LEASE_TTL_MS).unwrap());
+        assert!(!try_acquire_orchestrator_lease("run-b", ORCHESTRATOR_LEASE_TTL_MS).unwrap());
+
+        let lease = get_orchestrator_lease()
+            .unwrap()
+            .expect("lease should exist");
+        assert_eq!(lease.holder_id, "run-a");
+
+        release_orchestrator_lease("run-a").unwrap();
+        assert!(try_acquire_orchestrator_lease("run-b", ORCHESTRATOR_LEASE_TTL_MS).unwrap());
+
+        crate::db::close_db();
+    }
+
+    #[test]
+    fn test_orchestrator_lease_takeover_after_expiry() {
+        let _dir = setup_test_db();
+
+        assert!(try_acquire_orchestrator_lease("run-a", ORCHESTRATOR_LEASE_TTL_MS).unwrap());
+
+        let expired = chrono::Utc::now().timestamp_millis() - 1;
+        with_db(|conn| {
+            conn.execute(
+                "UPDATE orchestrator_leases
+                 SET lease_expires_at = ?1
+                 WHERE lease_name = 'global'",
+                [expired],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(try_acquire_orchestrator_lease("run-b", ORCHESTRATOR_LEASE_TTL_MS).unwrap());
+        let lease = get_orchestrator_lease()
+            .unwrap()
+            .expect("lease should exist");
+        assert_eq!(lease.holder_id, "run-b");
 
         crate::db::close_db();
     }

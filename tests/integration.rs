@@ -8,6 +8,7 @@
 //! Note: Tests run against the pre-built binary to avoid Cargo lock contention.
 //! Run `cargo build` before running integration tests.
 
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -580,6 +581,227 @@ tasks:
             "Expected stale claim to not consume capacity, got: {}",
             check_stdout
         );
+    }
+
+    #[test]
+    fn test_status_separates_stale_claims_from_active_count() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let stale = now - (16 * 60 * 1000);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+             VALUES ('STATUS-EPIC', 'Status Epic', 'open', 'test', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('STATUS-001', 'STATUS-EPIC', 'Stale claim', 1, 'in_progress', 'generic', 'generic', 'agent-stale', ?1, ?1, ?2, ?2)",
+            rusqlite::params![stale, now],
+        )
+        .unwrap();
+
+        let status_output = Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(status_output.status.success());
+        let status_json: Value = serde_json::from_slice(&status_output.stdout).unwrap();
+
+        assert_eq!(status_json["claims"]["count"], 0);
+        assert_eq!(status_json["claims"]["stale_count"], 1);
+    }
+
+    #[test]
+    fn test_orchestrator_lease_blocks_second_session_start() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let start_one = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(start_one.status.success());
+
+        let start_two = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(!start_two.status.success());
+        let stderr = String::from_utf8_lossy(&start_two.stderr);
+        assert!(
+            stderr.contains("leader lease"),
+            "Expected lease contention error, got: {}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn test_agent_session_background_heartbeat_updates_claim() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let old_heartbeat = now - (30 * 60 * 1000);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+             VALUES ('HB-EPIC', 'Heartbeat Epic', 'open', 'test', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('HB-001', 'HB-EPIC', 'Heartbeat task', 1, 'in_progress', 'generic', 'generic', 'agent-hb', ?1, ?1, ?2, ?2)",
+            rusqlite::params![old_heartbeat, now],
+        )
+        .unwrap();
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "agent", "--task-id", "HB-001"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_AGENT_HEARTBEAT_INTERVAL_MS", "100")
+            .output()
+            .unwrap();
+        assert!(start_output.status.success());
+
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        let latest: i64 = rusqlite::Connection::open(&db_path)
+            .unwrap()
+            .query_row(
+                "SELECT COALESCE(claimed_heartbeat_at, 0) FROM tasks WHERE id = 'HB-001'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            latest > old_heartbeat,
+            "Expected heartbeat loop to refresh timestamp, old={}, new={}",
+            old_heartbeat,
+            latest
+        );
+
+        Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_process_releases_events_include_run_id() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let stale_release = now - (11 * 60 * 1000);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+             VALUES ('EVT-EPIC', 'Event Epic', 'open', 'test', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, release_started_at, created_at, updated_at)
+             VALUES ('EVT-001', 'EVT-EPIC', 'Stale release task', 1, 'releasing', 'generic', 'generic', 'agent-evt', ?1, ?1, ?2, ?3, ?3)",
+            rusqlite::params![now, stale_release, now],
+        )
+        .unwrap();
+
+        let process_output = Command::new(bacchus_bin())
+            .args(["process-releases"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(process_output.status.success());
+
+        let events_output = Command::new(bacchus_bin())
+            .args(["events", "--limit", "10"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(events_output.status.success());
+        let events: Value = serde_json::from_slice(&events_output.stdout).unwrap();
+        let entries = events.as_array().unwrap();
+        let has_run_id = entries.iter().any(|e| {
+            e.get("event_type")
+                .and_then(|v| v.as_str())
+                .map(|t| t == "release_reset_timeout")
+                .unwrap_or(false)
+                && e.get("run_id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| id.starts_with("manual-orchestrator-"))
+                    .unwrap_or(false)
+        });
+
+        assert!(has_run_id, "Expected run_id on release_reset_timeout event");
     }
 }
 

@@ -9,7 +9,13 @@ Bacchus coordinates parallel agent work on codebases using isolated jj workspace
 
 ## Quick Start
 
-For fully autonomous multi-agent work, start Claude in yolo mode:
+Use Ralph mode by default:
+
+```bash
+claude
+```
+
+Use yolo mode only for trusted local repos when fully autonomous execution is required:
 
 ```bash
 claude --dangerously-skip-permissions
@@ -43,7 +49,7 @@ bacchus task list --ready
 | `bacchus release <id> --status done` | Complete task |
 | `bacchus process-releases` | Orchestrator merge step |
 | `bacchus events --limit 50` | Inspect orchestration event log |
-| `bacchus session start agent --task-id X` | Start agent session |
+| `bacchus session start agent --task-id X [--agent-id Y]` | Start agent session (heartbeat loop starts when owner is known) |
 | `bacchus session start orchestrator` | Start orchestrator session |
 | `bacchus session stop` | Clear session |
 
@@ -184,14 +190,16 @@ fi
 bacchus archetype select TASK-001
 ```
 
-2. Spawn agent with Task tool in background, using `--dangerously-skip-permissions` for autonomous execution:
+2. Spawn agent with Task tool in background. Use `--dangerously-skip-permissions` only in trusted yolo flows:
 
 ```
 Task tool:
   subagent_type: "general-purpose"
   run_in_background: true
   prompt: |
-    Run with: --dangerously-skip-permissions
+    Run with:
+    - Ralph mode default: no extra flag
+    - Yolo mode (trusted repo only): --dangerously-skip-permissions
 
     [Archetype prompt from bacchus archetype prompt <type>]
 
@@ -205,7 +213,7 @@ Task tool:
 
     Start your session and claim the task:
     ```bash
-    bacchus session start agent --task-id "{task_id}"
+    bacchus session start agent --task-id "{task_id}" --agent-id agent-{unique_id}
     bacchus claim "{task_id}" agent-{unique_id}
     ```
 
@@ -227,7 +235,7 @@ Task tool:
     ```
 ```
 
-**Note**: Agents run in yolo mode (`--dangerously-skip-permissions`) to work autonomously without permission prompts.
+**Note**: Ralph mode is preferred for safety and observability. Use yolo mode only in explicitly trusted environments.
 
 ## Session Management
 
@@ -235,7 +243,7 @@ Sessions enable stop hooks that prevent premature exit:
 
 ```bash
 # Agent mode - blocks until task is closed
-bacchus session start agent --task-id TASK-42
+bacchus session start agent --task-id TASK-42 --agent-id agent-1
 
 # Orchestrator mode - blocks while work remains
 bacchus session start orchestrator --max-concurrent 3
@@ -246,6 +254,8 @@ bacchus session status
 # Clear session to allow exit
 bacchus session stop
 ```
+
+Only one orchestrator can hold the leader lease at a time. If another orchestrator is active, a new start is rejected.
 
 ## Orchestrator Loop
 

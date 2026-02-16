@@ -256,6 +256,17 @@ CREATE INDEX IF NOT EXISTS idx_orch_events_time ON orchestration_events(created_
 CREATE INDEX IF NOT EXISTS idx_orch_events_entity ON orchestration_events(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_orch_events_type ON orchestration_events(event_type);
 
+-- ============================================================================
+-- Orchestrator Leader Lease (single active orchestrator fencing)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS orchestrator_leases (
+    lease_name TEXT PRIMARY KEY,           -- currently 'global'
+    holder_id TEXT NOT NULL,               -- orchestrator run_id
+    lease_expires_at INTEGER NOT NULL,     -- Unix timestamp ms
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orch_leases_expires ON orchestrator_leases(lease_expires_at);
+
 -- Soft-delete guard
 DROP TRIGGER IF EXISTS tasks_soft_delete_guard;
 CREATE TRIGGER tasks_soft_delete_guard
@@ -310,6 +321,7 @@ mod tests {
             "task_footprints",
             "agent_messages",
             "orchestration_events",
+            "orchestrator_leases",
             "handles",
             "handle_data",
         ];

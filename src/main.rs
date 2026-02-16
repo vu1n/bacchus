@@ -139,9 +139,46 @@ fn main() {
         .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
 
         Commands::ProcessReleases { limit } => {
-            tools::process_ready_releases(&workspace_root, Some(limit))
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e)))
+            let run_id = format!(
+                "manual-orchestrator-{}-{}",
+                chrono::Utc::now().timestamp_millis(),
+                std::process::id()
+            );
+            match tasks::try_acquire_orchestrator_lease(&run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS) {
+                Ok(true) => {
+                    let result =
+                        tools::process_ready_releases(&workspace_root, Some(limit), Some(&run_id))
+                            .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                            .map_err(|e| {
+                                rusqlite::Error::SqliteFailure(
+                                    rusqlite::ffi::Error::new(1),
+                                    Some(e),
+                                )
+                            });
+                    let _ = tasks::release_orchestrator_lease(&run_id);
+                    result
+                }
+                Ok(false) => {
+                    let lease_msg = tasks::get_orchestrator_lease()
+                        .ok()
+                        .flatten()
+                        .map(|l| {
+                            format!("holder={} expires_at={}", l.holder_id, l.lease_expires_at)
+                        })
+                        .unwrap_or_else(|| "holder=unknown".to_string());
+                    Err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(format!(
+                            "Another orchestrator leader lease is active ({}).",
+                            lease_msg
+                        )),
+                    ))
+                }
+                Err(e) => Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(e.to_string()),
+                )),
+            }
         }
 
         Commands::Eval { epic, days } => tools::generate_eval_report(epic.as_deref(), days)
@@ -257,6 +294,14 @@ fn main() {
                 let result = tools::check_session();
                 Ok(serde_json::to_string_pretty(&result).unwrap())
             }
+            SessionCommands::HeartbeatLoop {
+                task_id,
+                agent_id,
+                token,
+                interval_ms,
+            } => tools::run_agent_heartbeat_loop(&task_id, &agent_id, &token, interval_ms)
+                .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
         },
 
         // ====================================================================
@@ -626,32 +671,25 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
         .unwrap_or(0);
 
     db::with_db(|conn| {
-        // Count active claims from tasks (in_progress with claimed_by)
-        let claims_count: i32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM tasks
-             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+        let active_cutoff = now_ms - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
 
-        // Get active claims from tasks
+        // Get in_progress claims and split into heartbeat-fresh active vs stale.
         let mut stmt = conn.prepare(
-            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at
+            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at,
+                    CASE WHEN COALESCE(claimed_heartbeat_at, claimed_at, 0) >= ?1 THEN 1 ELSE 0 END AS is_active
              FROM tasks
              WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
         )?;
-        let claims: Vec<(serde_json::Value, String)> = stmt
-            .query_map([], |row| {
+        let claims: Vec<(serde_json::Value, String, bool)> = stmt
+            .query_map([active_cutoff], |row| {
                 let task_id: String = row.get(0)?;
                 let claimed_at: Option<i64> = row.get(2)?;
                 let heartbeat_at: Option<i64> = row.get(3)?;
+                let is_active = row.get::<_, i32>(4)? == 1;
                 let last_seen = heartbeat_at.or(claimed_at).unwrap_or(0);
                 let age_minutes = if last_seen > 0 {
                     (now_ms - last_seen) / 60000
@@ -664,17 +702,29 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
                         "task_id": &task_id,
                         "agent_id": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                         "workspace_path": &workspace_path,
-                        "age_minutes": age_minutes
+                        "age_minutes": age_minutes,
+                        "last_seen_at": last_seen
                     }),
                     workspace_path,
+                    is_active,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        let claim_values: Vec<serde_json::Value> = claims.iter().map(|(v, _)| v.clone()).collect();
+        let claim_values: Vec<serde_json::Value> = claims
+            .iter()
+            .filter(|(_, _, is_active)| *is_active)
+            .map(|(v, _, _)| v.clone())
+            .collect();
+        let stale_claim_values: Vec<serde_json::Value> = claims
+            .iter()
+            .filter(|(_, _, is_active)| !*is_active)
+            .map(|(v, _, _)| v.clone())
+            .collect();
+        let claims_count = claim_values.len() as i32;
         let claimed_task_ids: std::collections::HashSet<String> = claims
             .iter()
-            .filter_map(|(v, _)| v.get("task_id").and_then(|t| t.as_str()).map(String::from))
+            .filter_map(|(v, _, _)| v.get("task_id").and_then(|t| t.as_str()).map(String::from))
             .collect();
 
         // Count symbols indexed
@@ -706,14 +756,16 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
         // Check for broken claims (claims where workspace doesn't exist)
         let broken_claims: Vec<String> = claims
             .iter()
-            .filter(|(_, path)| !workspace_root.join(path).exists())
-            .filter_map(|(v, _)| v.get("task_id").and_then(|b| b.as_str()).map(String::from))
+            .filter(|(_, path, _)| !workspace_root.join(path).exists())
+            .filter_map(|(v, _, _)| v.get("task_id").and_then(|b| b.as_str()).map(String::from))
             .collect();
 
         Ok(serde_json::json!({
             "claims": {
                 "count": claims_count,
-                "active": claim_values
+                "active": claim_values,
+                "stale_count": stale_claim_values.len(),
+                "stale": stale_claim_values
             },
             "symbols_indexed": symbols_count,
             "ready_tasks": ready_count,
