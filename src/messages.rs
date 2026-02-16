@@ -243,7 +243,10 @@ pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesErr
         if affected == 0 {
             return Err(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
-                Some(format!("Message {} not found or not owned by {}", message_id, agent_id)),
+                Some(format!(
+                    "Message {} not found or not owned by {}",
+                    message_id, agent_id
+                )),
             ));
         }
 
@@ -273,7 +276,10 @@ pub fn mark_failed(message_id: i64, agent_id: &str) -> Result<(), MessagesError>
         if affected == 0 {
             return Err(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
-                Some(format!("Message {} not found or not owned by {}", message_id, agent_id)),
+                Some(format!(
+                    "Message {} not found or not owned by {}",
+                    message_id, agent_id
+                )),
             ));
         }
 
@@ -434,8 +440,12 @@ mod tests {
         // Claim 2 messages
         let claimed = claim_messages("architect-1", 2).unwrap();
         assert_eq!(claimed.len(), 2);
-        assert!(claimed.iter().all(|m| m.status == MessageStatus::Processing));
-        assert!(claimed.iter().all(|m| m.processing_by == Some("architect-1".to_string())));
+        assert!(claimed
+            .iter()
+            .all(|m| m.status == MessageStatus::Processing));
+        assert!(claimed
+            .iter()
+            .all(|m| m.processing_by == Some("architect-1".to_string())));
 
         // Verify only 1 pending remains
         let remaining = list_messages(Some("architect-1"), Some(MessageStatus::Pending)).unwrap();
@@ -454,7 +464,7 @@ mod tests {
             payload: serde_json::json!({}),
         };
 
-        let msg = send_message(input).unwrap();
+        let _msg = send_message(input).unwrap();
         let claimed = claim_messages("worker-1", 1).unwrap();
         assert_eq!(claimed.len(), 1);
 

@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     archetype TEXT NOT NULL DEFAULT 'generic',  -- Agent specialization archetype
     claimed_by TEXT,                        -- agent_id who claimed
     claimed_at INTEGER,                     -- Unix timestamp ms
+    claimed_heartbeat_at INTEGER,           -- Last agent heartbeat while claim is active
     ready_commit_id TEXT,                   -- jj commit ID when agent marks ready (pre-rebase)
     release_commit_id TEXT,                 -- jj commit ID after rebase (for stuck detection)
     release_started_at INTEGER,             -- When orchestrator started release attempt
@@ -103,6 +104,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_epic ON tasks(epic_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_claimed ON tasks(claimed_by) WHERE claimed_by IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, priority, created_at)
     WHERE status = 'open' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_heartbeat ON tasks(claimed_heartbeat_at)
+    WHERE status = 'in_progress' AND deleted_at IS NULL;
 
 -- ============================================================================
 -- Task Dependencies (many-to-many, same-epic enforced by trigger)
@@ -235,6 +238,24 @@ CREATE INDEX IF NOT EXISTS idx_eval_agent ON task_eval_metrics(agent_id);
 CREATE INDEX IF NOT EXISTS idx_eval_type ON task_eval_metrics(event_type);
 CREATE INDEX IF NOT EXISTS idx_eval_time ON task_eval_metrics(created_at);
 
+-- ============================================================================
+-- Orchestration Events (structured, append-only telemetry)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS orchestration_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
+    actor TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    idempotency_key TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_orch_events_time ON orchestration_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_orch_events_entity ON orchestration_events(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_orch_events_type ON orchestration_events(event_type);
+
 -- Soft-delete guard
 DROP TRIGGER IF EXISTS tasks_soft_delete_guard;
 CREATE TRIGGER tasks_soft_delete_guard
@@ -281,7 +302,17 @@ mod tests {
         init_schema(&conn).unwrap();
 
         // Verify tables exist
-        let tables = ["symbols", "epics", "tasks", "task_dependencies", "task_footprints", "agent_messages", "handles", "handle_data"];
+        let tables = [
+            "symbols",
+            "epics",
+            "tasks",
+            "task_dependencies",
+            "task_footprints",
+            "agent_messages",
+            "orchestration_events",
+            "handles",
+            "handle_data",
+        ];
         for table in tables {
             let count: i32 = conn
                 .query_row(
@@ -292,6 +323,15 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1, "Table {} should exist", table);
         }
+
+        let mut stmt = conn.prepare("PRAGMA table_info(tasks)").unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        let has_heartbeat = columns.iter().any(|c| c == "claimed_heartbeat_at");
+        assert!(has_heartbeat, "tasks.claimed_heartbeat_at should exist");
     }
 
     #[test]
@@ -392,7 +432,8 @@ mod tests {
         conn.execute(
             "INSERT INTO task_dependencies (task_id, depends_on) VALUES ('T1', 'T3')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
@@ -484,14 +525,13 @@ mod tests {
         ).unwrap();
 
         // Delete without closing should fail
-        let result = conn.execute(
-            "UPDATE tasks SET deleted_at = ?1 WHERE id = 'T1'",
-            [now],
-        );
+        let result = conn.execute("UPDATE tasks SET deleted_at = ?1 WHERE id = 'T1'", [now]);
         assert!(result.is_err());
 
         // Close then delete should work
-        conn.execute("UPDATE tasks SET status = 'closed' WHERE id = 'T1'", []).unwrap();
-        conn.execute("UPDATE tasks SET deleted_at = ?1 WHERE id = 'T1'", [now]).unwrap();
+        conn.execute("UPDATE tasks SET status = 'closed' WHERE id = 'T1'", [])
+            .unwrap();
+        conn.execute("UPDATE tasks SET deleted_at = ?1 WHERE id = 'T1'", [now])
+            .unwrap();
     }
 }

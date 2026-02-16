@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod db;
 mod epics;
+mod events;
 mod handles;
 mod indexer;
 mod messages;
@@ -13,20 +14,25 @@ mod updater;
 mod workspace;
 
 use clap::Parser;
-use cli::{Cli, Commands, ArchetypeCommands, EpicCommands, HandleCommands, MessageCommands, SessionCommands, TaskCommands};
+use cli::{
+    ArchetypeCommands, Cli, Commands, EpicCommands, HandleCommands, MessageCommands,
+    SessionCommands, TaskCommands,
+};
 use std::path::PathBuf;
 
 fn main() {
     let cli = Cli::parse();
 
     // Determine workspace root by traversing up
-    let workspace_root = find_workspace_root().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let workspace_root = find_workspace_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     // Fast path for `session check` when no session exists
     // This avoids creating .bacchus/ in repos that don't use bacchus
-    if let Commands::Session { command: SessionCommands::Check } = &cli.command {
+    if let Commands::Session {
+        command: SessionCommands::Check,
+    } = &cli.command
+    {
         let session_path = workspace_root.join(".bacchus/session.json");
         if !session_path.exists() {
             // No session file = no bacchus session active, approve immediately
@@ -54,78 +60,107 @@ fn main() {
         // ====================================================================
         // Coordination Commands
         // ====================================================================
-        Commands::Next { agent_id } => {
-            tools::next_task(&agent_id, &workspace_root)
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
+        Commands::Next { agent_id } => tools::next_task(&agent_id, &workspace_root)
+            .map(|r| serde_json::to_string_pretty(&r).unwrap()),
 
-        Commands::Claim { task_id, agent_id, force } => {
-            tools::claim_task(&task_id, &agent_id, force, &workspace_root)
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
+        Commands::Claim {
+            task_id,
+            agent_id,
+            force,
+        } => tools::claim_task(&task_id, &agent_id, force, &workspace_root)
+            .map(|r| serde_json::to_string_pretty(&r).unwrap()),
 
         Commands::Release { task_id, status } => {
             tools::release_task(&task_id, &status, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e.to_string()),
-                ))
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                })
         }
 
-        Commands::Abort { task_id } => {
-            tools::abort_merge(&task_id, &workspace_root)
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e.to_string()),
-                ))
-        }
+        Commands::Abort { task_id } => tools::abort_merge(&task_id, &workspace_root)
+            .map(|r| serde_json::to_string_pretty(&r).unwrap())
+            .map_err(|e| {
+                rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
+            }),
 
-        Commands::Resolve { task_id } => {
-            tools::resolve_merge(&task_id, &workspace_root)
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e.to_string()),
-                ))
-        }
+        Commands::Resolve { task_id } => tools::resolve_merge(&task_id, &workspace_root)
+            .map(|r| serde_json::to_string_pretty(&r).unwrap())
+            .map_err(|e| {
+                rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
+            }),
 
         Commands::Stale { minutes, cleanup } => {
             tools::find_stale(minutes, cleanup, &workspace_root)
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e.to_string()),
-                ))
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                })
         }
 
-        Commands::List => {
-            tools::list_claims().map(|r| serde_json::to_string_pretty(&r).unwrap())
+        Commands::List => tools::list_claims().map(|r| serde_json::to_string_pretty(&r).unwrap()),
+
+        Commands::Heartbeat { task_id, agent_id } => {
+            tasks::heartbeat_sqlite_task(&task_id, &agent_id)
+                .map(|_| {
+                    serde_json::json!({
+                        "success": true,
+                        "task_id": task_id,
+                        "agent_id": agent_id,
+                        "message": "Heartbeat recorded"
+                    })
+                    .to_string()
+                })
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                })
         }
 
-        Commands::Review { task_id, build_cmd, test_cmd } => {
-            tools::review_task(&task_id, &workspace_root, build_cmd.as_deref(), test_cmd.as_deref())
+        Commands::Review {
+            task_id,
+            build_cmd,
+            test_cmd,
+        } => tools::review_task(
+            &task_id,
+            &workspace_root,
+            build_cmd.as_deref(),
+            test_cmd.as_deref(),
+        )
+        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+        .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+
+        Commands::ProcessReleases { limit } => {
+            tools::process_ready_releases(&workspace_root, Some(limit))
                 .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e),
-                ))
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e)))
         }
 
-        Commands::Eval { epic, days } => {
-            tools::generate_eval_report(epic.as_deref(), days)
-                .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e),
-                ))
-        }
+        Commands::Eval { epic, days } => tools::generate_eval_report(epic.as_deref(), days)
+            .map(|r| serde_json::to_string_pretty(&r).unwrap())
+            .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
 
         // ====================================================================
         // Symbol Commands
         // ====================================================================
-        Commands::Symbols { pattern, kind, file, lang, limit, search, fuzzy, handle } => {
+        Commands::Symbols {
+            pattern,
+            kind,
+            file,
+            lang,
+            limit,
+            search,
+            fuzzy,
+            handle,
+        } => {
             let input = tools::FindSymbolsInput {
                 pattern,
                 kind,
@@ -137,32 +172,30 @@ fn main() {
                 handle,
             };
             if handle {
-                tools::find_symbols_handle(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
+                tools::find_symbols_handle(&input)
+                    .map(|r| serde_json::to_string_pretty(&r).unwrap())
             } else {
                 tools::find_symbols(&input).map(|r| serde_json::to_string_pretty(&r).unwrap())
             }
         }
 
-        Commands::Index { path } => {
-            match index_path(&path, &workspace_root) {
-                Ok(count) => Ok(serde_json::json!({
-                    "success": true,
-                    "files_indexed": count,
-                    "path": path
-                }).to_string()),
-                Err(e) => Err(rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e),
-                )),
-            }
-        }
+        Commands::Index { path } => match index_path(&path, &workspace_root) {
+            Ok(count) => Ok(serde_json::json!({
+                "success": true,
+                "files_indexed": count,
+                "path": path
+            })
+            .to_string()),
+            Err(e) => Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(e),
+            )),
+        },
 
         // ====================================================================
         // Info Commands
         // ====================================================================
-        Commands::Status => {
-            get_status().map(|r| serde_json::to_string_pretty(&r).unwrap())
-        }
+        Commands::Status => get_status().map(|r| serde_json::to_string_pretty(&r).unwrap()),
 
         Commands::Workflow => {
             println!("{}", WORKFLOW_DOC);
@@ -172,277 +205,248 @@ fn main() {
         // ====================================================================
         // Update Commands
         // ====================================================================
-        Commands::SelfUpdate => {
-            updater::self_update().map(|v| {
+        Commands::SelfUpdate => updater::self_update()
+            .map(|v| {
                 serde_json::json!({
                     "success": true,
                     "updated_to": v
-                }).to_string()
-            }).map_err(|e| rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(e.to_string()),
-            ))
-        }
+                })
+                .to_string()
+            })
+            .map_err(|e| {
+                rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
+            }),
 
-        Commands::Context { task_id } => {
-            tools::generate_context(task_id, &workspace_root)
-                .map_err(|e| rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(e),
-                ))
-        }
+        Commands::Context { task_id } => tools::generate_context(task_id, &workspace_root)
+            .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
 
-        Commands::CheckUpdate => {
-            updater::check_for_updates().map(|info| {
-                serde_json::to_string_pretty(&info).unwrap()
-            }).map_err(|e| rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(e.to_string()),
-            ))
-        }
+        Commands::CheckUpdate => updater::check_for_updates()
+            .map(|info| serde_json::to_string_pretty(&info).unwrap())
+            .map_err(|e| {
+                rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
+            }),
+
+        Commands::Events { limit } => events::list_recent_events(limit)
+            .map(|v| serde_json::to_string_pretty(&v).unwrap())
+            .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
 
         // ====================================================================
         // Session Commands (for stop hooks)
         // ====================================================================
-        Commands::Session { command } => {
-            match command {
-                SessionCommands::Start { mode, task_id, max_concurrent, agent_id } => {
-                    tools::start_session(&mode, task_id.as_deref(), max_concurrent, agent_id.as_deref())
-                        .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                SessionCommands::Stop => {
-                    tools::stop_session()
-                        .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                SessionCommands::Status => {
-                    tools::session_status()
-                        .map(|v| serde_json::to_string_pretty(&v).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                SessionCommands::Check => {
-                    let result = tools::check_session();
-                    Ok(serde_json::to_string_pretty(&result).unwrap())
-                }
+        Commands::Session { command } => match command {
+            SessionCommands::Start {
+                mode,
+                task_id,
+                max_concurrent,
+                agent_id,
+            } => tools::start_session(
+                &mode,
+                task_id.as_deref(),
+                max_concurrent,
+                agent_id.as_deref(),
+            )
+            .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+            .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            SessionCommands::Stop => tools::stop_session()
+                .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            SessionCommands::Status => tools::session_status()
+                .map(|v| serde_json::to_string_pretty(&v).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            SessionCommands::Check => {
+                let result = tools::check_session();
+                Ok(serde_json::to_string_pretty(&result).unwrap())
             }
-        }
+        },
 
         // ====================================================================
         // Task Commands (built-in task management)
         // ====================================================================
-        Commands::Task { command } => {
-            match command {
-                TaskCommands::List { status, ready } => {
-                    tools::list_tasks(&workspace_root, status.as_deref(), ready)
-                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                TaskCommands::Show { id } => {
-                    tools::show_task(&workspace_root, &id)
-                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                TaskCommands::Validate => {
-                    tools::validate_tasks(&workspace_root)
-                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                TaskCommands::Init => {
-                    tools::init_tasks(&workspace_root)
-                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
-                TaskCommands::Import { epic_id } => {
-                    tools::import_tasks(&workspace_root, epic_id.as_deref())
-                        .map(|r| serde_json::to_string_pretty(&r).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e),
-                        ))
-                }
+        Commands::Task { command } => match command {
+            TaskCommands::List { status, ready } => {
+                tools::list_tasks(&workspace_root, status.as_deref(), ready)
+                    .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))
+                    })
             }
-        }
+            TaskCommands::Show { id } => tools::show_task(&workspace_root, &id)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            TaskCommands::Validate => tools::validate_tasks(&workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            TaskCommands::Init => tools::init_tasks(&workspace_root)
+                .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            TaskCommands::Import { epic_id } => {
+                tools::import_tasks(&workspace_root, epic_id.as_deref())
+                    .map(|r| serde_json::to_string_pretty(&r).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))
+                    })
+            }
+        },
 
         // ====================================================================
         // Epic Commands (hierarchical orchestration)
         // ====================================================================
-        Commands::Epic { command } => {
-            match command {
-                EpicCommands::List { status } => {
-                    let status_filter = status.as_ref().and_then(|s| epics::EpicStatus::from_str(s).ok());
-                    epics::list_epics(status_filter)
-                        .map(|epics| serde_json::to_string_pretty(&epics).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
+        Commands::Epic { command } => match command {
+            EpicCommands::List { status } => {
+                let status_filter = status
+                    .as_ref()
+                    .and_then(|s| epics::EpicStatus::from_str(s).ok());
+                epics::list_epics(status_filter)
+                    .map(|epics| serde_json::to_string_pretty(&epics).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(
                             rusqlite::ffi::Error::new(1),
                             Some(e.to_string()),
-                        ))
-                }
-                EpicCommands::Show { id } => {
-                    epics::get_epic_with_counts(&id)
-                        .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e.to_string()),
-                        ))
-                }
-                EpicCommands::Create { id, title, description } => {
-                    let input = epics::CreateEpicInput {
-                        id,
-                        title,
-                        description,
-                        created_by: "human".to_string(),
-                    };
-                    epics::create_epic(input)
-                        .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e.to_string()),
-                        ))
-                }
-                EpicCommands::Assign { id, agent } => {
-                    epics::assign_epic(&id, &agent)
-                        .map(|epic| serde_json::json!({
-                            "success": true,
-                            "epic": epic,
-                            "message": format!("Epic {} assigned to {}", id, agent)
-                        }).to_string())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(e.to_string()),
-                        ))
-                }
+                        )
+                    })
             }
-        }
+            EpicCommands::Show { id } => epics::get_epic_with_counts(&id)
+                .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                }),
+            EpicCommands::Create {
+                id,
+                title,
+                description,
+            } => {
+                let input = epics::CreateEpicInput {
+                    id,
+                    title,
+                    description,
+                    created_by: "human".to_string(),
+                };
+                epics::create_epic(input)
+                    .map(|epic| serde_json::to_string_pretty(&epic).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(1),
+                            Some(e.to_string()),
+                        )
+                    })
+            }
+            EpicCommands::Assign { id, agent } => epics::assign_epic(&id, &agent)
+                .map(|epic| {
+                    serde_json::json!({
+                        "success": true,
+                        "epic": epic,
+                        "message": format!("Epic {} assigned to {}", id, agent)
+                    })
+                    .to_string()
+                })
+                .map_err(|e| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(1),
+                        Some(e.to_string()),
+                    )
+                }),
+        },
 
         // ====================================================================
         // Message Commands (agent communication)
         // ====================================================================
-        Commands::Message { command } => {
-            match command {
-                MessageCommands::List { agent, status } => {
-                    let status_filter = status.as_ref().and_then(|s| messages::MessageStatus::from_str(s).ok());
-                    messages::list_messages(agent.as_deref(), status_filter)
-                        .map(|msgs| serde_json::to_string_pretty(&msgs).unwrap())
-                        .map_err(|e| rusqlite::Error::SqliteFailure(
+        Commands::Message { command } => match command {
+            MessageCommands::List { agent, status } => {
+                let status_filter = status
+                    .as_ref()
+                    .and_then(|s| messages::MessageStatus::from_str(s).ok());
+                messages::list_messages(agent.as_deref(), status_filter)
+                    .map(|msgs| serde_json::to_string_pretty(&msgs).unwrap())
+                    .map_err(|e| {
+                        rusqlite::Error::SqliteFailure(
                             rusqlite::ffi::Error::new(1),
                             Some(e.to_string()),
-                        ))
-                }
-                MessageCommands::Send { agent, message_type, payload } => {
-                    match serde_json::from_str::<serde_json::Value>(&payload) {
-                        Ok(payload_json) => {
-                            let input = messages::SendMessageInput {
-                                target_agent: agent,
-                                message_type,
-                                payload: payload_json,
-                            };
-                            messages::send_message(input)
-                                .map(|msg| serde_json::to_string_pretty(&msg).unwrap())
-                                .map_err(|e| rusqlite::Error::SqliteFailure(
-                                    rusqlite::ffi::Error::new(1),
-                                    Some(e.to_string()),
-                                ))
-                        }
-                        Err(e) => Err(rusqlite::Error::SqliteFailure(
-                            rusqlite::ffi::Error::new(1),
-                            Some(format!("Invalid JSON payload: {}", e)),
-                        ))
-                    }
-                }
+                        )
+                    })
             }
-        }
+            MessageCommands::Send {
+                agent,
+                message_type,
+                payload,
+            } => match serde_json::from_str::<serde_json::Value>(&payload) {
+                Ok(payload_json) => {
+                    let input = messages::SendMessageInput {
+                        target_agent: agent,
+                        message_type,
+                        payload: payload_json,
+                    };
+                    messages::send_message(input)
+                        .map(|msg| serde_json::to_string_pretty(&msg).unwrap())
+                        .map_err(|e| {
+                            rusqlite::Error::SqliteFailure(
+                                rusqlite::ffi::Error::new(1),
+                                Some(e.to_string()),
+                            )
+                        })
+                }
+                Err(e) => Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(format!("Invalid JSON payload: {}", e)),
+                )),
+            },
+        },
 
         // ====================================================================
         // Archetype Commands
         // ====================================================================
-        Commands::Archetype { command } => {
-            match command {
-                ArchetypeCommands::List => {
-                    Ok(tools::cmd_list_archetypes())
-                }
-                ArchetypeCommands::Show { name } => {
-                    Ok(tools::cmd_show_archetype(&name))
-                }
-                ArchetypeCommands::Prompt { name } => {
-                    Ok(tools::cmd_archetype_prompt(&name))
-                }
-                ArchetypeCommands::Select { task_id } => {
-                    Ok(tools::cmd_select_archetype(&task_id))
-                }
-            }
-        }
+        Commands::Archetype { command } => match command {
+            ArchetypeCommands::List => Ok(tools::cmd_list_archetypes()),
+            ArchetypeCommands::Show { name } => Ok(tools::cmd_show_archetype(&name)),
+            ArchetypeCommands::Prompt { name } => Ok(tools::cmd_archetype_prompt(&name)),
+            ArchetypeCommands::Select { task_id } => Ok(tools::cmd_select_archetype(&task_id)),
+        },
 
         // ====================================================================
         // Handle Commands (token-saving query results)
         // ====================================================================
-        Commands::Handle { command } => {
-            match command {
-                HandleCommands::Expand { handle, limit, offset } => {
-                    handles::expand_handle(&handle, Some(limit), Some(offset))
-                        .map(|data| serde_json::to_string_pretty(&data).unwrap())
-                }
-                HandleCommands::Filter { handle, kind, file } => {
-                    handles::filter_handle(
-                        &handle,
-                        |v| {
-                            let kind_match = kind.as_ref().map_or(true, |k| {
-                                v["kind"].as_str() == Some(k.as_str())
-                            });
-                            let file_match = file.as_ref().map_or(true, |f| {
-                                v["file"].as_str().map_or(false, |vf| {
-                                    if f.contains('*') {
-                                        let pattern = f.replace('*', "");
-                                        vf.contains(&pattern)
-                                    } else {
-                                        vf.contains(f)
-                                    }
-                                })
-                            });
-                            kind_match && file_match
-                        },
-                        |v| v["fq_name"].as_str().unwrap_or("?").to_string(),
-                    )
-                    .map(|stub| serde_json::to_string_pretty(&stub).unwrap())
-                }
-                HandleCommands::List => {
-                    handles::list_handles()
-                        .map(|handles| serde_json::to_string_pretty(&handles).unwrap())
-                }
-                HandleCommands::Clear => {
-                    handles::clear_all_handles()
-                        .map(|count| serde_json::json!({
-                            "success": true,
-                            "cleared": count
-                        }).to_string())
-                }
-                HandleCommands::Info { handle } => {
-                    handles::get_handle_info(&handle)
-                        .map(|info| serde_json::to_string_pretty(&info).unwrap())
-                }
-            }
-        }
+        Commands::Handle { command } => match command {
+            HandleCommands::Expand {
+                handle,
+                limit,
+                offset,
+            } => handles::expand_handle(&handle, Some(limit), Some(offset))
+                .map(|data| serde_json::to_string_pretty(&data).unwrap()),
+            HandleCommands::Filter { handle, kind, file } => handles::filter_handle(
+                &handle,
+                |v| {
+                    let kind_match = kind
+                        .as_ref()
+                        .map_or(true, |k| v["kind"].as_str() == Some(k.as_str()));
+                    let file_match = file.as_ref().map_or(true, |f| {
+                        v["file"].as_str().map_or(false, |vf| {
+                            if f.contains('*') {
+                                let pattern = f.replace('*', "");
+                                vf.contains(&pattern)
+                            } else {
+                                vf.contains(f)
+                            }
+                        })
+                    });
+                    kind_match && file_match
+                },
+                |v| v["fq_name"].as_str().unwrap_or("?").to_string(),
+            )
+            .map(|stub| serde_json::to_string_pretty(&stub).unwrap()),
+            HandleCommands::List => handles::list_handles()
+                .map(|handles| serde_json::to_string_pretty(&handles).unwrap()),
+            HandleCommands::Clear => handles::clear_all_handles().map(|count| {
+                serde_json::json!({
+                    "success": true,
+                    "cleared": count
+                })
+                .to_string()
+            }),
+            HandleCommands::Info { handle } => handles::get_handle_info(&handle)
+                .map(|info| serde_json::to_string_pretty(&info).unwrap()),
+        },
     };
 
     match result {
@@ -562,8 +566,15 @@ fn parse_file(
         .to_string_lossy()
         .to_string();
 
-    let (tree, language) = parser.parse_file(&content, &relative_path).map_err(|e| e.to_string())?;
-    Ok(indexer::extract_symbols(&tree, &relative_path, &content, language))
+    let (tree, language) = parser
+        .parse_file(&content, &relative_path)
+        .map_err(|e| e.to_string())?;
+    Ok(indexer::extract_symbols(
+        &tree,
+        &relative_path,
+        &content,
+        language,
+    ))
 }
 
 /// Store symbols in database (batched in single transaction)
@@ -616,12 +627,14 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
 
     db::with_db(|conn| {
         // Count active claims from tasks (in_progress with claimed_by)
-        let claims_count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM tasks
+        let claims_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks
              WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
-            [],
-            |r| r.get(0),
-        ).unwrap_or(0);
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -630,38 +643,44 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
 
         // Get active claims from tasks
         let mut stmt = conn.prepare(
-            "SELECT id, claimed_by, claimed_at
+            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at
              FROM tasks
-             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL"
+             WHERE status = 'in_progress' AND claimed_by IS NOT NULL AND deleted_at IS NULL",
         )?;
         let claims: Vec<(serde_json::Value, String)> = stmt
             .query_map([], |row| {
                 let task_id: String = row.get(0)?;
                 let claimed_at: Option<i64> = row.get(2)?;
-                let age_minutes = claimed_at.map(|ca| (now_ms - ca) / 60000).unwrap_or(0);
+                let heartbeat_at: Option<i64> = row.get(3)?;
+                let last_seen = heartbeat_at.or(claimed_at).unwrap_or(0);
+                let age_minutes = if last_seen > 0 {
+                    (now_ms - last_seen) / 60000
+                } else {
+                    0
+                };
                 let workspace_path = format!(".bacchus/workspaces/{}", task_id);
-                Ok((serde_json::json!({
-                    "task_id": &task_id,
-                    "agent_id": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    "workspace_path": &workspace_path,
-                    "age_minutes": age_minutes
-                }), workspace_path))
+                Ok((
+                    serde_json::json!({
+                        "task_id": &task_id,
+                        "agent_id": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        "workspace_path": &workspace_path,
+                        "age_minutes": age_minutes
+                    }),
+                    workspace_path,
+                ))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let claim_values: Vec<serde_json::Value> = claims.iter().map(|(v, _)| v.clone()).collect();
-        let claimed_task_ids: std::collections::HashSet<String> =
-            claims.iter()
-                .filter_map(|(v, _)| v.get("task_id").and_then(|t| t.as_str()).map(String::from))
-                .collect();
+        let claimed_task_ids: std::collections::HashSet<String> = claims
+            .iter()
+            .filter_map(|(v, _)| v.get("task_id").and_then(|t| t.as_str()).map(String::from))
+            .collect();
 
         // Count symbols indexed
-        let symbols_count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM symbols",
-            [],
-            |r| r.get(0),
-        ).unwrap_or(0);
+        let symbols_count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))
+            .unwrap_or(0);
 
         // Check for orphaned workspaces (workspaces on disk without claims)
         let workspaces_dir = std::env::var("BACCHUS_WORKSPACES")
@@ -685,7 +704,8 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
         }
 
         // Check for broken claims (claims where workspace doesn't exist)
-        let broken_claims: Vec<String> = claims.iter()
+        let broken_claims: Vec<String> = claims
+            .iter()
             .filter(|(_, path)| !workspace_root.join(path).exists())
             .filter_map(|(v, _)| v.get("task_id").and_then(|b| b.as_str()).map(String::from))
             .collect();
@@ -744,6 +764,9 @@ bacchus task validate
    ```bash
    # Success - mark ready for release (orchestrator will merge)
    bacchus release <task_id> --status done
+
+   # Orchestrator merge step (manual trigger outside session hooks)
+   bacchus process-releases
 
    # Blocked - keep workspace, release claim
    bacchus release <task_id> --status blocked

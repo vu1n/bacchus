@@ -18,7 +18,6 @@ pub enum Commands {
     // ========================================================================
     // Coordination Commands (jj workspace-based)
     // ========================================================================
-
     /// Get next ready task, create workspace, claim it
     Next {
         /// Your agent ID
@@ -70,6 +69,14 @@ pub enum Commands {
     /// List all active claims and workspaces
     List,
 
+    /// Heartbeat an active claim to keep lease fresh
+    Heartbeat {
+        /// Task ID being worked on
+        task_id: String,
+        /// Agent ID that owns the claim
+        agent_id: String,
+    },
+
     /// Review a task before release (advisory checks)
     Review {
         /// The task ID to review
@@ -80,6 +87,13 @@ pub enum Commands {
         /// Test command to run (optional)
         #[arg(long)]
         test_cmd: Option<String>,
+    },
+
+    /// Orchestrator: merge tasks that are ready_for_release
+    ProcessReleases {
+        /// Max ready tasks to process this run
+        #[arg(long, default_value = "20")]
+        limit: usize,
     },
 
     /// Generate eval metrics report
@@ -95,7 +109,6 @@ pub enum Commands {
     // ========================================================================
     // Symbol Commands
     // ========================================================================
-
     /// Search for symbols in the codebase
     Symbols {
         /// Name pattern (supports * wildcards)
@@ -133,7 +146,6 @@ pub enum Commands {
     // ========================================================================
     // Info Commands
     // ========================================================================
-
     /// Show current claims and status
     Status,
 
@@ -152,6 +164,13 @@ pub enum Commands {
 
     /// Check if a newer version is available
     CheckUpdate,
+
+    /// List recent orchestration events
+    Events {
+        /// Number of events to return
+        #[arg(long, default_value = "50")]
+        limit: i32,
+    },
 
     /// Manage session state for stop hooks
     Session {
@@ -202,7 +221,7 @@ pub enum SessionCommands {
         /// Max concurrent agents (for orchestrator mode)
         #[arg(long, default_value = "3")]
         max_concurrent: i32,
-        /// Agent ID (required for architect mode)
+        /// Agent ID (required for architect mode, optional override for agent mode)
         #[arg(long)]
         agent_id: Option<String>,
     },

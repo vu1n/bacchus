@@ -150,7 +150,13 @@ mod workspace_tests {
 
         // Describe the change
         let output = Command::new("jj")
-            .args(["-R", workspace_path.to_str().unwrap(), "describe", "-m", "Add new file"])
+            .args([
+                "-R",
+                workspace_path.to_str().unwrap(),
+                "describe",
+                "-m",
+                "Add new file",
+            ])
             .output()
             .unwrap();
 
@@ -243,7 +249,13 @@ mod workspace_tests {
         // Modify test.txt in workspace
         fs::write(workspace_path.join("test.txt"), "workspace change").unwrap();
         Command::new("jj")
-            .args(["-R", workspace_path.to_str().unwrap(), "describe", "-m", "Workspace change"])
+            .args([
+                "-R",
+                workspace_path.to_str().unwrap(),
+                "describe",
+                "-m",
+                "Workspace change",
+            ])
             .output()
             .unwrap();
 
@@ -257,7 +269,13 @@ mod workspace_tests {
 
         // Rebase workspace onto main - this may produce conflicts
         let output = Command::new("jj")
-            .args(["-R", workspace_path.to_str().unwrap(), "rebase", "-d", "main"])
+            .args([
+                "-R",
+                workspace_path.to_str().unwrap(),
+                "rebase",
+                "-d",
+                "main",
+            ])
             .output()
             .unwrap();
 
@@ -341,6 +359,138 @@ mod db_tests {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("stale_claims"));
+    }
+
+    #[test]
+    fn test_claim_workspace_failure_rolls_back_to_open() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: ROLLBACK-001
+    title: "Rollback claim test"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/app.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "ROLLBACK"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let bad_workspaces = repo_path.join("bad-workspaces");
+        fs::write(&bad_workspaces, "not-a-directory").unwrap();
+
+        let claim_output = Command::new(bacchus_bin())
+            .args(["claim", "ROLLBACK-001", "agent-1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKSPACES", &bad_workspaces)
+            .output()
+            .unwrap();
+        assert!(!claim_output.status.success());
+
+        let show_output = Command::new(bacchus_bin())
+            .args(["task", "show", "ROLLBACK-001"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(show_output.status.success());
+        let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+        assert!(
+            show_stdout.contains("\"status\": \"open\""),
+            "Expected task to remain open after failed claim, got: {}",
+            show_stdout
+        );
+    }
+
+    #[test]
+    fn test_next_workspace_failure_rolls_back_to_open() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: ROLLBACK-002
+    title: "Rollback next test"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["src/lib.rs"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "ROLLBACK"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let bad_workspaces = repo_path.join("bad-workspaces-next");
+        fs::write(&bad_workspaces, "not-a-directory").unwrap();
+
+        let next_output = Command::new(bacchus_bin())
+            .args(["next", "agent-1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_WORKSPACES", &bad_workspaces)
+            .output()
+            .unwrap();
+        assert!(!next_output.status.success());
+
+        let show_output = Command::new(bacchus_bin())
+            .args(["task", "show", "ROLLBACK-002"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(show_output.status.success());
+        let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+        assert!(
+            show_stdout.contains("\"status\": \"open\""),
+            "Expected task to remain open after failed next, got: {}",
+            show_stdout
+        );
     }
 }
 
@@ -558,6 +708,183 @@ mod workflow_tests {
             "Expected error, got: stdout={}, stderr={}",
             stdout,
             stderr
+        );
+    }
+
+    #[test]
+    fn test_process_releases_closes_ready_task() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join(".bacchus/test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: REL-001
+    title: "Release task"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["test.txt"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        let import_output = Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "REL"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(import_output.status.success());
+
+        let claim_output = Command::new(bacchus_bin())
+            .args(["claim", "REL-001", "agent-1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(claim_output.status.success());
+
+        let workspace_path = repo_path.join(".bacchus/workspaces/REL-001");
+        fs::write(workspace_path.join("test.txt"), "release change").unwrap();
+
+        let describe_output = Command::new("jj")
+            .args([
+                "-R",
+                workspace_path.to_str().unwrap(),
+                "describe",
+                "-m",
+                "Release task change",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            describe_output.status.success(),
+            "describe failed: {}",
+            String::from_utf8_lossy(&describe_output.stderr)
+        );
+
+        let ready_output = Command::new(bacchus_bin())
+            .args(["release", "REL-001", "--status", "done"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(ready_output.status.success());
+
+        let process_output = Command::new(bacchus_bin())
+            .args(["process-releases"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(process_output.status.success());
+        let process_stdout = String::from_utf8_lossy(&process_output.stdout);
+        assert!(
+            process_stdout.contains("\"merged\": 1"),
+            "Expected merged count, got: {}",
+            process_stdout
+        );
+
+        let show_output = Command::new(bacchus_bin())
+            .args(["task", "show", "REL-001"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(show_output.status.success());
+        let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+        assert!(
+            show_stdout.contains("\"status\": \"closed\""),
+            "Expected closed status, got: {}",
+            show_stdout
+        );
+    }
+
+    #[test]
+    fn test_force_claim_rejects_ready_for_release_state() {
+        if !jj_installed() {
+            eprintln!("Skipping test: jj not installed");
+            return;
+        }
+
+        let (_temp, repo_path) = init_test_repo();
+        let db_path = repo_path.join(".bacchus/test.db");
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+        fs::write(
+            repo_path.join(".bacchus/tasks.yaml"),
+            r#"
+version: 1
+tasks:
+  - id: FORCE-001
+    title: "Force guard task"
+    priority: 1
+    status: open
+    depends_on: []
+    footprint:
+      modifies: ["test.txt"]
+      creates: []
+"#,
+        )
+        .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["task", "import", "--epic-id", "FORCE"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["claim", "FORCE-001", "agent-1"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let workspace_path = repo_path.join(".bacchus/workspaces/FORCE-001");
+        fs::write(workspace_path.join("test.txt"), "force guard change").unwrap();
+        Command::new("jj")
+            .args([
+                "-R",
+                workspace_path.to_str().unwrap(),
+                "describe",
+                "-m",
+                "Force guard change",
+            ])
+            .output()
+            .unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["release", "FORCE-001", "--status", "done"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let force_output = Command::new(bacchus_bin())
+            .args(["claim", "FORCE-001", "agent-2", "--force"])
+            .current_dir(&repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(force_output.status.success());
+        let force_stdout = String::from_utf8_lossy(&force_output.stdout);
+        assert!(
+            force_stdout.contains("cannot be force-claimed"),
+            "Expected force-claim guard message, got: {}",
+            force_stdout
         );
     }
 }

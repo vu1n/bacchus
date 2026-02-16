@@ -329,7 +329,9 @@ bacchus session start orchestrator --max-concurrent 3
 |---------|-------------|
 | `next <agent_id>` | Get next ready task, create workspace, claim it |
 | `claim <task_id> <agent_id> [--force]` | Claim specific task (must be ready unless --force) |
+| `heartbeat <task_id> <agent_id>` | Refresh task claim lease heartbeat |
 | `release <task_id> --status done\|blocked\|failed` | Mark task ready for release |
+| `process-releases [--limit N]` | Orchestrator: merge tasks in `ready_for_release` |
 | `stale [--minutes N] [--cleanup]` | Find/cleanup abandoned claims |
 | `list` | List all active claims |
 | `resolve <task_id>` | Mark task ready after resolving conflicts |
@@ -430,6 +432,7 @@ Handles are session-scoped and automatically cleared on `bacchus session stop`.
 | `status` | Show claims, orphaned workspaces, broken claims |
 | `context [--task-id X]` | Generate markdown context for agent |
 | `workflow` | Print protocol documentation |
+| `events [--limit N]` | Show recent orchestration events |
 | `self-update` | Update bacchus to latest version |
 | `check-update` | Check if newer version is available |
 
@@ -537,6 +540,11 @@ When you mark a task ready, the orchestrator:
 1. Rebases your commit onto current main
 2. If conflicts: marks task `needs_resolution` (you fix with `jj resolve`)
 3. If clean: advances main bookmark and closes task
+
+Manual trigger (outside orchestrator stop-hook loops):
+```bash
+bacchus process-releases
+```
 
 ## Session Management
 

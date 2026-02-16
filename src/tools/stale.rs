@@ -4,6 +4,7 @@
 //! Uses SQLite-based task management (tasks table).
 
 use crate::db::with_db;
+use crate::events;
 use crate::tasks::{self, SqliteTaskStatus};
 use crate::workspace;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ pub struct StaleClaim {
     pub agent_id: String,
     pub workspace_path: String,
     pub claimed_at: i64,
+    pub claimed_heartbeat_at: Option<i64>,
     pub age_minutes: i64,
 }
 
@@ -39,20 +41,22 @@ pub fn find_stale(
     let threshold_ms = minutes * 60 * 1000;
     let cutoff = now - threshold_ms;
 
-    // Query SQLite tasks for stale claims (claimed_at threshold or legacy NULL claims)
+    // Query SQLite tasks for stale claims, using heartbeat as the source of truth.
     let stale_claims: Vec<StaleClaim> = with_db(|conn| {
         // Find tasks that are in_progress with old claims
         let mut stmt = conn.prepare(
-            "SELECT id, claimed_by, claimed_at FROM tasks
+            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at FROM tasks
              WHERE status = 'in_progress'
              AND deleted_at IS NULL
-             AND (claimed_at IS NULL OR claimed_at < ?1)",
+             AND (COALESCE(claimed_heartbeat_at, claimed_at) IS NULL OR COALESCE(claimed_heartbeat_at, claimed_at) < ?1)",
         )?;
 
         let claims = stmt
             .query_map([cutoff], |row| {
                 let claimed_at: Option<i64> = row.get(2)?;
                 let claimed_at = claimed_at.unwrap_or(0);
+                let claimed_heartbeat_at: Option<i64> = row.get(3)?;
+                let last_seen = claimed_heartbeat_at.unwrap_or(claimed_at);
                 let task_id: String = row.get(0)?;
 
                 let workspace_path = format!(".bacchus/workspaces/{}", task_id);
@@ -62,11 +66,15 @@ pub fn find_stale(
                     agent_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     workspace_path,
                     claimed_at,
-                    age_minutes: if claimed_at > 0 { (now - claimed_at) / 60000 } else { 0 },
+                    claimed_heartbeat_at,
+                    age_minutes: if last_seen > 0 {
+                        (now - last_seen) / 60000
+                    } else {
+                        0
+                    },
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(claims)
     })?;
@@ -90,7 +98,20 @@ pub fn find_stale(
                     "Warning: Failed to reset SQLite task status for {}: {}",
                     claim.task_id, e
                 );
+                continue;
             }
+            let _ = events::record_event(
+                None,
+                "orchestrator",
+                "stale_claim_cleaned",
+                "task",
+                &claim.task_id,
+                &serde_json::json!({
+                    "agent_id": claim.agent_id,
+                    "age_minutes": claim.age_minutes
+                }),
+                Some(&format!("stale-cleanup:{}", claim.task_id)),
+            );
 
             cleaned_up.push(claim.task_id.clone());
         }

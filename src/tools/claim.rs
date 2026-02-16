@@ -24,28 +24,37 @@ pub struct ClaimOutput {
 
 /// Helper to convert TasksError to rusqlite::Error
 fn tasks_error_to_rusqlite(e: tasks::TasksError) -> rusqlite::Error {
-    rusqlite::Error::SqliteFailure(
-        rusqlite::ffi::Error::new(1),
-        Some(e.to_string()),
-    )
+    rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
 }
 
-pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &Path) -> Result<ClaimOutput> {
+pub fn claim_task(
+    task_id: &str,
+    agent_id: &str,
+    force: bool,
+    workspace_root: &Path,
+) -> Result<ClaimOutput> {
     // Use the atomic SQLite claim function
     let claim_result: std::result::Result<tasks::SqliteTask, tasks::TasksError> = if force {
         // Force claim bypasses readiness check - manually update status
         // First get the task to verify it exists
         let task = tasks::get_sqlite_task(task_id).map_err(tasks_error_to_rusqlite)?;
 
-        if task.status == SqliteTaskStatus::Closed {
-            return Ok(ClaimOutput {
-                success: false,
-                task_id: task_id.to_string(),
-                title: Some(task.title),
-                description: task.description,
-                workspace_path: None,
-                message: format!("Task {} is already closed", task_id),
-            });
+        match task.status {
+            SqliteTaskStatus::Open | SqliteTaskStatus::InProgress | SqliteTaskStatus::Blocked => {}
+            _ => {
+                return Ok(ClaimOutput {
+                    success: false,
+                    task_id: task_id.to_string(),
+                    title: Some(task.title),
+                    description: task.description,
+                    workspace_path: None,
+                    message: format!(
+                        "Task {} is in '{}' status and cannot be force-claimed. Use resolve/abort/release flow.",
+                        task_id,
+                        task.status.as_str()
+                    ),
+                });
+            }
         }
 
         // For force claim, we need to directly claim without readiness check
@@ -60,8 +69,11 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
                          SET status = 'in_progress',
                              claimed_by = ?1,
                              claimed_at = ?2,
+                             claimed_heartbeat_at = ?2,
                              updated_at = ?2
-                         WHERE id = ?3 AND deleted_at IS NULL",
+                         WHERE id = ?3
+                           AND status IN ('open', 'in_progress', 'blocked')
+                           AND deleted_at IS NULL",
                         params![agent_id, now, task_id],
                     )
                 })?;
@@ -85,8 +97,8 @@ pub fn claim_task(task_id: &str, agent_id: &str, force: bool, workspace_root: &P
         Ok(task) => {
             // Create jj workspace for the task
             let ws = workspace::create_workspace(workspace_root, task_id).map_err(|e| {
-                // Rollback: release the SQLite claim
-                let _ = tasks::release_sqlite_task(task_id, agent_id);
+                // Rollback: return task to open state if workspace creation fails.
+                let _ = tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Open);
                 rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
                     Some(format!("Failed to create workspace: {}", e)),

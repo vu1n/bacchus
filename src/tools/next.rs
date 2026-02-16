@@ -27,8 +27,8 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
             let ws = match workspace::create_workspace(workspace_root, &task.id) {
                 Ok(ws) => ws,
                 Err(e) => {
-                    // Rollback: release the SQLite claim
-                    let _ = tasks::release_sqlite_task(&task.id, agent_id);
+                    // Rollback: return task to open state if workspace creation fails.
+                    let _ = tasks::reset_sqlite_task(&task.id, tasks::SqliteTaskStatus::Open);
                     return Err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(1),
                         Some(format!("Failed to create workspace: {}", e)),

@@ -5,6 +5,7 @@
 use crate::db::with_db;
 use crate::handles;
 use crate::tasks;
+use crate::tools::orchestrator;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -17,7 +18,7 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrent: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,  // For architect mode (persistent identity)
+    pub agent_id: Option<String>, // For architect mode (persistent identity)
     pub started_at: String,
 }
 
@@ -66,7 +67,12 @@ fn session_path() -> Option<std::path::PathBuf> {
 }
 
 /// Start a session
-pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32, agent_id: Option<&str>) -> Result<String, String> {
+pub fn start_session(
+    mode: &str,
+    task_id: Option<&str>,
+    max_concurrent: i32,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
     let root = find_workspace_root().ok_or("No workspace root found")?;
     let bacchus_dir = root.join(".bacchus");
     fs::create_dir_all(&bacchus_dir).map_err(|e| e.to_string())?;
@@ -74,11 +80,14 @@ pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32, age
     let session = match mode {
         "agent" => {
             let task_id = task_id.ok_or("task_id required for agent mode")?;
+            let claim_owner = tasks::get_sqlite_task(task_id)
+                .ok()
+                .and_then(|task| task.claimed_by);
             Session {
                 mode: "agent".to_string(),
                 task_id: Some(task_id.to_string()),
                 max_concurrent: None,
-                agent_id: None,
+                agent_id: agent_id.map(String::from).or(claim_owner),
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
@@ -99,7 +108,12 @@ pub fn start_session(mode: &str, task_id: Option<&str>, max_concurrent: i32, age
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
-        _ => return Err(format!("Unknown mode: {}. Use 'agent', 'orchestrator', or 'architect'", mode)),
+        _ => {
+            return Err(format!(
+                "Unknown mode: {}. Use 'agent', 'orchestrator', or 'architect'",
+                mode
+            ))
+        }
     };
 
     let json = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
@@ -114,11 +128,9 @@ pub fn stop_session() -> Result<String, String> {
         if path.exists() {
             // Read session to get session ID before removing
             let session_id = match fs::read_to_string(&path) {
-                Ok(content) => {
-                    serde_json::from_str::<Session>(&content)
-                        .ok()
-                        .map(|s| s.started_at)
-                }
+                Ok(content) => serde_json::from_str::<Session>(&content)
+                    .ok()
+                    .map(|s| s.started_at),
                 Err(_) => None,
             };
 
@@ -133,7 +145,10 @@ pub fn stop_session() -> Result<String, String> {
             };
 
             if handles_cleared > 0 {
-                return Ok(format!("Session stopped. Cleared {} handle(s).", handles_cleared));
+                return Ok(format!(
+                    "Session stopped. Cleared {} handle(s).",
+                    handles_cleared
+                ));
             }
             return Ok("Session stopped".to_string());
         }
@@ -164,25 +179,29 @@ pub fn session_status() -> Result<serde_json::Value, String> {
 pub fn check_session() -> HookCheckOutput {
     // Read session file
     let session = match session_path() {
-        Some(path) if path.exists() => {
-            match fs::read_to_string(&path) {
-                Ok(content) => match serde_json::from_str::<Session>(&content) {
-                    Ok(s) => s,
-                    Err(_) => return HookCheckOutput {
+        Some(path) if path.exists() => match fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<Session>(&content) {
+                Ok(s) => s,
+                Err(_) => {
+                    return HookCheckOutput {
                         decision: "approve".to_string(),
                         reason: "Invalid session file".to_string(),
-                    },
-                },
-                Err(_) => return HookCheckOutput {
+                    }
+                }
+            },
+            Err(_) => {
+                return HookCheckOutput {
                     decision: "approve".to_string(),
                     reason: "Cannot read session file".to_string(),
-                },
+                }
+            }
+        },
+        _ => {
+            return HookCheckOutput {
+                decision: "approve".to_string(),
+                reason: "No bacchus session active".to_string(),
             }
         }
-        _ => return HookCheckOutput {
-            decision: "approve".to_string(),
-            reason: "No bacchus session active".to_string(),
-        },
     };
 
     match session.mode.as_str() {
@@ -199,48 +218,76 @@ pub fn check_session() -> HookCheckOutput {
 fn check_agent_session(session: &Session) -> HookCheckOutput {
     let task_id = match &session.task_id {
         Some(id) => id,
-        None => return HookCheckOutput {
-            decision: "approve".to_string(),
-            reason: "No task ID in session".to_string(),
-        },
+        None => {
+            return HookCheckOutput {
+                decision: "approve".to_string(),
+                reason: "No task ID in session".to_string(),
+            }
+        }
     };
 
     // Get workspace root for task lookup
     let _workspace_root = match find_workspace_root() {
         Some(root) => root,
-        None => return HookCheckOutput {
-            decision: "approve".to_string(),
-            reason: "Cannot find workspace root".to_string(),
-        },
+        None => {
+            return HookCheckOutput {
+                decision: "approve".to_string(),
+                reason: "Cannot find workspace root".to_string(),
+            }
+        }
     };
 
     // Check task status
     match tasks::get_sqlite_task(task_id) {
-        Ok(task) => match task.status {
-            tasks::SqliteTaskStatus::Closed => {
-                let _ = stop_session();
-                HookCheckOutput {
-                    decision: "approve".to_string(),
-                    reason: format!("Task {} is closed. Session cleared.", task_id),
+        Ok(task) => {
+            if let Some(session_agent_id) = session.agent_id.as_deref() {
+                if let Some(owner) = task.claimed_by.as_deref() {
+                    if owner != session_agent_id {
+                        let _ = stop_session();
+                        return HookCheckOutput {
+                            decision: "approve".to_string(),
+                            reason: format!(
+                                "Task {} is now owned by {} (session owner was {}). Session cleared.",
+                                task_id, owner, session_agent_id
+                            ),
+                        };
+                    }
                 }
             }
-            tasks::SqliteTaskStatus::Blocked => {
-                let _ = stop_session();
-                HookCheckOutput {
-                    decision: "approve".to_string(),
-                    reason: format!("Task {} is blocked. Session cleared.", task_id),
+
+            match task.status {
+                tasks::SqliteTaskStatus::Closed => {
+                    let _ = stop_session();
+                    HookCheckOutput {
+                        decision: "approve".to_string(),
+                        reason: format!("Task {} is closed. Session cleared.", task_id),
+                    }
+                }
+                tasks::SqliteTaskStatus::Blocked => {
+                    let _ = stop_session();
+                    HookCheckOutput {
+                        decision: "approve".to_string(),
+                        reason: format!("Task {} is blocked. Session cleared.", task_id),
+                    }
+                }
+                _ => {
+                    if let Some(session_agent_id) = session.agent_id.as_deref() {
+                        if task.claimed_by.as_deref() == Some(session_agent_id) {
+                            let _ = tasks::heartbeat_sqlite_task(task_id, session_agent_id);
+                        }
+                    }
+                    HookCheckOutput {
+                    decision: "block".to_string(),
+                    reason: format!(
+                        "Task {} status is '{}'. Continue working until complete, then run 'bacchus release {} --status done' or '--status blocked'.",
+                        task_id,
+                        task.status.as_str(),
+                        task_id
+                    ),
+                }
                 }
             }
-            _ => HookCheckOutput {
-                decision: "block".to_string(),
-                reason: format!(
-                    "Task {} status is '{}'. Continue working until complete, then run 'bacchus release {} --status done' or '--status blocked'.",
-                    task_id,
-                    task.status.as_str(),
-                    task_id
-                ),
-            },
-        },
+        }
         Err(e) => HookCheckOutput {
             decision: "approve".to_string(),
             reason: format!("Cannot check task status: {}", e),
@@ -252,17 +299,35 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let max_concurrent = session.max_concurrent.unwrap_or(3);
 
     // Get workspace root for task lookup
-    let _workspace_root = match find_workspace_root() {
+    let workspace_root = match find_workspace_root() {
         Some(root) => root,
-        None => return HookCheckOutput {
-            decision: "approve".to_string(),
-            reason: "Cannot find workspace root".to_string(),
-        },
+        None => {
+            return HookCheckOutput {
+                decision: "approve".to_string(),
+                reason: "Cannot find workspace root".to_string(),
+            }
+        }
+    };
+
+    // Best-effort release processing: integrates completed agent work before scheduling more.
+    let release_note = match orchestrator::process_ready_releases(&workspace_root, Some(20)) {
+        Ok(summary) if summary.processed > 0 => Some(format!(
+            "Processed releases: reconciled {}, merged {}, conflicts {}, failed {}.",
+            summary.reconciled, summary.merged, summary.conflicts, summary.failed
+        )),
+        Ok(summary) if summary.reconciled > 0 => Some(format!(
+            "Processed releases: reconciled {}, merged {}, conflicts {}, failed {}.",
+            summary.reconciled, summary.merged, summary.conflicts, summary.failed
+        )),
+        Ok(_) => None,
+        Err(e) => Some(format!("Release processing error: {}.", e)),
     };
 
     // Get project stats
     let ready_tasks = tasks::get_ready_sqlite_tasks(None).unwrap_or_default();
     let ready_count = ready_tasks.len();
+    let ready_for_release = tasks::get_tasks_ready_for_release().unwrap_or_default();
+    let ready_for_release_count = ready_for_release.len();
 
     // Get in_progress tasks (may include orphaned work without claims)
     let in_progress_tasks =
@@ -281,53 +346,95 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     })
     .unwrap_or(0) as usize;
 
-    if ready_count > 0 && active_count < max_concurrent as usize {
+    if ready_for_release_count > 0 {
+        let task_ids: Vec<_> = ready_for_release.iter().map(|t| t.id.as_str()).collect();
+        let mut reason = format!(
+            "{} task(s) still ready_for_release: {}. Run 'bacchus process-releases' to merge.",
+            ready_for_release_count,
+            task_ids.join(", ")
+        );
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
+        HookCheckOutput {
+            decision: "block".to_string(),
+            reason,
+        }
+    } else if ready_count > 0 && active_count < max_concurrent as usize {
         // Ready work available and capacity to spawn
         let slots = max_concurrent as usize - active_count;
         let to_spawn = ready_count.min(slots);
-        let task_ids: Vec<_> = ready_tasks.iter().take(to_spawn).map(|t| t.id.as_str()).collect();
+        let task_ids: Vec<_> = ready_tasks
+            .iter()
+            .take(to_spawn)
+            .map(|t| t.id.as_str())
+            .collect();
+
+        let mut reason = format!(
+            "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus claim <task_id> <agent_id>' to claim.",
+            to_spawn,
+            task_ids.join(", "),
+            active_count,
+            max_concurrent
+        );
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
 
         HookCheckOutput {
             decision: "block".to_string(),
-            reason: format!(
-                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus claim <task_id> <agent_id>' to claim.",
-                to_spawn,
-                task_ids.join(", "),
-                active_count,
-                max_concurrent
-            ),
+            reason,
         }
     } else if active_count > 0 {
         // Active claims - wait for agents to complete
+        let mut reason = format!(
+            "Waiting for {} active agent(s) to complete. Check with 'bacchus list'.",
+            active_count
+        );
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
+
         HookCheckOutput {
             decision: "block".to_string(),
-            reason: format!(
-                "Waiting for {} active agent(s) to complete. Check with 'bacchus list'.",
-                active_count
-            ),
+            reason,
         }
     } else if in_progress_count > 0 {
         // In-progress tasks without claims - orphaned work, block to investigate
         let task_ids: Vec<_> = in_progress_tasks.iter().map(|t| t.id.as_str()).collect();
+        let mut reason = format!(
+            "{} task(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent> --force' or reset status in SQLite.",
+            in_progress_count,
+            task_ids.join(", ")
+        );
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
+
         HookCheckOutput {
             decision: "block".to_string(),
-            reason: format!(
-                "{} task(s) in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent> --force' or reset status in SQLite.",
-                in_progress_count,
-                task_ids.join(", ")
-            ),
+            reason,
         }
-    } else if ready_count == 0 {
+    } else if ready_count == 0 && ready_for_release_count == 0 {
         // No ready, no in_progress, no claims - all done or all blocked
         let _ = stop_session();
+        let mut reason = "All work complete or blocked. Session cleared.".to_string();
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
+
         HookCheckOutput {
             decision: "approve".to_string(),
-            reason: "All work complete or blocked. Session cleared.".to_string(),
+            reason,
         }
     } else {
+        let mut reason = "Orchestrator complete".to_string();
+        if let Some(note) = &release_note {
+            reason = format!("{} {}", note, reason);
+        }
         HookCheckOutput {
             decision: "approve".to_string(),
-            reason: "Orchestrator complete".to_string(),
+            reason,
         }
     }
 }
@@ -335,10 +442,12 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
 fn check_architect_session(session: &Session) -> HookCheckOutput {
     let agent_id = match &session.agent_id {
         Some(id) => id,
-        None => return HookCheckOutput {
-            decision: "approve".to_string(),
-            reason: "No agent ID in architect session".to_string(),
-        },
+        None => {
+            return HookCheckOutput {
+                decision: "approve".to_string(),
+                reason: "No agent ID in architect session".to_string(),
+            }
+        }
     };
 
     // Check for pending messages for this architect

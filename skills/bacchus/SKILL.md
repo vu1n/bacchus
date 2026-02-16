@@ -39,7 +39,10 @@ bacchus task list --ready
 | `bacchus task list [--ready]` | List tasks |
 | `bacchus task show <id>` | Show task details |
 | `bacchus claim <id> <agent>` | Claim a task |
+| `bacchus heartbeat <id> <agent>` | Refresh claim heartbeat |
 | `bacchus release <id> --status done` | Complete task |
+| `bacchus process-releases` | Orchestrator merge step |
+| `bacchus events --limit 50` | Inspect orchestration event log |
 | `bacchus session start agent --task-id X` | Start agent session |
 | `bacchus session start orchestrator` | Start orchestrator session |
 | `bacchus session stop` | Clear session |
@@ -254,6 +257,11 @@ Each iteration:
 4. **Monitor progress**: Check for completed/failed agents
 5. **Handle releases**: Tasks marked `ready_for_release` get merged by orchestrator
 6. **Cleanup stale work**: `bacchus stale --minutes 30 --cleanup`
+
+If not running via stop-hook loop, trigger merges manually:
+```bash
+bacchus process-releases
+```
 
 When session ends (all tasks complete):
 

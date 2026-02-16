@@ -24,7 +24,7 @@ pub struct ClaimInfo {
 pub fn list_claims() -> Result<ListOutput> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, claimed_by, claimed_at
+            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at
              FROM tasks
              WHERE status = 'in_progress'
                AND claimed_by IS NOT NULL
@@ -41,7 +41,13 @@ pub fn list_claims() -> Result<ListOutput> {
             .query_map([], |row| {
                 let task_id: String = row.get(0)?;
                 let claimed_at: Option<i64> = row.get(2)?;
-                let age_minutes = claimed_at.map(|ca| (now_ms - ca) / 60000).unwrap_or(0);
+                let heartbeat_at: Option<i64> = row.get(3)?;
+                let last_seen = heartbeat_at.or(claimed_at).unwrap_or(0);
+                let age_minutes = if last_seen > 0 {
+                    (now_ms - last_seen) / 60000
+                } else {
+                    0
+                };
 
                 Ok(ClaimInfo {
                     task_id: task_id.clone(),
@@ -50,8 +56,7 @@ pub fn list_claims() -> Result<ListOutput> {
                     age_minutes,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         // Sort by age (most recent first)
         let mut sorted_claims = claims;

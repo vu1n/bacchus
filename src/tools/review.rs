@@ -58,7 +58,11 @@ pub fn review_task(
     checks.push(ReviewCheck {
         name: "Task exists".to_string(),
         passed: true,
-        message: format!("Task {} found with status '{}'", task_id, task.status.as_str()),
+        message: format!(
+            "Task {} found with status '{}'",
+            task_id,
+            task.status.as_str()
+        ),
     });
 
     // 2. Check workspace exists
@@ -151,7 +155,10 @@ fn check_workspace_changes(workspace_root: &Path, task_id: &str) -> ReviewCheck 
                         name: "Changes exist".to_string(),
                         passed: has_changes,
                         message: if has_changes {
-                            format!("Workspace has changes (change: {})", &change_id[..8.min(change_id.len())])
+                            format!(
+                                "Workspace has changes (change: {})",
+                                &change_id[..8.min(change_id.len())]
+                            )
                         } else {
                             "No changes in workspace".to_string()
                         },
@@ -188,13 +195,10 @@ fn check_footprint_compliance(
 ) -> ReviewCheck {
     // Get declared footprint
     let footprint: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT file_path FROM task_footprints WHERE task_id = ?1",
-        )?;
+        let mut stmt = conn.prepare("SELECT file_path FROM task_footprints WHERE task_id = ?1")?;
         let rows = stmt
             .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
     .unwrap_or_default();
@@ -223,7 +227,11 @@ fn check_footprint_compliance(
             // Check if all changed files are in footprint
             let mut violations = Vec::new();
             for file in &changed_files {
-                let in_footprint = footprint.iter().any(|fp| file.starts_with(fp) || fp == file);
+                let normalized_file = file.trim_start_matches("./");
+                let in_footprint = footprint
+                    .iter()
+                    .map(|fp| fp.trim_start_matches("./"))
+                    .any(|fp| fp == normalized_file);
                 if !in_footprint {
                     violations.push(file.clone());
                 }

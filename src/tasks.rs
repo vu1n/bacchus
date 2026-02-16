@@ -165,9 +165,9 @@ pub enum SqliteTaskStatus {
     Draft,
     Open,
     InProgress,
-    ReadyForRelease,  // Agent marked ready, awaiting orchestrator release
-    Releasing,        // Orchestrator is attempting release (rebase/merge)
-    NeedsResolution,  // Release failed due to conflicts, needs human/agent resolution
+    ReadyForRelease, // Agent marked ready, awaiting orchestrator release
+    Releasing,       // Orchestrator is attempting release (rebase/merge)
+    NeedsResolution, // Release failed due to conflicts, needs human/agent resolution
     Blocked,
     Closed,
 }
@@ -206,6 +206,9 @@ impl std::fmt::Display for SqliteTaskStatus {
         write!(f, "{}", self.as_str())
     }
 }
+
+/// In-progress claims with heartbeat older than this are treated as stale for scheduling.
+pub const CLAIM_HEARTBEAT_TIMEOUT_MS: i64 = 15 * 60 * 1000;
 
 /// Task type for PM workflow categorization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,6 +373,9 @@ pub struct SqliteTask {
     pub claimed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<i64>,
+    /// Last claim heartbeat timestamp (ms since epoch)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_heartbeat_at: Option<i64>,
     /// jj commit ID when agent marks task ready (pre-rebase)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_commit_id: Option<String>,
@@ -383,6 +389,33 @@ pub struct SqliteTask {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<i64>,
+}
+
+const TASK_SELECT_COLUMNS: &str =
+    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at";
+
+fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SqliteTask> {
+    let status_str: String = row.get(5)?;
+    let task_type_str: String = row.get(6)?;
+    Ok(SqliteTask {
+        id: row.get(0)?,
+        epic_id: row.get(1)?,
+        title: row.get(2)?,
+        description: row.get(3)?,
+        priority: row.get(4)?,
+        status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
+        task_type: SqliteTaskType::from_str(&task_type_str),
+        archetype: row.get(7)?,
+        claimed_by: row.get(8)?,
+        claimed_at: row.get(9)?,
+        claimed_heartbeat_at: row.get(10)?,
+        ready_commit_id: row.get(11)?,
+        release_commit_id: row.get(12)?,
+        release_started_at: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        deleted_at: row.get(16)?,
+    })
 }
 
 /// Input for creating a new SQLite task
@@ -427,11 +460,11 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
         return Ok(Vec::new());
     }
 
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| TasksError::ReadError(e.to_string()))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| TasksError::ReadError(e.to_string()))?;
 
-    let tasks_file: TasksFile = serde_yaml::from_str(&content)
-        .map_err(|e| TasksError::ParseError(e.to_string()))?;
+    let tasks_file: TasksFile =
+        serde_yaml::from_str(&content).map_err(|e| TasksError::ParseError(e.to_string()))?;
 
     Ok(tasks_file.tasks)
 }
@@ -533,8 +566,16 @@ fn symbols_match(a: &str, b: &str) -> bool {
     }
 
     // Normalize bare file paths to file::* for comparison
-    let norm_a = if a.contains("::") { a.to_string() } else { format!("{}::*", a) };
-    let norm_b = if b.contains("::") { b.to_string() } else { format!("{}::*", b) };
+    let norm_a = if a.contains("::") {
+        a.to_string()
+    } else {
+        format!("{}::*", a)
+    };
+    let norm_b = if b.contains("::") {
+        b.to_string()
+    } else {
+        format!("{}::*", b)
+    };
 
     // Check if one is a wildcard for the other's file
     if let Some((file_a, sym_a)) = norm_a.rsplit_once("::") {
@@ -593,15 +634,14 @@ fn get_active_footprints() -> Result<ResolvedFootprint, TasksError> {
              WHERE t.status = 'in_progress' AND t.deleted_at IS NULL",
         )?;
 
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)?,
-                ))
-            })?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i32>(3)?,
+            ))
+        })?;
 
         for row_result in rows {
             if let Ok((pattern_type, file_path, symbol, is_wildcard)) = row_result {
@@ -713,7 +753,9 @@ pub fn validate_tasks(_workspace_root: &Path) -> Result<Vec<TaskValidation>, Tas
     let deps: Vec<(String, String)> = with_db(|conn| {
         let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_dependencies")?;
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
@@ -728,7 +770,9 @@ pub fn validate_tasks(_workspace_root: &Path) -> Result<Vec<TaskValidation>, Tas
     let cycle_tasks = detect_dependency_cycles(&tasks, &deps_map);
     for task_id in cycle_tasks {
         if let Some(validation) = validations.get_mut(&task_id) {
-            validation.errors.push("Dependency cycle detected".to_string());
+            validation
+                .errors
+                .push("Dependency cycle detected".to_string());
         }
     }
 
@@ -763,14 +807,16 @@ pub fn validate_tasks(_workspace_root: &Path) -> Result<Vec<TaskValidation>, Tas
 
     for (task_a, task_b, file_path) in overlaps {
         if let Some(validation) = validations.get_mut(&task_a) {
-            validation
-                .warnings
-                .push(format!("Footprint overlaps with {} on {}", task_b, file_path));
+            validation.warnings.push(format!(
+                "Footprint overlaps with {} on {}",
+                task_b, file_path
+            ));
         }
         if let Some(validation) = validations.get_mut(&task_b) {
-            validation
-                .warnings
-                .push(format!("Footprint overlaps with {} on {}", task_a, file_path));
+            validation.warnings.push(format!(
+                "Footprint overlaps with {} on {}",
+                task_a, file_path
+            ));
         }
     }
 
@@ -828,7 +874,14 @@ fn detect_dependency_cycles(
     }
 
     for task in tasks {
-        dfs(&task.id, deps, &mut visiting, &mut visited, &mut stack, &mut in_cycle);
+        dfs(
+            &task.id,
+            deps,
+            &mut visiting,
+            &mut visited,
+            &mut stack,
+            &mut in_cycle,
+        );
     }
 
     in_cycle
@@ -868,7 +921,8 @@ tasks:
     footprint:
       modifies: []
       creates: []
-"#.to_string()
+"#
+    .to_string()
 }
 
 // ============================================================================
@@ -900,7 +954,11 @@ pub fn normalize_footprint(footprint: &TaskFootprint) -> Vec<NormalizedFootprint
                 }
             } else {
                 // Exact symbol: file::Symbol or file::Struct::method -> (file, Symbol/Struct::method, is_wildcard=0)
-                let key = ("modifies".to_string(), file_path.to_string(), symbol_part.to_string());
+                let key = (
+                    "modifies".to_string(),
+                    file_path.to_string(),
+                    symbol_part.to_string(),
+                );
                 if seen.insert(key) {
                     normalized.push(NormalizedFootprint {
                         pattern_type: "modifies".to_string(),
@@ -1036,6 +1094,7 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                     archetype,
                     claimed_by: None,
                     claimed_at: None,
+                    claimed_heartbeat_at: None,
                     ready_commit_id: None,
                     release_commit_id: None,
                     release_started_at: None,
@@ -1072,16 +1131,17 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
 /// Returns None if no ready tasks available.
 pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
+    let active_cutoff = now - CLAIM_HEARTBEAT_TIMEOUT_MS;
 
     with_db(|conn| {
-        // Atomic claim with embedded readiness check
-        // This is a complex query but it runs as a single atomic UPDATE
-        conn.execute(
+        // Atomic claim with embedded readiness check + deterministic return.
+        let sql = format!(
             r#"
             UPDATE tasks
             SET status = 'in_progress',
                 claimed_by = ?1,
                 claimed_at = ?2,
+                claimed_heartbeat_at = ?2,
                 updated_at = ?2
             WHERE id = (
                 SELECT t.id FROM tasks t
@@ -1104,53 +1164,24 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
                       WHERE fp1.task_id = t.id
                         AND other.id != t.id
                         AND other.status = 'in_progress'
+                        AND COALESCE(other.claimed_heartbeat_at, other.claimed_at, 0) >= ?3
                         AND other.deleted_at IS NULL
                   )
                 ORDER BY t.priority, t.created_at
                 LIMIT 1
             )
+            RETURNING {}
             "#,
-            params![agent_id, now],
-        )?;
+            TASK_SELECT_COLUMNS
+        );
 
-        // Check if we claimed anything
-        let changes = conn.changes();
-        if changes == 0 {
-            return Ok(None);
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![agent_id, now, active_cutoff])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(map_sqlite_task_row(row)?));
         }
 
-        // Fetch the claimed task
-        let task = conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
-             FROM tasks WHERE claimed_by = ?1 AND status = 'in_progress'
-             ORDER BY claimed_at DESC LIMIT 1",
-            [agent_id],
-            |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            },
-        )?;
-
-        Ok(Some(task))
+        Ok(None)
     })
     .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
 }
@@ -1160,6 +1191,7 @@ pub fn claim_next_sqlite_task(agent_id: &str) -> Result<Option<SqliteTask>, Task
 /// Returns error if task is not ready (deps not satisfied, footprint collision, etc.)
 pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
+    let active_cutoff = now - CLAIM_HEARTBEAT_TIMEOUT_MS;
 
     with_db(|conn| {
         // Atomic claim with readiness check
@@ -1169,6 +1201,7 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
             SET status = 'in_progress',
                 claimed_by = ?1,
                 claimed_at = ?2,
+                claimed_heartbeat_at = ?2,
                 updated_at = ?2
             WHERE id = ?3
               AND status = 'open'
@@ -1190,19 +1223,22 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
                   WHERE fp1.task_id = ?3
                     AND other.id != ?3
                     AND other.status = 'in_progress'
+                    AND COALESCE(other.claimed_heartbeat_at, other.claimed_at, 0) >= ?4
                     AND other.deleted_at IS NULL
               )
             "#,
-            params![agent_id, now, task_id],
+            params![agent_id, now, task_id, active_cutoff],
         )?;
 
         if affected == 0 {
             // Check why claim failed
-            let task_status: Option<String> = conn.query_row(
-                "SELECT status FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
-                [task_id],
-                |row| row.get(0),
-            ).ok();
+            let task_status: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .ok();
 
             return Err(match task_status {
                 None => rusqlite::Error::SqliteFailure(
@@ -1215,39 +1251,19 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
                 ),
                 _ => rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
-                    Some(format!("Task {} is not ready (deps or footprint collision)", task_id)),
+                    Some(format!(
+                        "Task {} is not ready (deps or footprint collision)",
+                        task_id
+                    )),
                 ),
             });
         }
 
         // Fetch the claimed task
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
-             FROM tasks WHERE id = ?1",
+            &format!("SELECT {} FROM tasks WHERE id = ?1", TASK_SELECT_COLUMNS),
             [task_id],
-            |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            },
+            map_sqlite_task_row,
         )
     })
     .map_err(|e: rusqlite::Error| {
@@ -1272,6 +1288,7 @@ pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, 
              SET status = 'closed',
                  claimed_by = NULL,
                  claimed_at = NULL,
+                 claimed_heartbeat_at = NULL,
                  updated_at = ?1
              WHERE id = ?2 AND claimed_by = ?3 AND status = 'in_progress'",
             params![now, task_id, agent_id],
@@ -1280,38 +1297,18 @@ pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, 
         if affected == 0 {
             return Err(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
-                Some(format!("Task {} not owned by {} or not in_progress", task_id, agent_id)),
+                Some(format!(
+                    "Task {} not owned by {} or not in_progress",
+                    task_id, agent_id
+                )),
             ));
         }
 
         // Fetch the released task
         conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
-             FROM tasks WHERE id = ?1",
+            &format!("SELECT {} FROM tasks WHERE id = ?1", TASK_SELECT_COLUMNS),
             [task_id],
-            |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Closed),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            },
+            map_sqlite_task_row,
         )
     })
     .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
@@ -1348,10 +1345,9 @@ pub fn list_sqlite_tasks(
         };
 
         let sql = format!(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
+            "SELECT {}
              FROM tasks {} ORDER BY priority, created_at",
-            where_clause
+            TASK_SELECT_COLUMNS, where_clause
         );
 
         let mut stmt = conn.prepare(&sql)?;
@@ -1362,28 +1358,7 @@ pub fn list_sqlite_tasks(
             .collect();
 
         let tasks = stmt
-            .query_map(params_ref.as_slice(), |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            })?
+            .query_map(params_ref.as_slice(), map_sqlite_task_row)?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -1395,13 +1370,15 @@ pub fn list_sqlite_tasks(
 /// Get ready SQLite tasks (for display/debugging)
 pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, TasksError> {
     with_db(|conn| {
+        let now = chrono::Utc::now().timestamp_millis();
+        let active_cutoff = now - CLAIM_HEARTBEAT_TIMEOUT_MS;
         // Build query with optional epic filter using proper parameterization
         let has_epic_filter = epic_id.is_some();
         let epic_filter = if has_epic_filter { "AND t.epic_id = ?1" } else { "" };
 
         let sql = format!(r#"
             SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status, t.task_type, t.archetype,
-                   t.claimed_by, t.claimed_at, t.ready_commit_id, t.release_commit_id, t.release_started_at,
+                   t.claimed_by, t.claimed_at, t.claimed_heartbeat_at, t.ready_commit_id, t.release_commit_id, t.release_started_at,
                    t.created_at, t.updated_at, t.deleted_at
             FROM tasks t
             WHERE t.status = 'open'
@@ -1424,60 +1401,25 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
                   WHERE fp1.task_id = t.id
                     AND other.id != t.id
                     AND other.status = 'in_progress'
+                    AND COALESCE(other.claimed_heartbeat_at, other.claimed_at, 0) >= {active_cutoff}
                     AND other.deleted_at IS NULL
               )
             ORDER BY t.priority, t.created_at
-        "#, epic_filter);
+        "#,
+            epic_filter
+        );
 
         let mut stmt = conn.prepare(&sql)?;
 
         // Use different query paths based on whether we have an epic filter
         let tasks: Vec<SqliteTask> = if let Some(eid) = epic_id {
-            stmt.query_map([eid], |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            })?.filter_map(|r| r.ok()).collect()
+            stmt.query_map([eid], map_sqlite_task_row)?
+                .filter_map(|r| r.ok())
+                .collect()
         } else {
-            stmt.query_map([], |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            })?.filter_map(|r| r.ok()).collect()
+            stmt.query_map([], map_sqlite_task_row)?
+                .filter_map(|r| r.ok())
+                .collect()
         };
 
         Ok(tasks)
@@ -1492,7 +1434,7 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
     with_db(|conn| {
         // First close the task if not already closed
         conn.execute(
-            "UPDATE tasks SET status = 'closed', claimed_by = NULL, claimed_at = NULL,
+            "UPDATE tasks SET status = 'closed', claimed_by = NULL, claimed_at = NULL, claimed_heartbeat_at = NULL,
              updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![now, task_id],
         )?;
@@ -1522,34 +1464,11 @@ pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
 /// Get a SQLite task by ID
 pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
     with_db(|conn| {
-        conn.query_row(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
-             FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
-            [task_id],
-            |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str).unwrap_or(SqliteTaskStatus::Open),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            },
-        )
+        let sql = format!(
+            "SELECT {} FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+            TASK_SELECT_COLUMNS
+        );
+        conn.query_row(&sql, [task_id], map_sqlite_task_row)
     })
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => TasksError::TaskNotFound(task_id.to_string()),
@@ -1558,7 +1477,10 @@ pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
 }
 
 /// Update a SQLite task's status
-pub fn update_sqlite_task_status(task_id: &str, status: SqliteTaskStatus) -> Result<(), TasksError> {
+pub fn update_sqlite_task_status(
+    task_id: &str,
+    status: SqliteTaskStatus,
+) -> Result<(), TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
     with_db(|conn| {
@@ -1596,6 +1518,7 @@ pub fn reset_sqlite_task(task_id: &str, status: SqliteTaskStatus) -> Result<(), 
              SET status = ?1,
                  claimed_by = NULL,
                  claimed_at = NULL,
+                 claimed_heartbeat_at = NULL,
                  updated_at = ?2
              WHERE id = ?3 AND deleted_at IS NULL",
             params![status.as_str(), now, task_id],
@@ -1605,6 +1528,37 @@ pub fn reset_sqlite_task(task_id: &str, status: SqliteTaskStatus) -> Result<(), 
             return Err(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
                 Some(format!("Task not found: {}", task_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Heartbeat an in-progress claim to prevent stale cleanup.
+pub fn heartbeat_sqlite_task(task_id: &str, agent_id: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks
+             SET claimed_heartbeat_at = ?1,
+                 updated_at = ?1
+             WHERE id = ?2
+               AND claimed_by = ?3
+               AND status = 'in_progress'
+               AND deleted_at IS NULL",
+            params![now, task_id, agent_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!(
+                    "Task {} not owned by {} or not in_progress",
+                    task_id, agent_id
+                )),
             ));
         }
 
@@ -1624,7 +1578,10 @@ pub fn reset_sqlite_task(task_id: &str, status: SqliteTaskStatus) -> Result<(), 
 ///
 /// # Returns
 /// ImportResult with counts of imported/skipped tasks
-pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result<ImportResult, TasksError> {
+pub fn import_yaml_tasks(
+    workspace_root: &Path,
+    epic_id: Option<&str>,
+) -> Result<ImportResult, TasksError> {
     let path = tasks_file_path(workspace_root);
 
     if !path.exists() {
@@ -1675,11 +1632,9 @@ pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result
         // Check if task already exists in SQLite
         let exists_in_sqlite = with_db(|conn| {
             Ok(conn
-                .query_row(
-                    "SELECT 1 FROM tasks WHERE id = ?1",
-                    [&task.id],
-                    |_| Ok(true),
-                )
+                .query_row("SELECT 1 FROM tasks WHERE id = ?1", [&task.id], |_| {
+                    Ok(true)
+                })
                 .unwrap_or(false))
         })
         .unwrap_or(false);
@@ -1762,11 +1717,7 @@ pub fn import_yaml_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result
 fn ensure_epic_exists(epic_id: &str) -> Result<(), TasksError> {
     let exists = with_db(|conn| {
         Ok(conn
-            .query_row(
-                "SELECT 1 FROM epics WHERE id = ?1",
-                [epic_id],
-                |_| Ok(true),
-            )
+            .query_row("SELECT 1 FROM epics WHERE id = ?1", [epic_id], |_| Ok(true))
             .unwrap_or(false))
     })
     .unwrap_or(false);
@@ -1835,19 +1786,45 @@ pub fn mark_task_ready_for_release(
 /// Start releasing a task (orchestrator calls this before attempting rebase)
 ///
 /// Transitions to releasing status and records the release start time.
-/// Uses BEGIN IMMEDIATE for atomic locking.
-pub fn start_task_release(task_id: &str, release_commit_id: &str) -> Result<(), TasksError> {
+pub fn start_task_release(task_id: &str) -> Result<(), TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
     with_db(|conn| {
         let affected = conn.execute(
             "UPDATE tasks
              SET status = 'releasing',
-                 release_commit_id = ?1,
-                 release_started_at = ?2,
+                 release_commit_id = NULL,
+                 release_started_at = ?1,
+                 updated_at = ?1
+             WHERE id = ?2
+               AND status = 'ready_for_release'
+               AND deleted_at IS NULL",
+            params![now, task_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task {} not ready_for_release", task_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Record the rebased commit ID while a task is in `releasing` status.
+pub fn set_task_release_commit(task_id: &str, release_commit_id: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks
+             SET release_commit_id = ?1,
                  updated_at = ?2
              WHERE id = ?3
-               AND status = 'ready_for_release'
+               AND status = 'releasing'
                AND deleted_at IS NULL",
             params![release_commit_id, now, task_id],
         )?;
@@ -1855,7 +1832,36 @@ pub fn start_task_release(task_id: &str, release_commit_id: &str) -> Result<(), 
         if affected == 0 {
             return Err(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(1),
-                Some(format!("Task {} not ready_for_release", task_id)),
+                Some(format!("Task {} not in releasing status", task_id)),
+            ));
+        }
+
+        Ok(())
+    })
+    .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Reset a release attempt back to `ready_for_release` so orchestrator can retry.
+pub fn reset_task_release_to_ready(task_id: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db(|conn| {
+        let affected = conn.execute(
+            "UPDATE tasks
+             SET status = 'ready_for_release',
+                 release_commit_id = NULL,
+                 release_started_at = NULL,
+                 updated_at = ?1
+             WHERE id = ?2
+               AND status = 'releasing'
+               AND deleted_at IS NULL",
+            params![now, task_id],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!("Task {} not in releasing status", task_id)),
             ));
         }
 
@@ -1876,6 +1882,8 @@ pub fn complete_task_release(task_id: &str) -> Result<(), TasksError> {
              SET status = 'closed',
                  claimed_by = NULL,
                  claimed_at = NULL,
+                 claimed_heartbeat_at = NULL,
+                 release_started_at = NULL,
                  updated_at = ?1
              WHERE id = ?2
                AND status = 'releasing'
@@ -1898,7 +1906,10 @@ pub fn complete_task_release(task_id: &str) -> Result<(), TasksError> {
 /// Mark task as needing resolution (orchestrator calls when conflicts occur)
 ///
 /// Transitions to needs_resolution status. Agent or human must resolve conflicts.
-pub fn mark_task_needs_resolution(task_id: &str, conflict_files: &[String]) -> Result<(), TasksError> {
+pub fn mark_task_needs_resolution(
+    task_id: &str,
+    conflict_files: &[String],
+) -> Result<(), TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
     with_db(|conn| {
@@ -1936,39 +1947,17 @@ pub fn mark_task_needs_resolution(task_id: &str, conflict_files: &[String]) -> R
 /// Get tasks ready for release (orchestrator uses this to find work)
 pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
     with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
-             FROM tasks
+        let sql = format!(
+            "SELECT {} FROM tasks
              WHERE status = 'ready_for_release'
                AND deleted_at IS NULL
              ORDER BY priority, created_at",
-        )?;
+            TASK_SELECT_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let tasks = stmt
-            .query_map([], |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str)
-                        .unwrap_or(SqliteTaskStatus::ReadyForRelease),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            })?
+            .query_map([], map_sqlite_task_row)?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -1980,39 +1969,17 @@ pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
 /// Get tasks needing resolution (for monitoring/alerting)
 pub fn get_tasks_needing_resolution() -> Result<Vec<SqliteTask>, TasksError> {
     with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at,
-                    ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at
-             FROM tasks
+        let sql = format!(
+            "SELECT {} FROM tasks
              WHERE status = 'needs_resolution'
                AND deleted_at IS NULL
              ORDER BY priority, created_at",
-        )?;
+            TASK_SELECT_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let tasks = stmt
-            .query_map([], |row| {
-                let status_str: String = row.get(5)?;
-                let task_type_str: String = row.get(6)?;
-                Ok(SqliteTask {
-                    id: row.get(0)?,
-                    epic_id: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    priority: row.get(4)?,
-                    status: SqliteTaskStatus::from_str(&status_str)
-                        .unwrap_or(SqliteTaskStatus::NeedsResolution),
-                    task_type: SqliteTaskType::from_str(&task_type_str),
-                    archetype: row.get(7)?,
-                    claimed_by: row.get(8)?,
-                    claimed_at: row.get(9)?,
-                    ready_commit_id: row.get(10)?,
-                    release_commit_id: row.get(11)?,
-                    release_started_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                    deleted_at: row.get(15)?,
-                })
-            })?
+            .query_map([], map_sqlite_task_row)?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -2031,6 +1998,7 @@ pub fn reset_task_from_resolution(task_id: &str) -> Result<(), TasksError> {
              SET status = 'in_progress',
                  release_commit_id = NULL,
                  release_started_at = NULL,
+                 claimed_heartbeat_at = ?1,
                  updated_at = ?1
              WHERE id = ?2
                AND status = 'needs_resolution'
@@ -2325,7 +2293,8 @@ tasks:
             title: "Test Epic".to_string(),
             description: None,
             created_by: "human".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Create task
         let input = CreateSqliteTaskInput {
@@ -2359,7 +2328,8 @@ tasks:
             title: "Claim Epic".to_string(),
             description: None,
             created_by: "human".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         create_sqlite_task(CreateSqliteTaskInput {
             id: "CLAIM-001".to_string(),
@@ -2371,7 +2341,8 @@ tasks:
             task_type: None,
             archetype: None,
             footprint: TaskFootprint::default(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Claim the task
         let task = claim_sqlite_task("CLAIM-001", "agent-1").unwrap();
@@ -2395,7 +2366,8 @@ tasks:
             title: "Next Epic".to_string(),
             description: None,
             created_by: "human".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Create tasks with different priorities
         create_sqlite_task(CreateSqliteTaskInput {
@@ -2408,7 +2380,8 @@ tasks:
             task_type: None,
             archetype: None,
             footprint: TaskFootprint::default(),
-        }).unwrap();
+        })
+        .unwrap();
 
         create_sqlite_task(CreateSqliteTaskInput {
             id: "NEXT-HIGH".to_string(),
@@ -2420,7 +2393,8 @@ tasks:
             task_type: None,
             archetype: None,
             footprint: TaskFootprint::default(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Should claim the higher priority task first
         let task = claim_next_sqlite_task("agent-1").unwrap();
@@ -2441,7 +2415,8 @@ tasks:
             title: "Dep Epic".to_string(),
             description: None,
             created_by: "human".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Create first task
         create_sqlite_task(CreateSqliteTaskInput {
@@ -2454,7 +2429,8 @@ tasks:
             task_type: None,
             archetype: None,
             footprint: TaskFootprint::default(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Create second task depending on first
         create_sqlite_task(CreateSqliteTaskInput {
@@ -2467,7 +2443,8 @@ tasks:
             task_type: None,
             archetype: None,
             footprint: TaskFootprint::default(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Second task should not be claimable (dep not satisfied)
         let result = claim_sqlite_task("DEP-002", "agent-1");
@@ -2494,7 +2471,8 @@ tasks:
             title: "Footprint Epic".to_string(),
             description: None,
             created_by: "human".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Create tasks with overlapping footprints
         create_sqlite_task(CreateSqliteTaskInput {
@@ -2510,7 +2488,8 @@ tasks:
                 modifies: vec!["src/auth.rs::Handler".to_string()],
                 creates: vec![],
             },
-        }).unwrap();
+        })
+        .unwrap();
 
         create_sqlite_task(CreateSqliteTaskInput {
             id: "FP-002".to_string(),
@@ -2525,7 +2504,8 @@ tasks:
                 modifies: vec!["src/auth.rs::Handler".to_string()], // Same symbol
                 creates: vec![],
             },
-        }).unwrap();
+        })
+        .unwrap();
 
         // Claim first task
         claim_sqlite_task("FP-001", "agent-1").unwrap();

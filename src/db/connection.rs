@@ -3,14 +3,18 @@
 //! Override with BACCHUS_DB_PATH environment variable.
 
 use rusqlite::{Connection, Result};
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
 
 use super::migrations::init_schema;
 
-/// Global database connection pool (single connection for now)
-static DB_POOL: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
+thread_local! {
+    /// Thread-local connection slot.
+    ///
+    /// This avoids cross-test interference when unit tests run concurrently.
+    static DB_CONN: RefCell<Option<Connection>> = const { RefCell::new(None) };
+}
 
 /// Initialize the database connection
 ///
@@ -42,9 +46,10 @@ pub fn init_db(db_path: Option<&str>) -> Result<()> {
     // Initialize schema
     init_schema(&conn)?;
 
-    // Store in global pool
-    let pool = DB_POOL.get_or_init(|| Mutex::new(None));
-    *pool.lock().unwrap() = Some(conn);
+    // Store in thread-local slot
+    DB_CONN.with(|slot| {
+        *slot.borrow_mut() = Some(conn);
+    });
 
     Ok(())
 }
@@ -54,21 +59,23 @@ pub fn with_db<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T>,
 {
-    let pool = DB_POOL.get_or_init(|| Mutex::new(None));
-    let guard = pool.lock().unwrap();
-    let conn = guard.as_ref().ok_or_else(|| {
-        rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(1),
-            Some("Database not initialized".to_string()),
-        )
-    })?;
-    f(conn)
+    DB_CONN.with(|slot| {
+        let guard = slot.borrow();
+        let conn = guard.as_ref().ok_or_else(|| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some("Database not initialized".to_string()),
+            )
+        })?;
+        f(conn)
+    })
 }
 
 /// Close the database connection
 pub fn close_db() {
-    let pool = DB_POOL.get_or_init(|| Mutex::new(None));
-    *pool.lock().unwrap() = None;
+    DB_CONN.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
 }
 
 #[cfg(test)]
