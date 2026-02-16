@@ -74,8 +74,7 @@ pub fn list_tasks(
     status_filter: Option<&str>,
     ready_only: bool,
 ) -> Result<TaskListOutput, String> {
-    let all_tasks = tasks::list_sqlite_tasks(None, None, false)
-        .map_err(|e| e.to_string())?;
+    let all_tasks = tasks::list_sqlite_tasks(None, None, false).map_err(|e| e.to_string())?;
 
     let ready_ids: HashSet<String> = tasks::get_ready_sqlite_tasks(None)
         .map_err(|e| e.to_string())?
@@ -89,10 +88,8 @@ pub fn list_tasks(
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
-        for row in rows {
-            if let Ok((task_id, depends_on)) = row {
-                map.entry(task_id).or_default().push(depends_on);
-            }
+        for (task_id, depends_on) in rows.flatten() {
+            map.entry(task_id).or_default().push(depends_on);
         }
         Ok(map)
     })
@@ -140,8 +137,7 @@ pub fn list_tasks(
 
 /// Show details for a specific task
 pub fn show_task(_workspace_root: &Path, task_id: &str) -> Result<TaskShowOutput, String> {
-    let sqlite_task = tasks::get_sqlite_task(task_id)
-        .map_err(|e| e.to_string())?;
+    let sqlite_task = tasks::get_sqlite_task(task_id).map_err(|e| e.to_string())?;
 
     let ready_ids: HashSet<String> = tasks::get_ready_sqlite_tasks(None)
         .map_err(|e| e.to_string())?
@@ -150,9 +146,8 @@ pub fn show_task(_workspace_root: &Path, task_id: &str) -> Result<TaskShowOutput
         .collect();
 
     let depends_on: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT depends_on FROM task_dependencies WHERE task_id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT depends_on FROM task_dependencies WHERE task_id = ?1")?;
         let rows = stmt
             .query_map([task_id], |row| row.get::<_, String>(0))?
             .filter_map(|r| r.ok())
@@ -261,8 +256,7 @@ pub fn show_task(_workspace_root: &Path, task_id: &str) -> Result<TaskShowOutput
 
 /// Validate tasks against the symbol index
 pub fn validate_tasks(workspace_root: &Path) -> Result<TaskValidateOutput, String> {
-    let validations = tasks::validate_tasks(workspace_root)
-        .map_err(|e| e.to_string())?;
+    let validations = tasks::validate_tasks(workspace_root).map_err(|e| e.to_string())?;
 
     let error_count: usize = validations.iter().map(|v| v.errors.len()).sum();
     let warning_count: usize = validations.iter().map(|v| v.warnings.len()).sum();
@@ -289,13 +283,11 @@ pub fn init_tasks(workspace_root: &Path) -> Result<TaskInitOutput, String> {
 
     // Ensure .bacchus directory exists
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
     let template = tasks::generate_template();
-    std::fs::write(&path, template)
-        .map_err(|e| e.to_string())?;
+    std::fs::write(&path, template).map_err(|e| e.to_string())?;
 
     Ok(TaskInitOutput {
         success: true,
@@ -305,7 +297,10 @@ pub fn init_tasks(workspace_root: &Path) -> Result<TaskInitOutput, String> {
 }
 
 /// Import tasks from YAML to SQLite
-pub fn import_tasks(workspace_root: &Path, epic_id: Option<&str>) -> Result<TaskImportOutput, String> {
+pub fn import_tasks(
+    workspace_root: &Path,
+    epic_id: Option<&str>,
+) -> Result<TaskImportOutput, String> {
     match tasks::import_yaml_tasks(workspace_root, epic_id) {
         Ok(result) => {
             let message = if result.imported > 0 {

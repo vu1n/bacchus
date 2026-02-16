@@ -36,7 +36,10 @@ pub type UpdateResult<T> = Result<T, UpdateError>;
 
 /// Check if a newer version is available
 pub fn check_for_updates() -> UpdateResult<UpdateInfo> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        GITHUB_REPO
+    );
 
     let release: GitHubRelease = ureq::get(&url)
         .set("User-Agent", "bacchus")
@@ -47,7 +50,7 @@ pub fn check_for_updates() -> UpdateResult<UpdateInfo> {
 
     // Compare versions (simple semver comparison)
     if version_compare::compare_versions(CURRENT_VERSION, latest_version)
-        .map_or(false, |v| v >= std::cmp::Ordering::Equal)
+        .is_some_and(|v| v >= std::cmp::Ordering::Equal)
     {
         return Ok(UpdateInfo {
             current_version: CURRENT_VERSION.to_string(),
@@ -87,7 +90,10 @@ pub fn self_update() -> UpdateResult<String> {
         return Err(UpdateError::AlreadyLatest(info.current_version));
     }
 
-    println!("Update available: {} -> {}", info.current_version, info.latest_version);
+    println!(
+        "Update available: {} -> {}",
+        info.current_version, info.latest_version
+    );
     println!("Release notes:");
     if let Some(notes) = &info.release_notes {
         println!("{}", notes);
@@ -104,12 +110,12 @@ pub fn self_update() -> UpdateResult<String> {
 
     // Get current binary path
     let current_exe = env::current_exe()?;
-    let install_dir = current_exe
-        .parent()
-        .ok_or_else(|| UpdateError::IoError(std::io::Error::new(
+    let install_dir = current_exe.parent().ok_or_else(|| {
+        UpdateError::IoError(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "Cannot determine install directory",
-        )))?;
+        ))
+    })?;
 
     let temp_path = install_dir.join("bacchus.tmp");
 

@@ -102,7 +102,8 @@ pub fn release_task(
 
             // Check for conflicts before marking ready
             if workspace::has_conflicts(workspace_root, task_id).unwrap_or(false) {
-                let files = workspace::get_conflict_files(workspace_root, task_id).unwrap_or_default();
+                let files =
+                    workspace::get_conflict_files(workspace_root, task_id).unwrap_or_default();
                 return Ok(ReleaseOutput {
                     success: false,
                     task_id: task_id.to_string(),
@@ -165,7 +166,10 @@ pub fn release_task(
                 status: status.to_string(),
                 ready_for_release: false,
                 commit_id: None,
-                message: format!("Task {} failed. Workspace removed, task reset to open.", task_id),
+                message: format!(
+                    "Task {} failed. Workspace removed, task reset to open.",
+                    task_id
+                ),
             })
         }
         _ => Ok(ReleaseOutput {

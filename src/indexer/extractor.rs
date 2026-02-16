@@ -69,7 +69,10 @@ fn extract_from_node(
         });
 
         // Update parent names for nested symbols
-        if matches!(kind, SymbolKind::Class | SymbolKind::Struct | SymbolKind::Trait | SymbolKind::Impl) {
+        if matches!(
+            kind,
+            SymbolKind::Class | SymbolKind::Struct | SymbolKind::Trait | SymbolKind::Impl
+        ) {
             new_parent_names.push(name);
         }
     }
@@ -77,7 +80,14 @@ fn extract_from_node(
     // Recurse into children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        extract_from_node(child, file_path, source, language, &new_parent_names, symbols);
+        extract_from_node(
+            child,
+            file_path,
+            source,
+            language,
+            &new_parent_names,
+            symbols,
+        );
     }
 }
 
@@ -94,13 +104,20 @@ fn extract_ts_symbol(node: &Node, source: &str) -> (Option<SymbolKind>, Option<S
             if let Some(declarator) = node.child_by_field_name("declarations") {
                 if let Some(first_decl) = declarator.child(0) {
                     if let Some(value) = first_decl.child_by_field_name("value") {
-                        if value.kind() == "arrow_function" || value.kind() == "function_expression" {
-                            return (Some(SymbolKind::Function), get_node_name(&first_decl, source));
+                        if value.kind() == "arrow_function" || value.kind() == "function_expression"
+                        {
+                            return (
+                                Some(SymbolKind::Function),
+                                get_node_name(&first_decl, source),
+                            );
                         }
                     }
                     // Top-level variable
                     if node.parent().map(|p| p.kind()) == Some("program") {
-                        return (Some(SymbolKind::Variable), get_node_name(&first_decl, source));
+                        return (
+                            Some(SymbolKind::Variable),
+                            get_node_name(&first_decl, source),
+                        );
                     }
                 }
             }
@@ -149,8 +166,12 @@ fn extract_go_symbol(node: &Node, source: &str) -> (Option<SymbolKind>, Option<S
             if let Some(spec) = node.child_by_field_name("type_spec") {
                 if let Some(type_node) = spec.child_by_field_name("type") {
                     match type_node.kind() {
-                        "struct_type" => return (Some(SymbolKind::Struct), get_node_name(&spec, source)),
-                        "interface_type" => return (Some(SymbolKind::Interface), get_node_name(&spec, source)),
+                        "struct_type" => {
+                            return (Some(SymbolKind::Struct), get_node_name(&spec, source))
+                        }
+                        "interface_type" => {
+                            return (Some(SymbolKind::Interface), get_node_name(&spec, source))
+                        }
                         _ => {}
                     }
                 }
@@ -217,13 +238,18 @@ fn extract_docstring(node: &Node, source: &str) -> Option<String> {
     // Collect consecutive comments
     while let Some(sibling) = current {
         if sibling.kind() == "comment" {
-            let comment_text = source[sibling.start_byte()..sibling.end_byte()].trim().to_string();
+            let comment_text = source[sibling.start_byte()..sibling.end_byte()]
+                .trim()
+                .to_string();
             comments.insert(0, comment_text);
 
             // Check for more comments
             if let Some(prev) = sibling.prev_sibling() {
                 if prev.kind() == "comment" {
-                    let gap = sibling.start_position().row.saturating_sub(prev.end_position().row);
+                    let gap = sibling
+                        .start_position()
+                        .row
+                        .saturating_sub(prev.end_position().row);
                     if gap <= 1 {
                         current = Some(prev);
                         continue;
@@ -275,9 +301,15 @@ class Greeter {
         let tree = parser.parse(source, Language::TypeScript).unwrap();
         let symbols = extract_symbols(&tree, "test.ts", source, Language::TypeScript);
 
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Function && s.fq_name.contains("hello")));
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Class && s.fq_name.contains("Greeter")));
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Method && s.fq_name.contains("greet")));
+        assert!(symbols
+            .iter()
+            .any(|s| s.kind == SymbolKind::Function && s.fq_name.contains("hello")));
+        assert!(symbols
+            .iter()
+            .any(|s| s.kind == SymbolKind::Class && s.fq_name.contains("Greeter")));
+        assert!(symbols
+            .iter()
+            .any(|s| s.kind == SymbolKind::Method && s.fq_name.contains("greet")));
     }
 
     #[test]
@@ -303,8 +335,12 @@ fn main() {
         let tree = parser.parse(source, Language::Rust).unwrap();
         let symbols = extract_symbols(&tree, "test.rs", source, Language::Rust);
 
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Struct && s.fq_name.contains("Point")));
+        assert!(symbols
+            .iter()
+            .any(|s| s.kind == SymbolKind::Struct && s.fq_name.contains("Point")));
         assert!(symbols.iter().any(|s| s.kind == SymbolKind::Impl));
-        assert!(symbols.iter().any(|s| s.kind == SymbolKind::Function && s.fq_name.contains("main")));
+        assert!(symbols
+            .iter()
+            .any(|s| s.kind == SymbolKind::Function && s.fq_name.contains("main")));
     }
 }

@@ -107,10 +107,7 @@ pub fn record_event(
 }
 
 /// Generate eval report
-pub fn generate_eval_report(
-    epic_id: Option<&str>,
-    days: i64,
-) -> Result<EvalOutput, String> {
+pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutput, String> {
     let cutoff = chrono::Utc::now().timestamp_millis() - (days * 24 * 60 * 60 * 1000);
 
     with_db(|conn| {

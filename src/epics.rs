@@ -106,15 +106,15 @@ pub fn create_epic(input: CreateEpicInput) -> Result<Epic, EpicsError> {
 
     // Check for duplicate first
     let exists: bool = with_db(|conn| {
-        conn.query_row(
-            "SELECT 1 FROM epics WHERE id = ?1",
-            [&input.id],
-            |_| Ok(true),
-        ).or_else(|e| match e {
+        conn.query_row("SELECT 1 FROM epics WHERE id = ?1", [&input.id], |_| {
+            Ok(true)
+        })
+        .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(false),
             _ => Err(e),
         })
-    }).map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))?;
+    })
+    .map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))?;
 
     if exists {
         return Err(EpicsError::DuplicateEpic(input.id.clone()));
@@ -124,9 +124,16 @@ pub fn create_epic(input: CreateEpicInput) -> Result<Epic, EpicsError> {
         conn.execute(
             "INSERT INTO epics (id, title, description, status, created_by, created_at, updated_at)
              VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?5)",
-            params![input.id, input.title, input.description, input.created_by, now],
+            params![
+                input.id,
+                input.title,
+                input.description,
+                input.created_by,
+                now
+            ],
         )
-    }).map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))?;
+    })
+    .map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))?;
 
     Ok(Epic {
         id: input.id,
@@ -176,7 +183,8 @@ pub fn list_epics(status: Option<EpicStatus>) -> Result<Vec<Epic>, EpicsError> {
                 s.as_str()
             ),
             None => "SELECT id, title, description, status, created_by, created_at, updated_at
-                     FROM epics ORDER BY created_at DESC".to_string(),
+                     FROM epics ORDER BY created_at DESC"
+                .to_string(),
         };
 
         let mut stmt = conn.prepare(&sql)?;
@@ -207,31 +215,31 @@ pub fn update_epic_status(epic_id: &str, new_status: EpicStatus) -> Result<Epic,
 
     with_db(|conn| {
         // Get current epic to validate transition
-        let current: Epic = conn.query_row(
-            "SELECT id, title, description, status, created_by, created_at, updated_at
+        let current: Epic = conn
+            .query_row(
+                "SELECT id, title, description, status, created_by, created_at, updated_at
              FROM epics WHERE id = ?1",
-            [epic_id],
-            |row| {
-                let status_str: String = row.get(3)?;
-                Ok(Epic {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    status: EpicStatus::from_str(&status_str).unwrap_or(EpicStatus::Open),
-                    created_by: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                })
-            },
-        ).map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                rusqlite::Error::SqliteFailure(
+                [epic_id],
+                |row| {
+                    let status_str: String = row.get(3)?;
+                    Ok(Epic {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        description: row.get(2)?,
+                        status: EpicStatus::from_str(&status_str).unwrap_or(EpicStatus::Open),
+                        created_by: row.get(4)?,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    })
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::SqliteFailure(
                     rusqlite::ffi::Error::new(1),
                     Some(format!("Epic not found: {}", epic_id)),
-                )
-            }
-            e => e,
-        })?;
+                ),
+                e => e,
+            })?;
 
         // Validate status transition
         let valid_transition = match (current.status, new_status) {
@@ -398,7 +406,7 @@ pub fn enforce_epic_lifecycle() -> Result<Vec<(String, EpicStatus, EpicStatus)>,
                      SELECT DISTINCT epic_id FROM tasks
                      WHERE status IN ('open', 'in_progress', 'blocked', 'closed')
                      AND deleted_at IS NULL
-                 )"
+                 )",
             )?;
 
             let epic_ids: Vec<String> = stmt
@@ -423,7 +431,7 @@ pub fn enforce_epic_lifecycle() -> Result<Vec<(String, EpicStatus, EpicStatus)>,
                      SELECT DISTINCT epic_id FROM tasks
                      WHERE status IN ('draft', 'open', 'in_progress', 'blocked')
                      AND deleted_at IS NULL
-                 )"
+                 )",
             )?;
 
             let epic_ids: Vec<String> = stmt
@@ -493,7 +501,10 @@ pub fn get_epic_with_counts(epic_id: &str) -> Result<EpicWithCounts, EpicsError>
     })
     .map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))?;
 
-    Ok(EpicWithCounts { epic, task_counts: counts })
+    Ok(EpicWithCounts {
+        epic,
+        task_counts: counts,
+    })
 }
 
 // ============================================================================

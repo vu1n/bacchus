@@ -46,11 +46,12 @@ impl Parser {
     }
 
     /// Parse a file, detecting language from extension
-    pub fn parse_file(&mut self, source: &str, file_path: &str) -> Result<(Tree, Language), ParserError> {
-        let ext = file_path
-            .rsplit('.')
-            .next()
-            .unwrap_or("");
+    pub fn parse_file(
+        &mut self,
+        source: &str,
+        file_path: &str,
+    ) -> Result<(Tree, Language), ParserError> {
+        let ext = file_path.rsplit('.').next().unwrap_or("");
 
         let language = Language::from_extension(ext)
             .ok_or_else(|| ParserError::UnsupportedLanguage(ext.to_string()))?;

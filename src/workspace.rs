@@ -115,7 +115,10 @@ fn run_jj_with_status(workspace_root: &Path, args: &[&str]) -> Result<ExitStatus
 
 /// Create a new jj workspace for a task
 /// Creates workspaces/{task_id} from main bookmark
-pub fn create_workspace(workspace_root: &Path, task_id: &str) -> Result<WorkspaceInfo, WorkspaceError> {
+pub fn create_workspace(
+    workspace_root: &Path,
+    task_id: &str,
+) -> Result<WorkspaceInfo, WorkspaceError> {
     validate_task_id(task_id)?;
 
     let workspaces_dir = get_workspaces_dir(workspace_root);
@@ -130,7 +133,10 @@ pub fn create_workspace(workspace_root: &Path, task_id: &str) -> Result<Workspac
     }
 
     // Check if workspace is already registered in jj
-    let workspace_list = run_jj(workspace_root, &["workspace", "list", "--template", "name ++ \"\\n\""])?;
+    let workspace_list = run_jj(
+        workspace_root,
+        &["workspace", "list", "--template", "name ++ \"\\n\""],
+    )?;
     if workspace_list.lines().any(|name| name.trim() == task_id) {
         return Err(WorkspaceError::AlreadyExists(task_id.to_string()));
     }
@@ -185,12 +191,18 @@ pub fn remove_workspace(
 pub fn workspace_exists(workspace_root: &Path, task_id: &str) -> Result<bool, WorkspaceError> {
     validate_task_id(task_id)?;
 
-    let workspace_list = run_jj(workspace_root, &["workspace", "list", "--template", "name ++ \"\\n\""])?;
+    let workspace_list = run_jj(
+        workspace_root,
+        &["workspace", "list", "--template", "name ++ \"\\n\""],
+    )?;
     Ok(workspace_list.lines().any(|name| name.trim() == task_id))
 }
 
 /// Get the working copy commit ID for a workspace
-pub fn get_workspace_commit(workspace_root: &Path, task_id: &str) -> Result<String, WorkspaceError> {
+pub fn get_workspace_commit(
+    workspace_root: &Path,
+    task_id: &str,
+) -> Result<String, WorkspaceError> {
     validate_task_id(task_id)?;
 
     let output = run_jj(
@@ -215,7 +227,10 @@ pub fn get_workspace_commit(workspace_root: &Path, task_id: &str) -> Result<Stri
 
 /// Count commits between main and workspace tip
 /// Used for single-commit validation
-pub fn count_commits_above_main(workspace_root: &Path, task_id: &str) -> Result<usize, WorkspaceError> {
+pub fn count_commits_above_main(
+    workspace_root: &Path,
+    task_id: &str,
+) -> Result<usize, WorkspaceError> {
     validate_task_id(task_id)?;
 
     let output = run_jj(
@@ -236,7 +251,10 @@ pub fn count_commits_above_main(workspace_root: &Path, task_id: &str) -> Result<
 
 /// Validate single-commit workflow
 /// Returns the commit ID if valid, error otherwise
-pub fn validate_single_commit(workspace_root: &Path, task_id: &str) -> Result<String, WorkspaceError> {
+pub fn validate_single_commit(
+    workspace_root: &Path,
+    task_id: &str,
+) -> Result<String, WorkspaceError> {
     let commit_count = count_commits_above_main(workspace_root, task_id)?;
 
     if commit_count == 0 {
@@ -244,7 +262,10 @@ pub fn validate_single_commit(workspace_root: &Path, task_id: &str) -> Result<St
     }
 
     if commit_count > 1 {
-        return Err(WorkspaceError::MultipleCommits(task_id.to_string(), commit_count));
+        return Err(WorkspaceError::MultipleCommits(
+            task_id.to_string(),
+            commit_count,
+        ));
     }
 
     // Get the commit ID
@@ -275,7 +296,10 @@ pub fn has_conflicts(workspace_root: &Path, task_id: &str) -> Result<bool, Works
 }
 
 /// Get list of conflicted files
-pub fn get_conflict_files(workspace_root: &Path, task_id: &str) -> Result<Vec<String>, WorkspaceError> {
+pub fn get_conflict_files(
+    workspace_root: &Path,
+    task_id: &str,
+) -> Result<Vec<String>, WorkspaceError> {
     validate_task_id(task_id)?;
 
     // jj resolve --list shows files with conflicts
@@ -329,7 +353,10 @@ pub fn rebase_workspace_onto_main(
 
 /// Advance main bookmark to a commit
 pub fn advance_main_bookmark(workspace_root: &Path, commit_id: &str) -> Result<(), WorkspaceError> {
-    run_jj(workspace_root, &["bookmark", "set", "main", "-r", commit_id])?;
+    run_jj(
+        workspace_root,
+        &["bookmark", "set", "main", "-r", commit_id],
+    )?;
     Ok(())
 }
 

@@ -16,10 +16,10 @@ pub struct TaskContext {
     pub priority: i32,
     pub status: String,
     pub claimed_by: Option<String>,
-    pub blocking_deps: Vec<String>,     // Tasks that must be completed first
-    pub unblocks: Vec<String>,          // Tasks that depend on this
+    pub blocking_deps: Vec<String>, // Tasks that must be completed first
+    pub unblocks: Vec<String>,      // Tasks that depend on this
     pub footprint_modifies: Vec<String>, // Symbols this task modifies
-    pub footprint_creates: Vec<String>,  // Files this task creates
+    pub footprint_creates: Vec<String>, // Files this task creates
 }
 
 /// Generate rich context for a task
@@ -221,7 +221,8 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Write a failing test that demonstrates the bug
 - Fix the issue with minimal changes
 - Verify the fix doesn't introduce regressions
-- Document what caused the bug in commit message"#.to_string(),
+- Document what caused the bug in commit message"#
+            .to_string(),
 
         SqliteTaskType::Feature => r#"**Feature Implementation Guidance:**
 - Understand the requirements fully before coding
@@ -229,7 +230,8 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Follow existing code patterns and conventions
 - Add appropriate tests for the new functionality
 - Update documentation if needed
-- Keep commits focused and incremental"#.to_string(),
+- Keep commits focused and incremental"#
+            .to_string(),
 
         SqliteTaskType::Refactor => r#"**Refactoring Guidance:**
 - Ensure tests pass before starting
@@ -237,7 +239,8 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Each commit should leave tests passing
 - Don't mix refactoring with feature changes
 - Verify behavior is preserved after changes
-- Document why the refactoring improves the code"#.to_string(),
+- Document why the refactoring improves the code"#
+            .to_string(),
 
         SqliteTaskType::Test => r#"**Test Writing Guidance:**
 - Focus on testing behavior, not implementation
@@ -245,7 +248,8 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Use descriptive test names that explain intent
 - Keep tests independent and isolated
 - Avoid testing implementation details
-- Aim for meaningful coverage, not 100%"#.to_string(),
+- Aim for meaningful coverage, not 100%"#
+            .to_string(),
 
         SqliteTaskType::Docs => r#"**Documentation Guidance:**
 - Write for the intended audience
@@ -253,7 +257,8 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Include examples where helpful
 - Keep formatting consistent
 - Verify all links and references work
-- Update related docs if needed"#.to_string(),
+- Update related docs if needed"#
+            .to_string(),
 
         SqliteTaskType::Infra => r#"**Infrastructure Guidance:**
 - Test changes in a safe environment first
@@ -261,13 +266,15 @@ fn get_type_specific_guidance(task_type: SqliteTaskType) -> String {
 - Consider rollback procedures
 - Update monitoring/alerting if needed
 - Keep security implications in mind
-- Verify CI/CD pipelines work correctly"#.to_string(),
+- Verify CI/CD pipelines work correctly"#
+            .to_string(),
 
         SqliteTaskType::Generic => r#"**General Guidance:**
 - Understand the scope before starting
 - Follow existing code conventions
 - Test your changes thoroughly
 - Keep commits focused and well-documented
-- Ask for clarification if requirements are unclear"#.to_string(),
+- Ask for clarification if requirements are unclear"#
+            .to_string(),
     }
 }

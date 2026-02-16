@@ -2,10 +2,10 @@
 //!
 //! Uses tree-sitter for native AST parsing across multiple languages.
 
-mod parser;
 mod extractor;
+mod parser;
 mod types;
 
-pub use parser::Parser;
 pub use extractor::extract_symbols;
+pub use parser::Parser;
 pub use types::{ExtractedSymbol, Language};

@@ -6,7 +6,10 @@ mod global;
 mod task;
 
 /// Generate context for the current agent
-pub fn generate_context(task_id_opt: Option<String>, workspace_root: &Path) -> Result<String, String> {
+pub fn generate_context(
+    task_id_opt: Option<String>,
+    workspace_root: &Path,
+) -> Result<String, String> {
     let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
 
     // Check if we are inside the .bacchus/workspaces directory of the project
@@ -19,7 +22,8 @@ pub fn generate_context(task_id_opt: Option<String>, workspace_root: &Path) -> R
     } else if is_workspace {
         // We are in .../.bacchus/workspaces/<TASK_ID>/...
         // We want the component right after 'workspaces'
-        current_dir.strip_prefix(&workspaces_dir)
+        current_dir
+            .strip_prefix(&workspaces_dir)
             .ok()
             .and_then(|p| p.iter().next())
             .map(|s| s.to_string_lossy().to_string())

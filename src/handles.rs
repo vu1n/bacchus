@@ -240,9 +240,11 @@ pub fn filter_handle(
 
     // Get original query
     let original_query = with_db(|conn| {
-        conn.query_row("SELECT query FROM handles WHERE handle = ?1", [handle], |row| {
-            row.get::<_, Option<String>>(0)
-        })
+        conn.query_row(
+            "SELECT query FROM handles WHERE handle = ?1",
+            [handle],
+            |row| row.get::<_, Option<String>>(0),
+        )
     })?;
 
     // Get all data and filter
@@ -293,8 +295,7 @@ pub fn clear_all_handles() -> Result<usize> {
 pub fn clear_session_handles(session_id: &str) -> Result<usize> {
     with_db(|conn| {
         // Get handles for this session
-        let mut stmt =
-            conn.prepare("SELECT handle FROM handles WHERE session_id = ?1")?;
+        let mut stmt = conn.prepare("SELECT handle FROM handles WHERE session_id = ?1")?;
         let handles: Vec<String> = stmt
             .query_map([session_id], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -316,8 +317,7 @@ pub fn clear_session_handles(session_id: &str) -> Result<usize> {
 pub fn clear_orphaned_handles() -> Result<usize> {
     with_db(|conn| {
         // Get handles without session
-        let mut stmt =
-            conn.prepare("SELECT handle FROM handles WHERE session_id IS NULL")?;
+        let mut stmt = conn.prepare("SELECT handle FROM handles WHERE session_id IS NULL")?;
         let handles: Vec<String> = stmt
             .query_map([], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -405,12 +405,9 @@ mod tests {
             serde_json::json!({"name": "baz"}),
         ];
 
-        let stub = create_handle(
-            HandleType::Symbols,
-            &data,
-            Some("test query"),
-            |v| v["name"].as_str().unwrap_or("?").to_string(),
-        )
+        let stub = create_handle(HandleType::Symbols, &data, Some("test query"), |v| {
+            v["name"].as_str().unwrap_or("?").to_string()
+        })
         .unwrap();
 
         assert_eq!(stub.handle, "$sym1");
@@ -430,10 +427,8 @@ mod tests {
             serde_json::json!({"id": 3}),
         ];
 
-        let stub = create_handle(HandleType::Symbols, &data, None, |v| {
-            v["id"].to_string()
-        })
-        .unwrap();
+        let stub =
+            create_handle(HandleType::Symbols, &data, None, |v| v["id"].to_string()).unwrap();
 
         let expanded = expand_handle(&stub.handle, Some(2), None).unwrap();
         assert_eq!(expanded.len(), 2);

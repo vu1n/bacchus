@@ -2,7 +2,7 @@
 //!
 //! Provides SQLite connection management and migrations.
 
-mod migrations;
 mod connection;
+mod migrations;
 
-pub use connection::{init_db, close_db, with_db};
+pub use connection::{close_db, init_db, with_db};

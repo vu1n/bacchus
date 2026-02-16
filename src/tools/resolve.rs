@@ -49,7 +49,9 @@ pub fn resolve_merge(
     let agent_id = task.claimed_by.clone().unwrap_or_default();
 
     // 2. Check task is in needs_resolution status (or in_progress if continuing work)
-    if task.status != SqliteTaskStatus::NeedsResolution && task.status != SqliteTaskStatus::InProgress {
+    if task.status != SqliteTaskStatus::NeedsResolution
+        && task.status != SqliteTaskStatus::InProgress
+    {
         return Ok(ResolveOutput {
             success: false,
             task_id: task_id.to_string(),
@@ -87,7 +89,10 @@ pub fn resolve_merge(
                 task_id: task_id.to_string(),
                 ready_for_release: false,
                 commit_id: None,
-                message: format!("Task {} has no commits. Make changes before resolving.", task_id),
+                message: format!(
+                    "Task {} has no commits. Make changes before resolving.",
+                    task_id
+                ),
             });
         }
         Err(workspace::WorkspaceError::MultipleCommits(_, count)) => {

@@ -71,7 +71,9 @@ pub fn find_archetypes_file() -> Option<std::path::PathBuf> {
 
     // Check user skill directory
     if let Ok(home) = std::env::var("HOME") {
-        let skill_path = Path::new(&home).join(SKILL_DIR).join(DEFAULT_ARCHETYPES_FILENAME);
+        let skill_path = Path::new(&home)
+            .join(SKILL_DIR)
+            .join(DEFAULT_ARCHETYPES_FILENAME);
         if skill_path.exists() {
             return Some(skill_path);
         }
@@ -88,11 +90,11 @@ pub fn load_archetypes() -> Result<ArchetypesFile, ArchetypeError> {
 
 /// Load archetypes from a specific path
 pub fn load_archetypes_from_path(path: &Path) -> Result<ArchetypesFile, ArchetypeError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| ArchetypeError::ReadError(e.to_string()))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| ArchetypeError::ReadError(e.to_string()))?;
 
-    let archetypes: ArchetypesFile = serde_yaml::from_str(&content)
-        .map_err(|e| ArchetypeError::ParseError(e.to_string()))?;
+    let archetypes: ArchetypesFile =
+        serde_yaml::from_str(&content).map_err(|e| ArchetypeError::ParseError(e.to_string()))?;
 
     Ok(archetypes)
 }
@@ -100,7 +102,8 @@ pub fn load_archetypes_from_path(path: &Path) -> Result<ArchetypesFile, Archetyp
 /// Get a specific archetype by name
 pub fn get_archetype(name: &str) -> Result<Archetype, ArchetypeError> {
     let archetypes = load_archetypes()?;
-    archetypes.archetypes
+    archetypes
+        .archetypes
         .get(name)
         .cloned()
         .ok_or_else(|| ArchetypeError::NotFound(name.to_string()))
@@ -148,31 +151,28 @@ pub fn cmd_list_archetypes() -> String {
                 .collect();
             serde_json::to_string_pretty(&output).unwrap_or_else(|_| "[]".to_string())
         }
-        Err(e) => {
-            serde_json::json!({
-                "error": e.to_string()
-            }).to_string()
-        }
+        Err(e) => serde_json::json!({
+            "error": e.to_string()
+        })
+        .to_string(),
     }
 }
 
 /// CLI: Show archetype details
 pub fn cmd_show_archetype(name: &str) -> String {
     match get_archetype(name) {
-        Ok(archetype) => {
-            serde_json::to_string_pretty(&serde_json::json!({
-                "name": name,
-                "display_name": archetype.name,
-                "description": archetype.description,
-                "keywords": archetype.keywords,
-                "file_patterns": archetype.file_patterns,
-            })).unwrap_or_else(|_| "{}".to_string())
-        }
-        Err(e) => {
-            serde_json::json!({
-                "error": e.to_string()
-            }).to_string()
-        }
+        Ok(archetype) => serde_json::to_string_pretty(&serde_json::json!({
+            "name": name,
+            "display_name": archetype.name,
+            "description": archetype.description,
+            "keywords": archetype.keywords,
+            "file_patterns": archetype.file_patterns,
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        Err(e) => serde_json::json!({
+            "error": e.to_string()
+        })
+        .to_string(),
     }
 }
 
@@ -187,22 +187,20 @@ pub fn cmd_archetype_prompt(name: &str) -> String {
 /// CLI: Select archetype for task
 pub fn cmd_select_archetype(task_id: &str) -> String {
     match select_archetype_for_task(task_id) {
-        Ok(selection) => {
-            serde_json::to_string_pretty(&serde_json::json!({
-                "task_id": task_id,
-                "archetype": selection.archetype_name,
-                "display_name": selection.archetype.name,
-                "description": selection.archetype.description,
-                "score": selection.score,
-                "reasons": selection.reasons,
-                "prompt": selection.archetype.prompt,
-            })).unwrap_or_else(|_| "{}".to_string())
-        }
-        Err(e) => {
-            serde_json::json!({
-                "error": e.to_string()
-            }).to_string()
-        }
+        Ok(selection) => serde_json::to_string_pretty(&serde_json::json!({
+            "task_id": task_id,
+            "archetype": selection.archetype_name,
+            "display_name": selection.archetype.name,
+            "description": selection.archetype.description,
+            "score": selection.score,
+            "reasons": selection.reasons,
+            "prompt": selection.archetype.prompt,
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        Err(e) => serde_json::json!({
+            "error": e.to_string()
+        })
+        .to_string(),
     }
 }
 
@@ -213,29 +211,46 @@ mod tests {
     fn create_test_archetypes() -> ArchetypesFile {
         let mut archetypes = HashMap::new();
 
-        archetypes.insert("frontend".to_string(), Archetype {
-            name: "Frontend Design".to_string(),
-            description: "UI/UX specialist".to_string(),
-            keywords: vec!["component".to_string(), "react".to_string(), "css".to_string()],
-            file_patterns: vec!["*.tsx".to_string()],
-            prompt: "You are a frontend agent.".to_string(),
-        });
+        archetypes.insert(
+            "frontend".to_string(),
+            Archetype {
+                name: "Frontend Design".to_string(),
+                description: "UI/UX specialist".to_string(),
+                keywords: vec![
+                    "component".to_string(),
+                    "react".to_string(),
+                    "css".to_string(),
+                ],
+                file_patterns: vec!["*.tsx".to_string()],
+                prompt: "You are a frontend agent.".to_string(),
+            },
+        );
 
-        archetypes.insert("backend".to_string(), Archetype {
-            name: "Backend API".to_string(),
-            description: "API specialist".to_string(),
-            keywords: vec!["api".to_string(), "endpoint".to_string(), "handler".to_string()],
-            file_patterns: vec!["**/api/**".to_string()],
-            prompt: "You are a backend agent.".to_string(),
-        });
+        archetypes.insert(
+            "backend".to_string(),
+            Archetype {
+                name: "Backend API".to_string(),
+                description: "API specialist".to_string(),
+                keywords: vec![
+                    "api".to_string(),
+                    "endpoint".to_string(),
+                    "handler".to_string(),
+                ],
+                file_patterns: vec!["**/api/**".to_string()],
+                prompt: "You are a backend agent.".to_string(),
+            },
+        );
 
-        archetypes.insert("generic".to_string(), Archetype {
-            name: "Generic".to_string(),
-            description: "General purpose".to_string(),
-            keywords: vec![],
-            file_patterns: vec![],
-            prompt: "You are a general agent.".to_string(),
-        });
+        archetypes.insert(
+            "generic".to_string(),
+            Archetype {
+                name: "Generic".to_string(),
+                description: "General purpose".to_string(),
+                keywords: vec![],
+                file_patterns: vec![],
+                prompt: "You are a general agent.".to_string(),
+            },
+        );
 
         ArchetypesFile {
             version: 1,

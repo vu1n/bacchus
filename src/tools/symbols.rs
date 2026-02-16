@@ -23,7 +23,7 @@ pub struct FindSymbolsInput {
     pub search: Option<String>,
     pub fuzzy: bool,
     #[serde(default)]
-    pub handle: bool,  // Return handle instead of full results
+    pub handle: bool, // Return handle instead of full results
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -105,8 +105,10 @@ pub fn find_symbols(input: &FindSymbolsInput) -> Result<FindSymbolsOutput> {
 
         // Get total count
         let count_sql = format!("SELECT COUNT(*) FROM symbols {}", where_clause);
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        let total_count: i32 = conn.query_row(&count_sql, params_refs.as_slice(), |row| row.get(0))?;
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let total_count: i32 =
+            conn.query_row(&count_sql, params_refs.as_slice(), |row| row.get(0))?;
 
         // Get symbols
         let query_sql = format!(
@@ -114,7 +116,8 @@ pub fn find_symbols(input: &FindSymbolsInput) -> Result<FindSymbolsOutput> {
             where_clause
         );
 
-        let mut all_params: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let mut all_params: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         all_params.push(&limit);
 
         let mut stmt = conn.prepare(&query_sql)?;
