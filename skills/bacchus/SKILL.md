@@ -255,6 +255,8 @@ bacchus session status
 bacchus session stop
 ```
 
+When running multiple agents from the same repo root, set `BACCHUS_SESSION_ID` per agent/session to avoid session-state collisions.
+
 Only one orchestrator can hold the leader lease at a time. If another orchestrator is active, a new start is rejected.
 
 ## Orchestrator Loop

@@ -4,6 +4,7 @@
 //! Uses atomic SQLite claiming for task management.
 
 use crate::tasks;
+use crate::tools::session;
 use crate::workspace;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,14 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
                 title: Some(task.title),
                 description: task.description,
                 workspace_path: Some(ws.path.to_string_lossy().to_string()),
-                message: format!("Claimed {} - work in {}", task.id, ws.path.display()),
+                message: {
+                    let mut message =
+                        format!("Claimed {} - work in {}", task.id, ws.path.display());
+                    if let Err(e) = session::attach_agent_session_heartbeat(&task.id, agent_id) {
+                        message = format!("{} (heartbeat loop unavailable: {})", message, e);
+                    }
+                    message
+                },
             })
         }
         Ok(None) => Ok(NextOutput {

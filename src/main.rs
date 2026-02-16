@@ -20,6 +20,12 @@ use cli::{
 };
 use std::path::PathBuf;
 
+const SESSION_SCOPE_ENV_KEYS: [&str; 3] = [
+    "BACCHUS_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CLAUDE_CONVERSATION_ID",
+];
+
 fn main() {
     let cli = Cli::parse();
 
@@ -33,8 +39,8 @@ fn main() {
         command: SessionCommands::Check,
     } = &cli.command
     {
-        let session_path = workspace_root.join(".bacchus/session.json");
-        if !session_path.exists() {
+        let has_session = has_session_file_for_scope(&workspace_root);
+        if !has_session {
             // No session file = no bacchus session active, approve immediately
             println!(r#"{{"decision":"approve","reason":"No bacchus session active"}}"#);
             return;
@@ -300,6 +306,13 @@ fn main() {
                 token,
                 interval_ms,
             } => tools::run_agent_heartbeat_loop(&task_id, &agent_id, &token, interval_ms)
+                .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+            SessionCommands::LeaseLoop {
+                run_id,
+                token,
+                interval_ms,
+            } => tools::run_orchestrator_lease_loop(&run_id, &token, interval_ms)
                 .map(|msg| serde_json::json!({"success": true, "message": msg}).to_string())
                 .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
         },
@@ -596,6 +609,44 @@ fn find_workspace_root() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn sanitize_scope(scope: &str) -> String {
+    let mut out = String::with_capacity(scope.len());
+    for ch in scope.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "default".to_string()
+    } else {
+        out
+    }
+}
+
+fn current_session_scope_id() -> String {
+    for key in SESSION_SCOPE_ENV_KEYS {
+        if let Ok(v) = std::env::var(key) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return sanitize_scope(trimmed);
+            }
+        }
+    }
+    "default".to_string()
+}
+
+fn has_session_file_for_scope(workspace_root: &std::path::Path) -> bool {
+    let scope_id = current_session_scope_id();
+    let scoped = workspace_root
+        .join(".bacchus")
+        .join("sessions")
+        .join(format!("{}.json", scope_id));
+    let legacy = workspace_root.join(".bacchus/session.json");
+    scoped.exists() || legacy.exists()
 }
 
 /// Parse a single file and extract symbols

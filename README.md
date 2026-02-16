@@ -570,7 +570,8 @@ bacchus session status
 bacchus session stop
 ```
 
-Session state is stored in `.bacchus/session.json`.
+Session state is scoped per CLI/session identity in `.bacchus/sessions/<scope>.json`.
+Set `BACCHUS_SESSION_ID` explicitly when running multiple concurrent sessions from the same repo root.
 Only one orchestrator can hold the leader lease at a time; secondary orchestrator starts are rejected.
 
 ## Stale Detection
@@ -635,7 +636,9 @@ project/
 ├── .bacchus/
 │   ├── bacchus.db          # SQLite database (tasks, claims, metrics)
 │   ├── tasks.yaml          # Task definitions (import source)
-│   ├── session.json        # Active session state
+│   ├── sessions/           # Scoped session state files
+│   │   ├── default.json
+│   │   └── <scope>.json
 │   └── workspaces/
 │       ├── TASK-42/        # Agent 1's jj workspace
 │       └── TASK-43/        # Agent 2's jj workspace

@@ -3,12 +3,16 @@
 //! Uses SQLite-based task management.
 
 use crate::db::with_db;
+use crate::tasks;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListOutput {
-    pub claims: Vec<ClaimInfo>,
+    pub claims: Vec<ClaimInfo>,       // heartbeat-fresh active claims
+    pub stale_claims: Vec<ClaimInfo>, // stale in_progress claims
+    pub active_total: usize,
+    pub stale_total: usize,
     pub total: usize,
 }
 
@@ -18,6 +22,7 @@ pub struct ClaimInfo {
     pub agent_id: String,
     pub workspace_path: String,
     pub age_minutes: i64,
+    pub last_seen_at: i64,
 }
 
 /// List all active claims from SQLite
@@ -36,6 +41,7 @@ pub fn list_claims() -> Result<ListOutput> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+        let active_cutoff = now_ms - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
 
         let claims: Vec<ClaimInfo> = stmt
             .query_map([], |row| {
@@ -54,6 +60,7 @@ pub fn list_claims() -> Result<ListOutput> {
                     agent_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     workspace_path: format!(".bacchus/workspaces/{}", task_id),
                     age_minutes,
+                    last_seen_at: last_seen,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -62,9 +69,18 @@ pub fn list_claims() -> Result<ListOutput> {
         let mut sorted_claims = claims;
         sorted_claims.sort_by(|a, b| a.age_minutes.cmp(&b.age_minutes));
 
+        let (claims, stale_claims): (Vec<_>, Vec<_>) = sorted_claims
+            .into_iter()
+            .partition(|claim| claim.last_seen_at >= active_cutoff);
+        let active_total = claims.len();
+        let stale_total = stale_claims.len();
+
         Ok(ListOutput {
-            total: sorted_claims.len(),
-            claims: sorted_claims,
+            total: active_total + stale_total,
+            active_total,
+            stale_total,
+            claims,
+            stale_claims,
         })
     })
 }

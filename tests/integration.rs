@@ -670,6 +670,166 @@ tasks:
     }
 
     #[test]
+    fn test_scoped_agent_sessions_do_not_clobber_each_other() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+             VALUES ('SCOPE-EPIC', 'Scope Epic', 'open', 'test', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('SCOPE-001', 'SCOPE-EPIC', 'Scoped A', 1, 'in_progress', 'generic', 'generic', 'agent-a', ?1, ?1, ?2, ?2)",
+            rusqlite::params![now, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('SCOPE-002', 'SCOPE-EPIC', 'Scoped B', 2, 'in_progress', 'generic', 'generic', 'agent-b', ?1, ?1, ?2, ?2)",
+            rusqlite::params![now, now],
+        )
+        .unwrap();
+
+        let start_a = Command::new(bacchus_bin())
+            .args([
+                "session",
+                "start",
+                "agent",
+                "--task-id",
+                "SCOPE-001",
+                "--agent-id",
+                "agent-a",
+            ])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "scope-a")
+            .env("BACCHUS_AGENT_HEARTBEAT_INTERVAL_MS", "100")
+            .output()
+            .unwrap();
+        assert!(start_a.status.success());
+
+        let start_b = Command::new(bacchus_bin())
+            .args([
+                "session",
+                "start",
+                "agent",
+                "--task-id",
+                "SCOPE-002",
+                "--agent-id",
+                "agent-b",
+            ])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "scope-b")
+            .env("BACCHUS_AGENT_HEARTBEAT_INTERVAL_MS", "100")
+            .output()
+            .unwrap();
+        assert!(start_b.status.success());
+
+        let status_a = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "scope-a")
+            .output()
+            .unwrap();
+        let status_a_json: Value = serde_json::from_slice(&status_a.stdout).unwrap();
+        assert_eq!(status_a_json["session"]["task_id"], "SCOPE-001");
+
+        let status_b = Command::new(bacchus_bin())
+            .args(["session", "status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "scope-b")
+            .output()
+            .unwrap();
+        let status_b_json: Value = serde_json::from_slice(&status_b.stdout).unwrap();
+        assert_eq!(status_b_json["session"]["task_id"], "SCOPE-002");
+
+        Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "scope-a")
+            .output()
+            .unwrap();
+        Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "scope-b")
+            .output()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_orchestrator_lease_loop_renews_without_check_calls() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let start_primary = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "orch-a")
+            .env("BACCHUS_ORCHESTRATOR_LEASE_TTL_MS", "500")
+            .env("BACCHUS_ORCHESTRATOR_LEASE_INTERVAL_MS", "100")
+            .output()
+            .unwrap();
+        assert!(start_primary.status.success());
+
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+
+        let start_secondary = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator", "--max-concurrent", "1"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "orch-b")
+            .env("BACCHUS_ORCHESTRATOR_LEASE_TTL_MS", "500")
+            .env("BACCHUS_ORCHESTRATOR_LEASE_INTERVAL_MS", "100")
+            .output()
+            .unwrap();
+        assert!(!start_secondary.status.success());
+
+        Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "orch-a")
+            .output()
+            .unwrap();
+    }
+
+    #[test]
     fn test_agent_session_background_heartbeat_updates_claim() {
         let temp = TempDir::new().unwrap();
         let db_path = temp.path().join("test.db");
@@ -802,6 +962,62 @@ tasks:
         });
 
         assert!(has_run_id, "Expected run_id on release_reset_timeout event");
+    }
+
+    #[test]
+    fn test_list_splits_active_and_stale_claims() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let stale = now - (20 * 60 * 1000);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+             VALUES ('LIST-EPIC', 'List Epic', 'open', 'test', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('LIST-ACTIVE', 'LIST-EPIC', 'Active claim', 1, 'in_progress', 'generic', 'generic', 'agent-active', ?1, ?1, ?2, ?2)",
+            rusqlite::params![now, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('LIST-STALE', 'LIST-EPIC', 'Stale claim', 2, 'in_progress', 'generic', 'generic', 'agent-stale', ?1, ?1, ?2, ?2)",
+            rusqlite::params![stale, now],
+        )
+        .unwrap();
+
+        let list_output = Command::new(bacchus_bin())
+            .args(["list"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(list_output.status.success());
+        let list_json: Value = serde_json::from_slice(&list_output.stdout).unwrap();
+
+        assert_eq!(list_json["active_total"], 1);
+        assert_eq!(list_json["stale_total"], 1);
+        assert_eq!(list_json["claims"].as_array().unwrap().len(), 1);
+        assert_eq!(list_json["stale_claims"].as_array().unwrap().len(), 1);
     }
 }
 

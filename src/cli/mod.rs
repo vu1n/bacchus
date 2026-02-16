@@ -251,6 +251,20 @@ pub enum SessionCommands {
         #[arg(long, default_value = "30000")]
         interval_ms: u64,
     },
+
+    /// Internal: background loop to renew orchestrator leader lease.
+    #[command(hide = true)]
+    LeaseLoop {
+        /// Orchestrator run ID that owns the lease
+        #[arg(long)]
+        run_id: String,
+        /// Unique token that fences stale lease workers
+        #[arg(long)]
+        token: String,
+        /// Lease renew interval in milliseconds
+        #[arg(long, default_value = "30000")]
+        interval_ms: u64,
+    },
 }
 
 #[derive(Subcommand)]

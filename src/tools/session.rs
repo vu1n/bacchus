@@ -1,6 +1,6 @@
 //! Session management for stop hooks
 //!
-//! Manages .bacchus/session.json for persistent session state.
+//! Manages scoped session files under .bacchus/sessions/ for persistent session state.
 
 use crate::db::with_db;
 use crate::handles;
@@ -15,8 +15,14 @@ use std::thread;
 use std::time::Duration;
 
 const DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_ORCHESTRATOR_LEASE_RENEW_INTERVAL_MS: u64 = 30_000;
+const SESSION_SCOPE_ENV_KEYS: [&str; 3] = [
+    "BACCHUS_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CLAUDE_CONVERSATION_ID",
+];
 
-/// Session state stored in .bacchus/session.json
+/// Session state stored in scoped .bacchus/sessions/<scope>.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub mode: String,
@@ -30,6 +36,8 @@ pub struct Session {
     pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_heartbeat_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_lease_token: Option<String>,
     pub started_at: String,
 }
 
@@ -73,8 +81,57 @@ fn find_workspace_root() -> Option<std::path::PathBuf> {
     None
 }
 
-fn session_path() -> Option<std::path::PathBuf> {
+fn sanitize_scope(scope: &str) -> String {
+    let mut out = String::with_capacity(scope.len());
+    for ch in scope.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "default".to_string()
+    } else {
+        out
+    }
+}
+
+pub fn current_session_scope_id() -> String {
+    for key in SESSION_SCOPE_ENV_KEYS {
+        if let Ok(v) = std::env::var(key) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return sanitize_scope(trimmed);
+            }
+        }
+    }
+    "default".to_string()
+}
+
+fn session_file_path_for_scope(scope: &str) -> Option<std::path::PathBuf> {
+    find_workspace_root().map(|root| {
+        root.join(".bacchus")
+            .join("sessions")
+            .join(format!("{}.json", sanitize_scope(scope)))
+    })
+}
+
+fn scoped_session_path() -> Option<std::path::PathBuf> {
+    session_file_path_for_scope(&current_session_scope_id())
+}
+
+fn legacy_session_path() -> Option<std::path::PathBuf> {
     find_workspace_root().map(|root| root.join(".bacchus/session.json"))
+}
+
+fn session_path() -> Option<std::path::PathBuf> {
+    if let Some(path) = scoped_session_path() {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    legacy_session_path().filter(|p| p.exists())
 }
 
 fn configured_agent_heartbeat_interval_ms() -> u64 {
@@ -83,6 +140,22 @@ fn configured_agent_heartbeat_interval_ms() -> u64 {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS)
+}
+
+fn configured_orchestrator_lease_ttl_ms() -> i64 {
+    std::env::var("BACCHUS_ORCHESTRATOR_LEASE_TTL_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(tasks::ORCHESTRATOR_LEASE_TTL_MS)
+}
+
+fn configured_orchestrator_lease_interval_ms() -> u64 {
+    std::env::var("BACCHUS_ORCHESTRATOR_LEASE_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_ORCHESTRATOR_LEASE_RENEW_INTERVAL_MS)
 }
 
 fn generate_run_id(prefix: &str) -> String {
@@ -129,6 +202,29 @@ fn spawn_agent_heartbeat_loop(
         .arg(task_id)
         .arg("--agent-id")
         .arg(agent_id)
+        .arg("--token")
+        .arg(token)
+        .arg("--interval-ms")
+        .arg(interval_ms.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn spawn_orchestrator_lease_loop(
+    run_id: &str,
+    token: &str,
+    interval_ms: u64,
+) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Command::new(exe)
+        .arg("session")
+        .arg("lease-loop")
+        .arg("--run-id")
+        .arg(run_id)
         .arg("--token")
         .arg(token)
         .arg("--interval-ms")
@@ -207,6 +303,44 @@ pub fn run_agent_heartbeat_loop(
     Ok("Agent heartbeat loop exited".to_string())
 }
 
+/// Internal long-running orchestrator leader lease renewer.
+pub fn run_orchestrator_lease_loop(
+    run_id: &str,
+    token: &str,
+    interval_ms: u64,
+) -> Result<String, String> {
+    let interval = Duration::from_millis(interval_ms.max(100));
+    let ttl_ms = configured_orchestrator_lease_ttl_ms();
+
+    loop {
+        let path = match session_path() {
+            Some(p) if p.exists() => p,
+            _ => break,
+        };
+
+        let session = match read_session(&path) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+
+        if session.mode != "orchestrator"
+            || session.run_id.as_deref() != Some(run_id)
+            || session.orchestrator_lease_token.as_deref() != Some(token)
+        {
+            break;
+        }
+
+        match tasks::try_acquire_orchestrator_lease(run_id, ttl_ms) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => break,
+        }
+
+        thread::sleep(interval);
+    }
+
+    Ok("Orchestrator lease loop exited".to_string())
+}
+
 /// Start a session
 pub fn start_session(
     mode: &str,
@@ -217,7 +351,10 @@ pub fn start_session(
     let root = find_workspace_root().ok_or("No workspace root found")?;
     let bacchus_dir = root.join(".bacchus");
     fs::create_dir_all(&bacchus_dir).map_err(|e| e.to_string())?;
-    let session_file = bacchus_dir.join("session.json");
+    let session_file = scoped_session_path().ok_or("No workspace root found")?;
+    if let Some(parent) = session_file.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
 
     let session = match mode {
         "agent" => {
@@ -232,14 +369,17 @@ pub fn start_session(
                 agent_id: agent_id.map(String::from).or(claim_owner),
                 run_id: Some(generate_run_id("agent")),
                 agent_heartbeat_token: None,
+                orchestrator_lease_token: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
         "orchestrator" => {
             let run_id = generate_run_id("orchestrator");
-            let acquired =
-                tasks::try_acquire_orchestrator_lease(&run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS)
-                    .map_err(|e| e.to_string())?;
+            let acquired = tasks::try_acquire_orchestrator_lease(
+                &run_id,
+                configured_orchestrator_lease_ttl_ms(),
+            )
+            .map_err(|e| e.to_string())?;
             if !acquired {
                 let details = describe_existing_orchestrator_lease()
                     .unwrap_or_else(|| "holder=unknown".to_string());
@@ -256,6 +396,7 @@ pub fn start_session(
                 agent_id: None,
                 run_id: Some(run_id),
                 agent_heartbeat_token: None,
+                orchestrator_lease_token: Some(generate_run_id("lease")),
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
@@ -268,6 +409,7 @@ pub fn start_session(
                 agent_id: Some(agent_id.to_string()),
                 run_id: Some(generate_run_id("architect")),
                 agent_heartbeat_token: None,
+                orchestrator_lease_token: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             }
         }
@@ -287,6 +429,12 @@ pub fn start_session(
         }
         return Err(e);
     }
+    // Keep legacy path in sync for default scope during migration.
+    if current_session_scope_id() == "default" {
+        if let Some(legacy) = legacy_session_path() {
+            let _ = write_session(&legacy, &session);
+        }
+    }
 
     let mut message = format!("Started {} session", mode);
     if mode == "agent" {
@@ -296,6 +444,19 @@ pub fn start_session(
                 message = format!("{} (heartbeat loop unavailable: {})", message, e);
             }
         }
+    } else if mode == "orchestrator" {
+        if let (Some(run_id), Some(token)) = (
+            session.run_id.as_deref(),
+            session.orchestrator_lease_token.as_deref(),
+        ) {
+            if let Err(e) = spawn_orchestrator_lease_loop(
+                run_id,
+                token,
+                configured_orchestrator_lease_interval_ms(),
+            ) {
+                message = format!("{} (lease loop unavailable: {})", message, e);
+            }
+        }
     }
 
     Ok(message)
@@ -303,59 +464,64 @@ pub fn start_session(
 
 /// Stop the session and clean up session-scoped handles
 pub fn stop_session() -> Result<String, String> {
-    if let Some(path) = session_path() {
-        if path.exists() {
-            let session = read_session(&path).ok();
+    if let Some(path) = session_path().filter(|p| p.exists()) {
+        let session = read_session(&path).ok();
 
-            if let Some(s) = session.as_ref() {
-                if s.mode == "orchestrator" {
-                    if let Some(run_id) = s.run_id.as_deref() {
-                        let _ = tasks::release_orchestrator_lease(run_id);
-                    }
+        if let Some(s) = session.as_ref() {
+            if s.mode == "orchestrator" {
+                if let Some(run_id) = s.run_id.as_deref() {
+                    let _ = tasks::release_orchestrator_lease(run_id);
                 }
             }
-
-            // Remove session file
-            match fs::remove_file(&path) {
-                Ok(_) => {}
-                Err(e) if e.kind() == ErrorKind::NotFound => {}
-                Err(e) => return Err(e.to_string()),
-            }
-
-            // Clear handles for this session
-            let handles_cleared = if let Some(sid) = session.as_ref().map(|s| s.started_at.clone())
-            {
-                handles::clear_session_handles(&sid).unwrap_or(0)
-            } else {
-                0
-            };
-
-            if handles_cleared > 0 {
-                return Ok(format!(
-                    "Session stopped. Cleared {} handle(s).",
-                    handles_cleared
-                ));
-            }
-            return Ok("Session stopped".to_string());
         }
+
+        // Remove session file
+        match fs::remove_file(&path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        // Remove legacy default scope file if present.
+        if current_session_scope_id() == "default" {
+            if let Some(legacy) = legacy_session_path() {
+                if legacy != path {
+                    let _ = fs::remove_file(&legacy);
+                }
+            }
+        }
+
+        // Clear handles for this session
+        let handles_cleared = if let Some(sid) = session.as_ref().map(|s| s.started_at.clone()) {
+            handles::clear_session_handles(&sid).unwrap_or(0)
+        } else {
+            0
+        };
+
+        if handles_cleared > 0 {
+            return Ok(format!(
+                "Session stopped. Cleared {} handle(s).",
+                handles_cleared
+            ));
+        }
+        return Ok("Session stopped".to_string());
     }
     Ok("No active session".to_string())
 }
 
 /// Get current session status
 pub fn session_status() -> Result<serde_json::Value, String> {
-    if let Some(path) = session_path() {
-        if path.exists() {
-            let session = read_session(&path)?;
-            return Ok(serde_json::json!({
-                "active": true,
-                "session": session,
-                "path": path.to_string_lossy()
-            }));
-        }
+    if let Some(path) = session_path().filter(|p| p.exists()) {
+        let session = read_session(&path)?;
+        return Ok(serde_json::json!({
+            "active": true,
+            "session": session,
+            "scope_id": current_session_scope_id(),
+            "path": path.to_string_lossy()
+        }));
     }
     Ok(serde_json::json!({
         "active": false,
+        "scope_id": current_session_scope_id(),
         "session": null
     }))
 }
@@ -483,20 +649,26 @@ fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         .as_deref()
         .unwrap_or(session.started_at.as_str());
 
-    let lease_acquired =
-        tasks::try_acquire_orchestrator_lease(run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS)
-            .unwrap_or(false);
-    if !lease_acquired {
-        let details =
-            describe_existing_orchestrator_lease().unwrap_or_else(|| "holder=unknown".to_string());
-        let _ = stop_session();
-        return HookCheckOutput {
-            decision: "approve".to_string(),
-            reason: format!(
-                "Another orchestrator leader lease is active ({}). Session cleared.",
-                details
-            ),
-        };
+    match tasks::try_acquire_orchestrator_lease(run_id, configured_orchestrator_lease_ttl_ms()) {
+        Ok(true) => {}
+        Ok(false) => {
+            let details = describe_existing_orchestrator_lease()
+                .unwrap_or_else(|| "holder=unknown".to_string());
+            let _ = stop_session();
+            return HookCheckOutput {
+                decision: "approve".to_string(),
+                reason: format!(
+                    "Another orchestrator leader lease is active ({}). Session cleared.",
+                    details
+                ),
+            };
+        }
+        Err(e) => {
+            return HookCheckOutput {
+                decision: "block".to_string(),
+                reason: format!("Failed to renew orchestrator lease: {}", e),
+            };
+        }
     }
 
     // Get workspace root for task lookup

@@ -319,20 +319,56 @@ pub fn reset_handle_counter() {
     HANDLE_COUNTER.store(1, Ordering::SeqCst);
 }
 
-/// Get current session ID from session.json if it exists
+/// Get current session ID from scoped session file if it exists
 fn get_current_session_id() -> Option<String> {
-    // Try to read session file to get a unique session identifier
+    // Try to read scoped session file first, then legacy path.
     let workspace_root = find_workspace_root()?;
-    let session_path = workspace_root.join(".bacchus/session.json");
+    let scope = current_session_scope_id();
+    let candidates = [
+        workspace_root
+            .join(".bacchus")
+            .join("sessions")
+            .join(format!("{}.json", scope)),
+        workspace_root.join(".bacchus/session.json"),
+    ];
 
-    if session_path.exists() {
-        // Use the started_at timestamp as session identifier
-        let content = std::fs::read_to_string(&session_path).ok()?;
-        let session: serde_json::Value = serde_json::from_str(&content).ok()?;
-        session.get("started_at")?.as_str().map(String::from)
-    } else {
-        None
+    for session_path in candidates {
+        if session_path.exists() {
+            let content = std::fs::read_to_string(&session_path).ok()?;
+            let session: serde_json::Value = serde_json::from_str(&content).ok()?;
+            if let Some(started_at) = session.get("started_at")?.as_str() {
+                return Some(started_at.to_string());
+            }
+        }
     }
+    None
+}
+
+fn current_session_scope_id() -> String {
+    const KEYS: [&str; 3] = [
+        "BACCHUS_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "CLAUDE_CONVERSATION_ID",
+    ];
+    for key in KEYS {
+        if let Ok(v) = std::env::var(key) {
+            let cleaned: String = v
+                .trim()
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            if !cleaned.is_empty() {
+                return cleaned;
+            }
+        }
+    }
+    "default".to_string()
 }
 
 /// Find workspace root (duplicated from session.rs to avoid circular deps)
