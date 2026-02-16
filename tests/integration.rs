@@ -830,6 +830,127 @@ tasks:
     }
 
     #[test]
+    fn test_default_scope_start_rejects_concurrent_agent_session() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
+             VALUES ('DEF-EPIC', 'Default Scope Epic', 'open', 'test', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('DEF-001', 'DEF-EPIC', 'Default A', 1, 'in_progress', 'generic', 'generic', 'agent-a', ?1, ?1, ?2, ?2)",
+            rusqlite::params![now, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, created_at, updated_at)
+             VALUES ('DEF-002', 'DEF-EPIC', 'Default B', 2, 'in_progress', 'generic', 'generic', 'agent-b', ?1, ?1, ?2, ?2)",
+            rusqlite::params![now, now],
+        )
+        .unwrap();
+
+        let first = Command::new(bacchus_bin())
+            .args([
+                "session",
+                "start",
+                "agent",
+                "--task-id",
+                "DEF-001",
+                "--agent-id",
+                "agent-a",
+            ])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(first.status.success());
+
+        let second = Command::new(bacchus_bin())
+            .args([
+                "session",
+                "start",
+                "agent",
+                "--task-id",
+                "DEF-002",
+                "--agent-id",
+                "agent-b",
+            ])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(!second.status.success());
+        let stderr = String::from_utf8_lossy(&second.stderr);
+        assert!(
+            stderr.contains("BACCHUS_SESSION_ID"),
+            "Expected default-scope collision guidance, got: {}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn test_session_prune_removes_stale_scope_file() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus/sessions")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let stale_started = "2000-01-01T00:00:00Z";
+        let stale_session = serde_json::json!({
+            "mode": "agent",
+            "task_id": "STALE-SCOPE",
+            "started_at": stale_started
+        });
+        fs::write(
+            repo_path.join(".bacchus/sessions/stale-scope.json"),
+            serde_json::to_string_pretty(&stale_session).unwrap(),
+        )
+        .unwrap();
+
+        let prune_output = Command::new(bacchus_bin())
+            .args(["session", "prune", "--minutes", "5"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .env("BACCHUS_SESSION_ID", "active-scope")
+            .output()
+            .unwrap();
+        assert!(prune_output.status.success());
+        let prune_json: Value = serde_json::from_slice(&prune_output.stdout).unwrap();
+        assert!(prune_json["removed_scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some("stale-scope")));
+    }
+
+    #[test]
     fn test_agent_session_background_heartbeat_updates_claim() {
         let temp = TempDir::new().unwrap();
         let db_path = temp.path().join("test.db");

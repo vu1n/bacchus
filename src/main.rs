@@ -300,6 +300,9 @@ fn main() {
                 let result = tools::check_session();
                 Ok(serde_json::to_string_pretty(&result).unwrap())
             }
+            SessionCommands::Prune { minutes } => tools::prune_sessions(minutes)
+                .map(|v| serde_json::to_string_pretty(&v).unwrap())
+                .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
             SessionCommands::HeartbeatLoop {
                 task_id,
                 agent_id,

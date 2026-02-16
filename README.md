@@ -360,6 +360,7 @@ bacchus session start orchestrator --max-concurrent 3
 | `session stop` | Clear session, allow exit |
 | `session status` | Show current session state |
 | `session check` | Check if exit should be blocked (for hooks) |
+| `session prune [--minutes N]` | Remove stale scoped sessions and orphaned expired leases |
 
 ### Epic Management
 
@@ -568,6 +569,9 @@ bacchus session status
 
 # Clear session to exit
 bacchus session stop
+
+# Cleanup stale scoped session files
+bacchus session prune --minutes 240
 ```
 
 Session state is scoped per CLI/session identity in `.bacchus/sessions/<scope>.json`.

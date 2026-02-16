@@ -52,6 +52,7 @@ bacchus task list --ready
 | `bacchus session start agent --task-id X [--agent-id Y]` | Start agent session (heartbeat loop starts when owner is known) |
 | `bacchus session start orchestrator` | Start orchestrator session |
 | `bacchus session stop` | Clear session |
+| `bacchus session prune [--minutes N]` | Remove stale scoped sessions and orphaned expired leases |
 
 ## Handle Commands (Token-Saving)
 
@@ -253,6 +254,9 @@ bacchus session status
 
 # Clear session to allow exit
 bacchus session stop
+
+# Cleanup stale scoped session files
+bacchus session prune --minutes 240
 ```
 
 When running multiple agents from the same repo root, set `BACCHUS_SESSION_ID` per agent/session to avoid session-state collisions.

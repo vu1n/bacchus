@@ -235,6 +235,13 @@ pub enum SessionCommands {
     /// Check if session should block exit (for stop hook)
     Check,
 
+    /// Remove stale scoped session files and clean orphaned orchestrator leases
+    Prune {
+        /// Session age threshold in minutes
+        #[arg(long, default_value = "240")]
+        minutes: i64,
+    },
+
     /// Internal: background loop to keep an agent claim heartbeat fresh.
     #[command(hide = true)]
     HeartbeatLoop {

@@ -177,6 +177,37 @@ fn write_session(path: &Path, session: &Session) -> Result<(), String> {
     fs::write(path, json).map_err(|e| e.to_string())
 }
 
+fn session_age_minutes(session: &Session, path: &Path) -> Option<i64> {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&session.started_at) {
+        let started_ms = dt.timestamp_millis();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        return Some(((now_ms - started_ms).max(0)) / 60000);
+    }
+
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let now = std::time::SystemTime::now();
+    let age_secs = now.duration_since(modified).ok()?.as_secs() as i64;
+    Some(age_secs / 60)
+}
+
+fn sessions_dir() -> Option<std::path::PathBuf> {
+    find_workspace_root().map(|root| root.join(".bacchus").join("sessions"))
+}
+
+fn same_default_scope_identity(existing: &Session, new_session: &Session) -> bool {
+    if existing.mode != new_session.mode {
+        return false;
+    }
+    if existing.task_id != new_session.task_id {
+        return false;
+    }
+    match (&existing.agent_id, &new_session.agent_id) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
 fn describe_existing_orchestrator_lease() -> Option<String> {
     let lease = tasks::get_orchestrator_lease().ok().flatten()?;
     let now = chrono::Utc::now().timestamp_millis();
@@ -186,6 +217,97 @@ fn describe_existing_orchestrator_lease() -> Option<String> {
         lease.holder_id,
         remaining_ms / 1000
     ))
+}
+
+/// Remove stale scoped session files and clean expired orphaned leader leases.
+pub fn prune_sessions(minutes: i64) -> Result<serde_json::Value, String> {
+    let threshold = minutes.max(1);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let current_scope = current_session_scope_id();
+    let mut removed_scopes: Vec<String> = Vec::new();
+    let mut kept_scopes: Vec<String> = Vec::new();
+    let mut released_leases: Vec<String> = Vec::new();
+
+    if let Some(dir) = sessions_dir() {
+        if dir.exists() {
+            let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let scope = match path.file_stem().and_then(|s| s.to_str()) {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+                if scope == current_scope {
+                    kept_scopes.push(scope);
+                    continue;
+                }
+
+                let session = match read_session(&path) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        // Best effort cleanup for malformed stale files.
+                        let _ = fs::remove_file(&path);
+                        removed_scopes.push(scope);
+                        continue;
+                    }
+                };
+
+                let age = session_age_minutes(&session, &path).unwrap_or(0);
+                if age >= threshold {
+                    if session.mode == "orchestrator" {
+                        if let Some(run_id) = session.run_id.as_deref() {
+                            let _ = tasks::release_orchestrator_lease(run_id);
+                            released_leases.push(run_id.to_string());
+                        }
+                    }
+                    let _ = fs::remove_file(&path);
+                    removed_scopes.push(scope);
+                } else {
+                    kept_scopes.push(scope);
+                }
+            }
+        }
+    }
+
+    // Cleanup an expired orphaned lease not referenced by any remaining session file.
+    let mut active_run_ids = std::collections::HashSet::new();
+    if let Some(dir) = sessions_dir() {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if let Ok(session) = read_session(&path) {
+                    if session.mode == "orchestrator" {
+                        if let Some(run_id) = session.run_id {
+                            active_run_ids.insert(run_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(Some(lease)) = tasks::get_orchestrator_lease() {
+        if lease.lease_expires_at < now_ms
+            && !active_run_ids.contains(&lease.holder_id)
+            && tasks::release_orchestrator_lease(&lease.holder_id).is_ok()
+        {
+            released_leases.push(lease.holder_id);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "scope_id": current_scope,
+        "threshold_minutes": threshold,
+        "removed_scopes": removed_scopes,
+        "kept_scopes": kept_scopes,
+        "released_orchestrator_leases": released_leases
+    }))
 }
 
 fn spawn_agent_heartbeat_loop(
@@ -420,6 +542,17 @@ pub fn start_session(
             ))
         }
     };
+
+    if current_session_scope_id() == "default" && session_file.exists() {
+        if let Ok(existing) = read_session(&session_file) {
+            if !same_default_scope_identity(&existing, &session) {
+                return Err(
+                    "Default session scope is already occupied. Set BACCHUS_SESSION_ID to run concurrent sessions."
+                        .to_string(),
+                );
+            }
+        }
+    }
 
     if let Err(e) = write_session(&session_file, &session) {
         if session.mode == "orchestrator" {
