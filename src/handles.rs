@@ -313,29 +313,8 @@ pub fn clear_session_handles(session_id: &str) -> Result<usize> {
     })
 }
 
-/// Clear handles without session (orphaned handles)
-pub fn clear_orphaned_handles() -> Result<usize> {
-    with_db(|conn| {
-        // Get handles without session
-        let mut stmt = conn.prepare("SELECT handle FROM handles WHERE session_id IS NULL")?;
-        let handles: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(stmt);
-
-        // Delete data for these handles
-        for handle in &handles {
-            conn.execute("DELETE FROM handle_data WHERE handle = ?1", [handle])?;
-        }
-
-        // Delete handles
-        let count = conn.execute("DELETE FROM handles WHERE session_id IS NULL", [])?;
-        Ok(count)
-    })
-}
-
 /// Reset the handle counter (for testing)
+#[cfg(test)]
 pub fn reset_handle_counter() {
     HANDLE_COUNTER.store(1, Ordering::SeqCst);
 }

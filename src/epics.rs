@@ -209,83 +209,6 @@ pub fn list_epics(status: Option<EpicStatus>) -> Result<Vec<Epic>, EpicsError> {
     .map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))
 }
 
-/// Update an epic's status
-pub fn update_epic_status(epic_id: &str, new_status: EpicStatus) -> Result<Epic, EpicsError> {
-    let now = chrono::Utc::now().timestamp_millis();
-
-    with_db(|conn| {
-        // Get current epic to validate transition
-        let current: Epic = conn
-            .query_row(
-                "SELECT id, title, description, status, created_by, created_at, updated_at
-             FROM epics WHERE id = ?1",
-                [epic_id],
-                |row| {
-                    let status_str: String = row.get(3)?;
-                    Ok(Epic {
-                        id: row.get(0)?,
-                        title: row.get(1)?,
-                        description: row.get(2)?,
-                        status: EpicStatus::from_str(&status_str).unwrap_or(EpicStatus::Open),
-                        created_by: row.get(4)?,
-                        created_at: row.get(5)?,
-                        updated_at: row.get(6)?,
-                    })
-                },
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(1),
-                    Some(format!("Epic not found: {}", epic_id)),
-                ),
-                e => e,
-            })?;
-
-        // Validate status transition
-        let valid_transition = match (current.status, new_status) {
-            (EpicStatus::Open, EpicStatus::Planning) => true,
-            (EpicStatus::Planning, EpicStatus::Active) => true,
-            (EpicStatus::Active, EpicStatus::Closed) => true,
-            // Allow manual override for any transition (orchestrator may need to reset)
-            _ => true,
-        };
-
-        if !valid_transition {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!(
-                    "Invalid status transition: {} -> {}",
-                    current.status.as_str(),
-                    new_status.as_str()
-                )),
-            ));
-        }
-
-        conn.execute(
-            "UPDATE epics SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            params![new_status.as_str(), now, epic_id],
-        )?;
-
-        Ok(Epic {
-            status: new_status,
-            updated_at: now,
-            ..current
-        })
-    })
-    .map_err(|e: rusqlite::Error| {
-        if e.to_string().contains("Epic not found") {
-            EpicsError::NotFound(epic_id.to_string())
-        } else if e.to_string().contains("Invalid status transition") {
-            EpicsError::InvalidTransition {
-                from: "unknown".to_string(),
-                to: new_status.as_str().to_string(),
-            }
-        } else {
-            EpicsError::DbError(e.to_string())
-        }
-    })
-}
-
 /// Assign an epic to an architect agent for breakdown
 ///
 /// This atomically:
@@ -386,71 +309,6 @@ pub fn assign_epic(epic_id: &str, architect_agent: &str) -> Result<Epic, EpicsEr
             EpicsError::DbError(msg)
         }
     })
-}
-
-/// Enforce epic lifecycle transitions (called by orchestrator)
-///
-/// - planning -> active: when at least one task exists with status != draft
-/// - active -> closed: when all tasks are closed or deleted
-pub fn enforce_epic_lifecycle() -> Result<Vec<(String, EpicStatus, EpicStatus)>, EpicsError> {
-    let now = chrono::Utc::now().timestamp_millis();
-
-    with_db(|conn| {
-        let mut transitions = Vec::new();
-
-        // planning -> active when tasks exist (not draft)
-        {
-            let mut stmt = conn.prepare(
-                "SELECT id FROM epics WHERE status = 'planning'
-                 AND id IN (
-                     SELECT DISTINCT epic_id FROM tasks
-                     WHERE status IN ('open', 'in_progress', 'blocked', 'closed')
-                     AND deleted_at IS NULL
-                 )",
-            )?;
-
-            let epic_ids: Vec<String> = stmt
-                .query_map([], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            for epic_id in epic_ids {
-                conn.execute(
-                    "UPDATE epics SET status = 'active', updated_at = ?1 WHERE id = ?2",
-                    params![now, epic_id],
-                )?;
-                transitions.push((epic_id, EpicStatus::Planning, EpicStatus::Active));
-            }
-        }
-
-        // active -> closed when all tasks are closed
-        {
-            let mut stmt = conn.prepare(
-                "SELECT id FROM epics WHERE status = 'active'
-                 AND id NOT IN (
-                     SELECT DISTINCT epic_id FROM tasks
-                     WHERE status IN ('draft', 'open', 'in_progress', 'blocked')
-                     AND deleted_at IS NULL
-                 )",
-            )?;
-
-            let epic_ids: Vec<String> = stmt
-                .query_map([], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            for epic_id in epic_ids {
-                conn.execute(
-                    "UPDATE epics SET status = 'closed', updated_at = ?1 WHERE id = ?2",
-                    params![now, epic_id],
-                )?;
-                transitions.push((epic_id, EpicStatus::Active, EpicStatus::Closed));
-            }
-        }
-
-        Ok(transitions)
-    })
-    .map_err(|e: rusqlite::Error| EpicsError::DbError(e.to_string()))
 }
 
 /// Get epic with task counts
@@ -580,25 +438,6 @@ mod tests {
 
         let open_epics = list_epics(Some(EpicStatus::Open)).unwrap();
         assert_eq!(open_epics.len(), 3);
-
-        crate::db::close_db();
-    }
-
-    #[test]
-    fn test_update_epic_status() {
-        let _dir = setup_test_db();
-
-        let input = CreateEpicInput {
-            id: "EPIC-003".to_string(),
-            title: "Test Epic".to_string(),
-            description: None,
-            created_by: "human".to_string(),
-        };
-
-        create_epic(input).unwrap();
-
-        let updated = update_epic_status("EPIC-003", EpicStatus::Planning).unwrap();
-        assert_eq!(updated.status, EpicStatus::Planning);
 
         crate::db::close_db();
     }

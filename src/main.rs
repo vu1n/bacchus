@@ -419,9 +419,9 @@ fn main() {
                 |v| {
                     let kind_match = kind
                         .as_ref()
-                        .map_or(true, |k| v["kind"].as_str() == Some(k.as_str()));
-                    let file_match = file.as_ref().map_or(true, |f| {
-                        v["file"].as_str().map_or(false, |vf| {
+                        .is_none_or(|k| v["kind"].as_str() == Some(k.as_str()));
+                    let file_match = file.as_ref().is_none_or(|f| {
+                        v["file"].as_str().is_some_and(|vf| {
                             if f.contains('*') {
                                 let pattern = f.replace('*', "");
                                 vf.contains(&pattern)
@@ -536,10 +536,10 @@ fn find_workspace_root() -> Option<PathBuf> {
 
         // If we hit .git, we are likely at root, UNLESS it's a worktree .git file
         let git_path = current.join(".git");
+        if git_path.exists() && git_path.is_dir() {
+            return Some(current);
+        }
         if git_path.exists() {
-            if git_path.is_dir() {
-                return Some(current);
-            }
             // If .git is a file, it's a submodule or worktree.
             // If worktree, we should keep going up to find the real root.
             // But we might be in a submodule which IS a root for its own context?

@@ -94,6 +94,7 @@ impl Default for TasksFile {
 }
 
 /// Resolved footprint with actual symbol matches
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedFootprint {
     /// Matched symbol fq_names
@@ -473,52 +474,10 @@ pub fn load_tasks(workspace_root: &Path) -> Result<Vec<Task>, TasksError> {
 // Footprint Helpers
 // ============================================================================
 
-/// Resolve a footprint pattern against the symbol index
-///
-/// Supports:
-/// - Exact symbol: "src/auth/handler.rs::AuthHandler"
-/// - File glob: "src/auth/jwt.rs::*" (all symbols in file)
-pub fn resolve_footprint(footprint: &TaskFootprint) -> ResolvedFootprint {
-    let mut resolved = ResolvedFootprint::default();
-
-    // Add creates as-is
-    for path in &footprint.creates {
-        resolved.creates.insert(path.clone());
-    }
-
-    // Resolve modifies patterns against symbol index
-    for pattern in &footprint.modifies {
-        if let Some((file_part, symbol_part)) = pattern.rsplit_once("::") {
-            if symbol_part == "*" {
-                // File glob - get all symbols in file
-                if let Ok(symbols) = get_symbols_in_file(file_part) {
-                    for sym in symbols {
-                        resolved.symbols.insert(sym);
-                    }
-                }
-                // Even if no symbols found, track the file pattern
-                resolved.symbols.insert(pattern.clone());
-            } else {
-                // Exact symbol
-                resolved.symbols.insert(pattern.clone());
-            }
-        } else {
-            // No :: - treat as file path, get all symbols
-            if let Ok(symbols) = get_symbols_in_file(pattern) {
-                for sym in symbols {
-                    resolved.symbols.insert(sym);
-                }
-            }
-            resolved.symbols.insert(format!("{}::*", pattern));
-        }
-    }
-
-    resolved
-}
-
 /// Check if two footprints overlap
 ///
 /// Handles wildcards: `file::*` overlaps with any `file::symbol`
+#[cfg(test)]
 pub fn footprints_overlap(a: &ResolvedFootprint, b: &ResolvedFootprint) -> bool {
     // Check exact symbol overlap
     if !a.symbols.is_disjoint(&b.symbols) {
@@ -559,6 +518,7 @@ pub fn footprints_overlap(a: &ResolvedFootprint, b: &ResolvedFootprint) -> bool 
 }
 
 /// Check if two symbol patterns match (handles wildcards and bare file paths)
+#[cfg(test)]
 fn symbols_match(a: &str, b: &str) -> bool {
     // Exact match already handled by disjoint check
     if a == b {
@@ -591,6 +551,7 @@ fn symbols_match(a: &str, b: &str) -> bool {
 }
 
 /// Check if a file path matches a symbol pattern
+#[cfg(test)]
 fn symbols_match_file(file_path: &str, symbol: &str) -> bool {
     if let Some((file, _)) = symbol.rsplit_once("::") {
         file == file_path
@@ -598,73 +559,6 @@ fn symbols_match_file(file_path: &str, symbol: &str) -> bool {
         // Symbol without :: is treated as file path
         symbol == file_path
     }
-}
-
-/// Get symbols in a specific file from the index
-fn get_symbols_in_file(file_path: &str) -> Result<Vec<String>, TasksError> {
-    with_db(|conn| get_symbols_in_file_with_conn(conn, file_path))
-        .map_err(|e| TasksError::DbError(e.to_string()))
-}
-
-/// Get symbols in a specific file (internal, takes connection to avoid deadlock)
-fn get_symbols_in_file_with_conn(
-    conn: &rusqlite::Connection,
-    file_path: &str,
-) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT fq_name FROM symbols WHERE file = ?1")?;
-
-    let symbols: Vec<String> = stmt
-        .query_map([file_path], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(symbols)
-}
-
-/// Get active footprints from all current claims
-#[allow(dead_code)]
-fn get_active_footprints() -> Result<ResolvedFootprint, TasksError> {
-    with_db(|conn| {
-        let mut resolved = ResolvedFootprint::default();
-
-        let mut stmt = conn.prepare(
-            "SELECT pattern_type, file_path, symbol, is_wildcard
-             FROM task_footprints tf
-             JOIN tasks t ON t.id = tf.task_id
-             WHERE t.status = 'in_progress' AND t.deleted_at IS NULL",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i32>(3)?,
-            ))
-        })?;
-
-        for row_result in rows {
-            if let Ok((pattern_type, file_path, symbol, is_wildcard)) = row_result {
-                match pattern_type.as_str() {
-                    "modifies" => {
-                        let pattern = if is_wildcard == 1 {
-                            format!("{}::*", file_path)
-                        } else {
-                            format!("{}::{}", file_path, symbol)
-                        };
-                        resolved.symbols.insert(pattern);
-                    }
-                    "creates" => {
-                        resolved.creates.insert(file_path);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(resolved)
-    })
-    .map_err(|e| TasksError::DbError(e.to_string()))
 }
 
 // ============================================================================
@@ -1279,6 +1173,7 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
 }
 
 /// Release a SQLite task (mark as closed, clear claim)
+#[cfg(test)]
 pub fn release_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -1427,36 +1322,6 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
     .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
 }
 
-/// Soft-delete a SQLite task
-pub fn soft_delete_sqlite_task(task_id: &str) -> Result<(), TasksError> {
-    let now = chrono::Utc::now().timestamp_millis();
-
-    with_db(|conn| {
-        // First close the task if not already closed
-        conn.execute(
-            "UPDATE tasks SET status = 'closed', claimed_by = NULL, claimed_at = NULL, claimed_heartbeat_at = NULL,
-             updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
-            params![now, task_id],
-        )?;
-
-        // Then set deleted_at (trigger enforces closed + unclaimed invariant)
-        let affected = conn.execute(
-            "UPDATE tasks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
-            params![now, task_id],
-        )?;
-
-        if affected == 0 {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!("Task not found or already deleted: {}", task_id)),
-            ));
-        }
-
-        Ok(())
-    })
-    .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
-}
-
 // ============================================================================
 // SQLite Task Operations
 // ============================================================================
@@ -1474,31 +1339,6 @@ pub fn get_sqlite_task(task_id: &str) -> Result<SqliteTask, TasksError> {
         rusqlite::Error::QueryReturnedNoRows => TasksError::TaskNotFound(task_id.to_string()),
         e => TasksError::DbError(e.to_string()),
     })
-}
-
-/// Update a SQLite task's status
-pub fn update_sqlite_task_status(
-    task_id: &str,
-    status: SqliteTaskStatus,
-) -> Result<(), TasksError> {
-    let now = chrono::Utc::now().timestamp_millis();
-
-    with_db(|conn| {
-        let affected = conn.execute(
-            "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
-            params![status.as_str(), now, task_id],
-        )?;
-
-        if affected == 0 {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!("Task not found: {}", task_id)),
-            ));
-        }
-
-        Ok(())
-    })
-    .map_err(|e| TasksError::DbError(e.to_string()))
 }
 
 /// Reset a task to a status and clear claim metadata
@@ -1950,28 +1790,6 @@ pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
         let sql = format!(
             "SELECT {} FROM tasks
              WHERE status = 'ready_for_release'
-               AND deleted_at IS NULL
-             ORDER BY priority, created_at",
-            TASK_SELECT_COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql)?;
-
-        let tasks = stmt
-            .query_map([], map_sqlite_task_row)?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok(tasks)
-    })
-    .map_err(|e| TasksError::DbError(e.to_string()))
-}
-
-/// Get tasks needing resolution (for monitoring/alerting)
-pub fn get_tasks_needing_resolution() -> Result<Vec<SqliteTask>, TasksError> {
-    with_db(|conn| {
-        let sql = format!(
-            "SELECT {} FROM tasks
-             WHERE status = 'needs_resolution'
                AND deleted_at IS NULL
              ORDER BY priority, created_at",
             TASK_SELECT_COLUMNS

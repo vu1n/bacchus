@@ -25,7 +25,6 @@ pub fn get_workspaces_dir(workspace_root: &Path) -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceInfo {
-    pub task_id: String,
     pub path: PathBuf,
 }
 
@@ -41,12 +40,8 @@ pub enum WorkspaceError {
     JjError(String),
     #[error("Workspace already exists: {0}")]
     AlreadyExists(String),
-    #[error("Workspace not found: {0}")]
-    NotFound(String),
     #[error("No workspace named: {0}")]
     NoWorkspaceNamed(String),
-    #[error("Workspace has conflicts: {files:?}")]
-    HasConflicts { files: Vec<String> },
     #[error("Single commit required: workspace {0} has {1} commits above main")]
     MultipleCommits(String, usize),
     #[error("No commits: workspace {0} has no commits above main")]
@@ -157,7 +152,6 @@ pub fn create_workspace(
     )?;
 
     Ok(WorkspaceInfo {
-        task_id: task_id.to_string(),
         path: workspace_path,
     })
 }
@@ -186,17 +180,6 @@ pub fn remove_workspace(
 // ============================================================================
 // Workspace Status & Validation
 // ============================================================================
-
-/// Check if a workspace is registered in jj (exact match)
-pub fn workspace_exists(workspace_root: &Path, task_id: &str) -> Result<bool, WorkspaceError> {
-    validate_task_id(task_id)?;
-
-    let workspace_list = run_jj(
-        workspace_root,
-        &["workspace", "list", "--template", "name ++ \"\\n\""],
-    )?;
-    Ok(workspace_list.lines().any(|name| name.trim() == task_id))
-}
 
 /// Get the working copy commit ID for a workspace
 pub fn get_workspace_commit(

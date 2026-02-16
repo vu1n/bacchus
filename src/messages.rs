@@ -76,12 +76,15 @@ pub struct SendMessageInput {
 }
 
 /// Constants for message processing
+#[cfg(test)]
 pub const PROCESSING_TIMEOUT_MS: i64 = 300_000; // 5 minutes
+#[cfg(test)]
 pub const MAX_ATTEMPTS: i32 = 3;
 
 /// Errors that can occur when working with messages
 #[derive(Debug, Error)]
 pub enum MessagesError {
+    #[cfg(test)]
     #[error("Message not found: {0}")]
     NotFound(i64),
 
@@ -136,6 +139,7 @@ pub fn send_message(input: SendMessageInput) -> Result<AgentMessage, MessagesErr
 ///
 /// Returns up to `limit` messages, marking them as 'processing'.
 /// Uses atomic UPDATE ... WHERE to prevent race conditions.
+#[cfg(test)]
 pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -229,6 +233,7 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
 }
 
 /// Mark a message as processed
+#[cfg(test)]
 pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -236,39 +241,6 @@ pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesErr
         let affected = conn.execute(
             "UPDATE agent_messages
              SET status = 'processed', processed_at = ?1, processing_by = NULL, locked_at = NULL
-             WHERE id = ?2 AND processing_by = ?3",
-            params![now, message_id, agent_id],
-        )?;
-
-        if affected == 0 {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!(
-                    "Message {} not found or not owned by {}",
-                    message_id, agent_id
-                )),
-            ));
-        }
-
-        Ok(())
-    })
-    .map_err(|e: rusqlite::Error| {
-        if e.to_string().contains("not found or not owned") {
-            MessagesError::NotFound(message_id)
-        } else {
-            MessagesError::DbError(e.to_string())
-        }
-    })
-}
-
-/// Mark a message as failed
-pub fn mark_failed(message_id: i64, agent_id: &str) -> Result<(), MessagesError> {
-    let now = chrono::Utc::now().timestamp_millis();
-
-    with_db(|conn| {
-        let affected = conn.execute(
-            "UPDATE agent_messages
-             SET status = 'failed', processed_at = ?1, processing_by = NULL, locked_at = NULL
              WHERE id = ?2 AND processing_by = ?3",
             params![now, message_id, agent_id],
         )?;
@@ -362,6 +334,7 @@ pub fn list_messages(
 /// - Marked as 'failed' if attempts >= MAX_ATTEMPTS
 ///
 /// Returns (requeued_count, failed_count)
+#[cfg(test)]
 pub fn reclaim_stale_messages() -> Result<(usize, usize), MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
     let timeout_threshold = now - PROCESSING_TIMEOUT_MS;

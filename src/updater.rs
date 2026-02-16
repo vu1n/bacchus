@@ -19,7 +19,7 @@ struct GitHubRelease {
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     #[error("HTTP request failed: {0}")]
-    HttpError(#[from] ureq::Error),
+    HttpError(#[from] Box<ureq::Error>),
 
     #[error("Failed to parse JSON: {0}")]
     JsonError(#[from] serde_json::Error),
@@ -43,7 +43,8 @@ pub fn check_for_updates() -> UpdateResult<UpdateInfo> {
 
     let release: GitHubRelease = ureq::get(&url)
         .set("User-Agent", "bacchus")
-        .call()?
+        .call()
+        .map_err(|e| UpdateError::HttpError(Box::new(e)))?
         .into_json()?;
 
     let latest_version = release.tag_name.trim_start_matches('v');
@@ -123,7 +124,8 @@ pub fn self_update() -> UpdateResult<String> {
     println!("Downloading from: {}", download_url);
     let response = ureq::get(&download_url)
         .set("User-Agent", "bacchus")
-        .call()?;
+        .call()
+        .map_err(|e| UpdateError::HttpError(Box::new(e)))?;
 
     let mut reader = response.into_reader();
     let mut temp_file = fs::File::create(&temp_path)?;

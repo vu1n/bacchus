@@ -35,18 +35,6 @@ impl EventType {
             EventType::Reviewed => "reviewed",
         }
     }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "started" => Some(EventType::Started),
-            "completed" => Some(EventType::Completed),
-            "failed" => Some(EventType::Failed),
-            "blocked" => Some(EventType::Blocked),
-            "rework" => Some(EventType::Rework),
-            "reviewed" => Some(EventType::Reviewed),
-            _ => None,
-        }
-    }
 }
 
 /// A recorded metric event
