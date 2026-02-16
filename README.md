@@ -68,6 +68,23 @@ Bacchus coordinates multi-agent work through a **plan → orchestrate → execut
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## Swarm Methodology
+
+Bacchus runs a deterministic swarm loop:
+
+1. **Plan** - break goal into atomic tasks with dependencies and footprints
+2. **Admit** - only tasks that are dependency-clear and non-overlapping become `ready`
+3. **Execute** - workers claim one task each in isolated jj workspaces
+4. **Reconcile** - orchestrator merges ready work, reopens failed/stale work, resolves conflicts via `needs_resolution`
+5. **Measure** - `bacchus eval` reports throughput plus worker-reliability signals
+
+Swarm safety comes from hard invariants:
+
+- **Single-task ownership** via task claims (`claimed_by`, heartbeat)
+- **Leader fencing** via orchestrator lease (one orchestrator run controls scheduling)
+- **Workspace isolation** (one jj workspace per task)
+- **Failure recovery** (stale worker detection, task reopen, optional stale PID kill)
+
 ### How to Run
 
 Ralph mode is the default recommendation (permissioned, auditable runs):
@@ -107,9 +124,59 @@ Claude will automatically plan the work, import tasks, and spawn agents with app
 - **Orchestrator**: Spawns agents, monitors progress, handles merges
 - **Agent**: Works on a single task in an isolated workspace (with type-specific archetype)
 
+## Agentic Quick Start (Paste Into Your LLM)
+
+Copy/paste this and replace `<GOAL>`:
+
+```text
+Use bacchus to implement: <GOAL>
+
+Operating mode:
+- Use Ralph mode by default (no --dangerously-skip-permissions).
+- Keep sessions active; do not exit while bacchus session check blocks.
+
+Execution contract:
+1) Ensure jj is initialized for this repo (colocated with git if needed).
+2) Create/update an epic and task plan in .bacchus/tasks.yaml (atomic tasks, dependencies, footprints, archetypes).
+3) Import tasks into SQLite and verify ready queue.
+4) Start orchestrator session with max concurrency 3.
+5) Use bacchus session spawn-workers --dry-run first, then launch workers.
+6) Continuously process releases and recover stale/failed workers.
+7) Finish when all tasks are closed or explicitly blocked, then summarize outcomes and risks.
+
+Required commands to use:
+- bacchus task import --epic-id <EPIC>
+- bacchus task list --ready
+- bacchus session start orchestrator --max-concurrent 3
+- bacchus session spawn-workers --count 3
+- bacchus process-releases
+- bacchus eval --days 7
+```
+
 ## Quickstart Guide
 
 This guide walks through setting up Bacchus for a multi-agent workflow.
+
+### Step 0: Fast Initialization Check
+
+```bash
+cd your-project
+
+# One-shot bootstrap (recommended)
+bacchus init --epic-id AUTH --epic-title "Authentication"
+
+# Initialize jj once (if repo is git-only today)
+if ! jj root >/dev/null 2>&1; then
+  jj git init --colocate
+  jj config set --repo user.name "Your Name"
+  jj config set --repo user.email "you@example.com"
+  jj bookmark create main -r @
+  jj describe -m "Initialize jj for bacchus"
+  jj new
+fi
+```
+
+`bacchus init` is idempotent: it creates `.bacchus/tasks.yaml` if missing, bootstraps jj unless `--skip-jj`, and can create an initial epic.
 
 ### Step 1: Initialize Your Repository
 
@@ -337,6 +404,7 @@ bacchus session spawn-workers --count 3
 
 | Command | Description |
 |---------|-------------|
+| `init [--skip-jj] [--force-tasks] [--epic-id X --epic-title Y]` | Bootstrap bacchus in the current repo (jj + tasks template + optional epic) |
 | `next <agent_id>` | Get next ready task, create workspace, claim it |
 | `claim <task_id> <agent_id> [--force]` | Claim specific task (must be ready unless --force) |
 | `heartbeat <task_id> <agent_id>` | Refresh task claim lease heartbeat |

@@ -261,7 +261,8 @@ main() {
         echo ""
         info "Usage:"
         echo "  - Ask Claude to 'use bacchus to parallelize this work'"
-        echo "  - Or run 'bacchus task init' to create a task file"
+        echo "  - In a repo, run 'bacchus init --epic-id MY-EPIC' for one-shot bootstrap"
+        echo "  - Or run 'bacchus task init' to create a task file only"
         echo ""
         "${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || true
     else

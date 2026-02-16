@@ -192,6 +192,23 @@ fn main() {
             .map(|r| serde_json::to_string_pretty(&r).unwrap())
             .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
 
+        Commands::Init {
+            skip_jj,
+            force_tasks,
+            epic_id,
+            epic_title,
+        } => tools::init_workspace(
+            &workspace_root,
+            tools::InitOptions {
+                skip_jj,
+                force_tasks,
+                epic_id: epic_id.as_deref(),
+                epic_title: epic_title.as_deref(),
+            },
+        )
+        .map(|r| serde_json::to_string_pretty(&r).unwrap())
+        .map_err(|e| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e))),
+
         // ====================================================================
         // Symbol Commands
         // ====================================================================
@@ -927,11 +944,38 @@ fn get_status() -> rusqlite::Result<serde_json::Value> {
 const WORKFLOW_DOC: &str = r#"
 # Bacchus Coordination Protocol
 
+## Swarm Methodology
+
+Control loop:
+1. Plan tasks with dependencies/footprints
+2. Admit only ready non-overlapping tasks
+3. Execute in isolated jj workspaces
+4. Reconcile releases and stale/failed workers
+5. Measure with eval metrics
+
+## Initialization
+
+Run once per repo:
+
+```bash
+if ! jj root >/dev/null 2>&1; then
+  jj git init --colocate
+  jj config set --repo user.name "Your Name"
+  jj config set --repo user.email "you@example.com"
+  jj bookmark create main -r @
+  jj describe -m "Initialize jj for bacchus"
+  jj new
+fi
+```
+
 ## Task Management
 
 Tasks are defined in `.bacchus/tasks.yaml`:
 
 ```bash
+# One-shot bootstrap (jj + .bacchus/tasks.yaml, optional epic)
+bacchus init
+
 # Initialize tasks.yaml template
 bacchus task init
 
@@ -1072,4 +1116,18 @@ bacchus review <task_id> --build-cmd "cargo build" --test-cmd "cargo test -q"
 ```
 
 Footprint review is symbol-aware: changed hunks must fall within declared symbol spans.
+
+## Prompt Starter
+
+Paste into your LLM:
+
+```text
+Use bacchus to implement: <GOAL>
+1) Plan/update .bacchus/tasks.yaml with dependencies, footprints, archetypes
+2) Import tasks and verify ready queue
+3) Start orchestrator session (max-concurrent 3)
+4) Dry-run spawn, then launch workers
+5) Process releases and recover stale/failed workers until done
+6) Finish with bacchus eval --days 7 and risk summary
+```
 "#;

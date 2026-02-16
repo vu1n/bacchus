@@ -7,6 +7,7 @@ pub mod archetypes;
 pub mod claim;
 pub mod context;
 pub mod eval;
+pub mod init;
 pub mod list;
 pub mod next;
 pub mod orchestrator;
@@ -25,6 +26,7 @@ pub use archetypes::{
 pub use claim::claim_task;
 pub use context::generate_context;
 pub use eval::generate_eval_report;
+pub use init::{init_workspace, InitOptions};
 pub use list::list_claims;
 pub use next::next_task;
 pub use orchestrator::process_ready_releases;

@@ -7,6 +7,16 @@ description: Multi-agent coordination for parallel development. Use when asked t
 
 Bacchus coordinates parallel agent work on codebases using isolated jj workspaces.
 
+## Swarm Methodology
+
+Use this control loop:
+
+1. **Plan** atomic tasks with dependencies, footprints, and archetypes
+2. **Admit** only dependency-clear, non-overlapping tasks
+3. **Execute** one task per worker in isolated jj workspaces
+4. **Reconcile** merges plus stale/failed worker recovery
+5. **Measure** with `bacchus eval` reliability + throughput metrics
+
 ## Quick Start
 
 Use Ralph mode by default:
@@ -24,6 +34,9 @@ claude --dangerously-skip-permissions
 Then: **plan** -> **import** -> **orchestrate**
 
 ```bash
+# 0. Bootstrap repo (jj + tasks template + optional epic)
+bacchus init --epic-id <EPIC>
+
 # 1. Initialize tasks file
 bacchus task init
 
@@ -36,10 +49,35 @@ bacchus task import --epic-id <EPIC>
 bacchus task list --ready
 ```
 
+### Agentic Quick Start Prompt (Paste Into LLM)
+
+```text
+Use bacchus to implement: <GOAL>
+
+Execution contract:
+1) Ensure jj is initialized for this repo (colocated with git if needed).
+2) Create/update tasks in .bacchus/tasks.yaml with dependencies, footprints, and archetypes.
+3) Import tasks and verify ready queue.
+4) Start orchestrator session with max concurrency 3.
+5) Dry-run spawn once, then launch workers.
+6) Process releases and recover stale/failed workers until done.
+7) Finish with eval metrics and a concise risk summary.
+
+Required commands:
+- bacchus task import --epic-id <EPIC>
+- bacchus task list --ready
+- bacchus session start orchestrator --max-concurrent 3
+- bacchus session spawn-workers --count 3 --dry-run
+- bacchus session spawn-workers --count 3
+- bacchus process-releases
+- bacchus eval --days 7
+```
+
 ## Workflow Commands
 
 | Command | Purpose |
 |---------|---------|
+| `bacchus init [--skip-jj] [--force-tasks] [--epic-id X --epic-title Y]` | Bootstrap bacchus in current repo |
 | `bacchus task init` | Create tasks.yaml template |
 | `bacchus task import --epic-id X` | Import to SQLite |
 | `bacchus task list [--ready]` | List tasks |

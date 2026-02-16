@@ -315,6 +315,63 @@ mod db_tests {
     }
 
     #[test]
+    fn test_init_command_creates_bacchus_scaffold() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        let output = Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(repo_path.join(".bacchus/tasks.yaml").exists());
+        assert!(repo_path.join(".bacchus/bacchus.db").exists());
+    }
+
+    #[test]
+    fn test_init_command_creates_epic_when_requested() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        let init_output = Command::new(bacchus_bin())
+            .args([
+                "init",
+                "--skip-jj",
+                "--epic-id",
+                "INIT-SMOKE",
+                "--epic-title",
+                "Init Smoke",
+            ])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        assert!(
+            init_output.status.success(),
+            "init failed: {}",
+            String::from_utf8_lossy(&init_output.stderr)
+        );
+
+        let show_output = Command::new(bacchus_bin())
+            .args(["epic", "list"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        assert!(
+            show_output.status.success(),
+            "epic list failed: {}",
+            String::from_utf8_lossy(&show_output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&show_output.stdout);
+        assert!(stdout.contains("\"id\": \"INIT-SMOKE\""));
+    }
+
+    #[test]
     fn test_claim_operations() {
         let temp = TempDir::new().unwrap();
         let db_path = init_test_db(&temp);

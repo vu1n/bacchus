@@ -106,6 +106,22 @@ pub enum Commands {
         days: i64,
     },
 
+    /// Initialize bacchus in this repository (jj bootstrap + tasks template)
+    Init {
+        /// Skip jj bootstrap (only create bacchus files)
+        #[arg(long)]
+        skip_jj: bool,
+        /// Overwrite existing .bacchus/tasks.yaml template
+        #[arg(long)]
+        force_tasks: bool,
+        /// Optionally create an initial epic
+        #[arg(long)]
+        epic_id: Option<String>,
+        /// Epic title when --epic-id is provided
+        #[arg(long, requires = "epic_id")]
+        epic_title: Option<String>,
+    },
+
     // ========================================================================
     // Symbol Commands
     // ========================================================================
