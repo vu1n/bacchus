@@ -160,15 +160,28 @@ install_hooks() {
     if [ -f "$SETTINGS_FILE" ]; then
         # Check if jq is available for JSON manipulation
         if command -v jq &> /dev/null; then
-            # Check if hooks.Stop already exists with our command
-            if jq -e '.hooks.Stop[0].hooks[0].command' "$SETTINGS_FILE" 2>/dev/null | grep -q "bacchus session check"; then
+            # Check if hooks.Stop already contains our exact command
+            if jq -e --arg cmd "$hook_cmd" \
+                'any((.hooks.Stop // [])[]?.hooks[]?; .command == $cmd)' \
+                "$SETTINGS_FILE" >/dev/null 2>&1; then
                 info "Stop hook already configured"
                 return
             fi
 
-            # Add or merge hooks
+            # Append bacchus hook without clobbering existing Stop hooks.
             local tmp_file="${SETTINGS_FILE}.tmp"
-            jq '.hooks.Stop = [{"hooks": [{"type": "command", "command": "'"$hook_cmd"'"}]}]' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
+            jq --arg cmd "$hook_cmd" '
+                .hooks = (.hooks // {}) |
+                .hooks.Stop = (
+                    if (.hooks.Stop // null) == null then
+                        [{"hooks": [{"type": "command", "command": $cmd}]}]
+                    elif (.hooks.Stop | type) == "array" then
+                        .hooks.Stop + [{"hooks": [{"type": "command", "command": $cmd}]}]
+                    else
+                        [{"hooks": [{"type": "command", "command": $cmd}]}]
+                    end
+                )
+            ' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
             info "Stop hook added to existing settings"
         else
             warn "jq not found - cannot automatically add hooks to settings.json"

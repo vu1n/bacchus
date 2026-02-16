@@ -52,18 +52,32 @@ remove_hooks() {
 
     # Check if jq is available for JSON manipulation
     if command -v jq &> /dev/null; then
+        local hook_cmd='bacchus session check 2>/dev/null || echo "{\"decision\":\"approve\"}"'
+
         # Check if our hook exists
-        if jq -e '.hooks.Stop[0].hooks[0].command' "$SETTINGS_FILE" 2>/dev/null | grep -q "bacchus session check"; then
-            # Remove the Stop hook
+        if jq -e --arg cmd "$hook_cmd" \
+            'any((.hooks.Stop // [])[]?.hooks[]?; .command == $cmd)' \
+            "$SETTINGS_FILE" >/dev/null 2>&1; then
+            # Remove only Bacchus hook entries, preserve other Stop hooks.
             local tmp_file="${SETTINGS_FILE}.tmp"
-            jq 'del(.hooks.Stop)' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
+            jq --arg cmd "$hook_cmd" '
+                .hooks = (.hooks // {}) |
+                .hooks.Stop = (
+                    (.hooks.Stop // [])
+                    | map(
+                        if (.hooks | type) == "array" then
+                            .hooks |= map(select((.command // "") != $cmd))
+                        else
+                            .
+                        end
+                    )
+                    | map(select(((.hooks | type) != "array") or ((.hooks | length) > 0)))
+                ) |
+                if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end |
+                if (.hooks | type) == "object" and (.hooks | length) == 0 then del(.hooks) else . end
+            ' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
 
-            # If hooks object is now empty, remove it too
-            if jq -e '.hooks | length == 0' "$SETTINGS_FILE" 2>/dev/null; then
-                jq 'del(.hooks)' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
-            fi
-
-            info "Removed stop hook from settings"
+            info "Removed Bacchus stop hook from settings"
         fi
     else
         warn "jq not found - please manually remove bacchus hooks from $SETTINGS_FILE"

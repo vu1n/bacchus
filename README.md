@@ -20,7 +20,8 @@ This installs:
 - Claude Code skill to `~/.claude/skills/bacchus/`
 - Stop hooks in `~/.claude/settings.json`
 
-No additional configuration needed - the skill and hooks are automatically available.
+The skill is available immediately after install.
+Stop hooks are configured automatically when `jq` is available; otherwise add the hook snippet manually.
 
 ### Prerequisites
 
@@ -49,7 +50,7 @@ Bacchus coordinates multi-agent work through a **plan → orchestrate → execut
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  1. PLAN                                                            │
-│     User request → /bacchus-planner or /bacchus-architect          │
+│     User request → planner/architect workflow                       │
 │     Breaks down work into tasks with dependencies                   │
 │     Outputs: .bacchus/tasks.yaml                                    │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -59,7 +60,7 @@ Bacchus coordinates multi-agent work through a **plan → orchestrate → execut
 │     Calculates ready tasks (no blockers, no footprint conflicts)   │
 ├─────────────────────────────────────────────────────────────────────┤
 │  3. ORCHESTRATE                                                     │
-│     /bacchus-orchestrate spawns agents for ready tasks             │
+│     session start orchestrator + session spawn-workers              │
 │     Monitors progress, handles merges, manages conflicts            │
 ├─────────────────────────────────────────────────────────────────────┤
 │  4. EXECUTE                                                         │
@@ -110,7 +111,8 @@ Tell Claude what you want and mention bacchus:
 Use bacchus to parallelize this work across multiple agents."
 ```
 
-Claude will automatically plan the work, import tasks, and spawn agents with appropriate archetypes.
+With the bacchus skill workflow, Claude can plan tasks, import them, and orchestrate agents with archetype prompts.
+Autonomous worker spawning requires `BACCHUS_WORKER_CMD` (see Session Management).
 
 | What you want | What to say |
 |---------------|-------------|

@@ -1720,22 +1720,50 @@ fn check_agent_session(session: &Session) -> HookCheckOutput {
                         reason: format!("Task {} is blocked. Session cleared.", task_id),
                     }
                 }
-                _ => {
+                tasks::SqliteTaskStatus::InProgress => {
                     if let Some(session_agent_id) = session.agent_id.as_deref() {
                         if task.claimed_by.as_deref() == Some(session_agent_id) {
                             let _ = tasks::heartbeat_sqlite_task(task_id, session_agent_id);
                         }
                     }
                     HookCheckOutput {
+                        decision: "block".to_string(),
+                        reason: format!(
+                            "Task {} is in_progress. Continue working, then run 'bacchus release {} --status done' or '--status blocked'.",
+                            task_id, task_id
+                        ),
+                    }
+                }
+                tasks::SqliteTaskStatus::ReadyForRelease => HookCheckOutput {
                     decision: "block".to_string(),
                     reason: format!(
-                        "Task {} status is '{}'. Continue working until complete, then run 'bacchus release {} --status done' or '--status blocked'.",
+                        "Task {} is ready_for_release. Wait for orchestrator merge, or run 'bacchus process-releases' from an orchestrator flow.",
+                        task_id
+                    ),
+                },
+                tasks::SqliteTaskStatus::Releasing => HookCheckOutput {
+                    decision: "block".to_string(),
+                    reason: format!(
+                        "Task {} is currently releasing. Wait for merge/conflict outcome before exiting.",
+                        task_id
+                    ),
+                },
+                tasks::SqliteTaskStatus::NeedsResolution => HookCheckOutput {
+                    decision: "block".to_string(),
+                    reason: format!(
+                        "Task {} needs conflict resolution. Resolve conflicts, then run 'bacchus resolve {}' (or 'bacchus abort {}' to continue editing).",
+                        task_id, task_id, task_id
+                    ),
+                },
+                tasks::SqliteTaskStatus::Open | tasks::SqliteTaskStatus::Draft => HookCheckOutput {
+                    decision: "block".to_string(),
+                    reason: format!(
+                        "Task {} is '{}'. Reclaim it with 'bacchus claim {} <agent_id>' or stop the session if this task is no longer assigned.",
                         task_id,
                         task.status.as_str(),
                         task_id
                     ),
-                }
-                }
+                },
             }
         }
         Err(e) => HookCheckOutput {
