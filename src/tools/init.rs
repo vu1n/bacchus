@@ -1,7 +1,7 @@
 //! Repository bootstrap helpers for Bacchus.
 //!
-//! `bacchus init` sets up jj (optionally), `.bacchus/`, task template, and
-//! can create an initial epic.
+//! `bacchus init` sets up jj (optionally), `.bacchus/`, task template,
+//! project-level Claude Code skill + stop hook, and can create an initial epic.
 
 use crate::epics;
 use crate::tasks;
@@ -9,6 +9,14 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Embedded skill and archetypes content (version-matched to binary)
+const SKILL_MD: &str = include_str!("../../skills/bacchus/SKILL.md");
+const ARCHETYPES_YAML: &str = include_str!("../../skills/bacchus/archetypes.yaml");
+
+/// The stop hook command (fail-open design)
+const HOOK_CMD: &str =
+    r#"bacchus session check 2>/dev/null || echo '{"decision":"approve"}'"#;
 
 #[derive(Debug, Clone, Copy)]
 pub struct InitOptions<'a> {
@@ -44,6 +52,16 @@ pub struct InitEpicStatus {
     pub already_exists: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct InitClaudeStatus {
+    pub skill_installed: bool,
+    pub skill_already_exists: bool,
+    pub hook_installed: bool,
+    pub hook_already_exists: bool,
+    pub archetypes_installed: bool,
+    pub archetypes_already_exists: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InitOutput {
     pub success: bool,
@@ -51,6 +69,7 @@ pub struct InitOutput {
     pub bacchus_dir: String,
     pub jj: InitJjStatus,
     pub tasks: InitTasksStatus,
+    pub claude: InitClaudeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epic: Option<InitEpicStatus>,
     pub notes: Vec<String>,
@@ -196,6 +215,102 @@ fn ensure_epic(epic_id: &str, epic_title: Option<&str>) -> Result<InitEpicStatus
     }
 }
 
+/// Install project-level SKILL.md to .claude/skills/bacchus/
+fn ensure_skill(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let skill_dir = workspace_root.join(".claude/skills/bacchus");
+    let skill_path = skill_dir.join("SKILL.md");
+
+    if skill_path.exists() {
+        return Ok((false, true)); // (installed, already_exists)
+    }
+
+    fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
+    fs::write(&skill_path, SKILL_MD).map_err(|e| e.to_string())?;
+    Ok((true, false))
+}
+
+/// Install project-level archetypes.yaml to .bacchus/
+fn ensure_archetypes(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let path = workspace_root.join(".bacchus/archetypes.yaml");
+
+    if path.exists() {
+        return Ok((false, true));
+    }
+
+    fs::write(&path, ARCHETYPES_YAML).map_err(|e| e.to_string())?;
+    Ok((true, false))
+}
+
+/// Install project-level stop hook in .claude/settings.json
+fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let settings_path = workspace_root.join(".claude/settings.json");
+
+    if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("invalid settings.json: {}", e))?;
+
+        // Check if hook already exists
+        if let Some(stops) = settings
+            .get("hooks")
+            .and_then(|h| h.get("Stop"))
+            .and_then(|s| s.as_array())
+        {
+            let already = stops.iter().any(|entry| {
+                entry
+                    .get("hooks")
+                    .and_then(|h| h.as_array())
+                    .is_some_and(|hooks| {
+                        hooks
+                            .iter()
+                            .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(HOOK_CMD))
+                    })
+            });
+            if already {
+                return Ok((false, true));
+            }
+        }
+
+        // Append hook
+        let hook_entry = serde_json::json!({
+            "hooks": [{"type": "command", "command": HOOK_CMD}]
+        });
+
+        let hooks = settings
+            .as_object_mut()
+            .ok_or("settings.json is not an object")?
+            .entry("hooks")
+            .or_insert_with(|| serde_json::json!({}));
+        let stop = hooks
+            .as_object_mut()
+            .ok_or("hooks is not an object")?
+            .entry("Stop")
+            .or_insert_with(|| serde_json::json!([]));
+        stop.as_array_mut()
+            .ok_or("hooks.Stop is not an array")?
+            .push(hook_entry);
+
+        let out = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+        fs::write(&settings_path, out + "\n").map_err(|e| e.to_string())?;
+        Ok((true, false))
+    } else {
+        // Create new settings.json with just the hook
+        let claude_dir = workspace_root.join(".claude");
+        fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+
+        let settings = serde_json::json!({
+            "hooks": {
+                "Stop": [{
+                    "hooks": [{"type": "command", "command": HOOK_CMD}]
+                }]
+            }
+        });
+        let out = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+        fs::write(&settings_path, out + "\n").map_err(|e| e.to_string())?;
+        Ok((true, false))
+    }
+}
+
 pub fn init_workspace(
     workspace_root: &Path,
     options: InitOptions<'_>,
@@ -211,6 +326,22 @@ pub fn init_workspace(
         ensure_jj(workspace_root, &mut notes)?
     };
     let tasks = ensure_tasks_template(workspace_root, options.force_tasks)?;
+
+    // Install project-level Claude Code integration
+    let mut claude = InitClaudeStatus::default();
+
+    let (installed, exists) = ensure_skill(workspace_root)?;
+    claude.skill_installed = installed;
+    claude.skill_already_exists = exists;
+
+    let (installed, exists) = ensure_hook(workspace_root)?;
+    claude.hook_installed = installed;
+    claude.hook_already_exists = exists;
+
+    let (installed, exists) = ensure_archetypes(workspace_root)?;
+    claude.archetypes_installed = installed;
+    claude.archetypes_already_exists = exists;
+
     let epic = match options.epic_id {
         Some(id) => Some(ensure_epic(id, options.epic_title)?),
         None => None,
@@ -226,6 +357,7 @@ pub fn init_workspace(
         bacchus_dir: bacchus_dir.to_string_lossy().to_string(),
         jj,
         tasks,
+        claude,
         epic,
         notes,
     })

@@ -4,8 +4,6 @@ set -e
 REPO="vu1n/bacchus"
 INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
-SKILL_DIR="$HOME/.claude/skills/bacchus"
-SETTINGS_FILE="$HOME/.claude/settings.json"
 
 # Colors
 RED='\033[0;31m'
@@ -122,102 +120,49 @@ build_from_source() {
     fi
 }
 
-# Install Claude Code skill
-# Usage: install_skill [tag]
-#   tag: Git tag to download from (e.g., v0.4.0). Defaults to 'main' if not provided.
-install_skill() {
-    local tag="${1:-main}"
-    info "Installing Claude Code skill (from $tag)..."
-
-    # Remove old plugin directory if exists (migrating to skill)
-    local old_plugin_dir="$HOME/.claude/plugins/bacchus"
-    if [ -d "$old_plugin_dir" ]; then
-        warn "Removing old plugin directory (migrating to skill)..."
-        rm -rf "$old_plugin_dir"
+# Clean up legacy global skill/hooks from previous installs
+cleanup_legacy() {
+    # Remove old global skill directory
+    local skill_dir="$HOME/.claude/skills/bacchus"
+    if [ -d "$skill_dir" ]; then
+        rm -rf "$skill_dir"
+        info "Removed legacy global skill: $skill_dir"
     fi
 
-    # Create skill directory
-    mkdir -p "$SKILL_DIR"
+    # Remove old plugin directory
+    local plugin_dir="$HOME/.claude/plugins/bacchus"
+    if [ -d "$plugin_dir" ]; then
+        rm -rf "$plugin_dir"
+        info "Removed legacy plugin: $plugin_dir"
+    fi
 
-    # Download skill files from repo at the specified tag
-    local base_url="https://raw.githubusercontent.com/${REPO}/${tag}/skills/bacchus"
-
-    curl -sLf -o "${SKILL_DIR}/SKILL.md" "${base_url}/SKILL.md" || warn "Could not download SKILL.md"
-    curl -sLf -o "${SKILL_DIR}/archetypes.yaml" "${base_url}/archetypes.yaml" || warn "Could not download archetypes.yaml"
-
-    info "Skill installed to: ${SKILL_DIR}"
-    info "Archetypes available at: ${SKILL_DIR}/archetypes.yaml"
-}
-
-# Add stop hook to settings.json
-install_hooks() {
-    info "Configuring stop hooks..."
-
-    # The hook command - fail-open design (approve if bacchus errors)
-    local hook_cmd='bacchus session check 2>/dev/null || echo "{\"decision\":\"approve\"}"'
-
-    # Check if settings file exists
-    if [ -f "$SETTINGS_FILE" ]; then
-        # Check if jq is available for JSON manipulation
-        if command -v jq &> /dev/null; then
-            # Check if hooks.Stop already contains our exact command
-            if jq -e --arg cmd "$hook_cmd" \
-                'any((.hooks.Stop // [])[]?.hooks[]?; .command == $cmd)' \
-                "$SETTINGS_FILE" >/dev/null 2>&1; then
-                info "Stop hook already configured"
-                return
-            fi
-
-            # Append bacchus hook without clobbering existing Stop hooks.
-            local tmp_file="${SETTINGS_FILE}.tmp"
+    # Remove bacchus stop hook from global settings.json if present
+    local settings_file="$HOME/.claude/settings.json"
+    if [ -f "$settings_file" ] && command -v jq &> /dev/null; then
+        local hook_cmd='bacchus session check 2>/dev/null || echo "{\"decision\":\"approve\"}"'
+        if jq -e --arg cmd "$hook_cmd" \
+            'any((.hooks.Stop // [])[]?.hooks[]?; .command == $cmd)' \
+            "$settings_file" >/dev/null 2>&1; then
+            local tmp_file="${settings_file}.tmp"
             jq --arg cmd "$hook_cmd" '
                 .hooks = (.hooks // {}) |
                 .hooks.Stop = (
-                    if (.hooks.Stop // null) == null then
-                        [{"hooks": [{"type": "command", "command": $cmd}]}]
-                    elif (.hooks.Stop | type) == "array" then
-                        .hooks.Stop + [{"hooks": [{"type": "command", "command": $cmd}]}]
-                    else
-                        [{"hooks": [{"type": "command", "command": $cmd}]}]
-                    end
-                )
-            ' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
-            info "Stop hook added to existing settings"
-        else
-            warn "jq not found - cannot automatically add hooks to settings.json"
-            warn "Please add the following to $SETTINGS_FILE manually:"
-            echo ""
-            echo '  "hooks": {'
-            echo '    "Stop": [{"hooks": [{"type": "command", "command": "'"$hook_cmd"'"}]}]'
-            echo '  }'
-            echo ""
+                    (.hooks.Stop // [])
+                    | map(
+                        if (.hooks | type) == "array" then
+                            .hooks |= map(select((.command // "") != $cmd))
+                        else
+                            .
+                        end
+                    )
+                    | map(select(((.hooks | type) != "array") or ((.hooks | length) > 0)))
+                ) |
+                if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end |
+                if (.hooks | type) == "object" and (.hooks | length) == 0 then del(.hooks) else . end
+            ' "$settings_file" > "$tmp_file" && mv "$tmp_file" "$settings_file"
+            info "Removed legacy global stop hook from settings"
         fi
-    else
-        # Create new settings file with hooks
-        mkdir -p "$(dirname "$SETTINGS_FILE")"
-        cat > "$SETTINGS_FILE" << EOF
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$hook_cmd"
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-        info "Created settings file with stop hook"
     fi
-}
-
-# Get latest release tag from GitHub
-get_latest_tag() {
-    curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 # Main installation
@@ -225,20 +170,11 @@ main() {
     # Check dependencies first
     check_dependencies
 
-    local os arch release_tag
+    local os arch
     os=$(detect_os)
     arch=$(detect_arch)
 
     info "Detected: ${os}-${arch}"
-
-    # Get latest release tag (used for both binary and plugin)
-    release_tag=$(get_latest_tag)
-    if [ -z "$release_tag" ]; then
-        warn "Could not determine latest release, using main branch"
-        release_tag="main"
-    else
-        info "Latest release: $release_tag"
-    fi
 
     # Create install directory
     mkdir -p "$INSTALL_DIR"
@@ -261,21 +197,19 @@ main() {
             echo "Add this to your ~/.bashrc or ~/.zshrc"
         fi
 
-        # Install Claude Code skill and hooks
-        install_skill "$release_tag"
-        install_hooks
+        # Clean up legacy global skill/hooks from previous installs
+        cleanup_legacy
 
         info "Installation complete!"
         echo ""
-        info "Bacchus is now ready to use:"
+        info "Next step: run 'bacchus init' in your project to set up:"
         echo ""
-        echo "  1. The skill is available at: ~/.claude/skills/bacchus/"
-        echo "  2. Stop hooks are configured in: ~/.claude/settings.json"
+        echo "  - .bacchus/              Task database and workspaces"
+        echo "  - .claude/settings.json  Project-level stop hook"
+        echo "  - .claude/skills/        Bacchus skill for Claude Code"
         echo ""
         info "Usage:"
-        echo "  - Ask Claude to 'use bacchus to parallelize this work'"
-        echo "  - In a repo, run 'bacchus init --epic-id MY-EPIC' for one-shot bootstrap"
-        echo "  - Or run 'bacchus task init' to create a task file only"
+        echo "  cd your-project && bacchus init"
         echo ""
         "${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || true
     else

@@ -11,17 +11,25 @@ Bacchus helps AI agents coordinate when working on the same codebase by:
 
 ## Installation
 
+### 1. Install the binary
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vu1n/bacchus/main/scripts/install.sh | bash
 ```
 
-This installs:
-- `bacchus` binary to `~/.local/bin/`
-- Claude Code skill to `~/.claude/skills/bacchus/`
-- Stop hooks in `~/.claude/settings.json`
+This installs the `bacchus` binary to `~/.local/bin/` and cleans up any legacy global hooks/skills from previous versions.
 
-The skill is available immediately after install.
-Stop hooks are configured automatically when `jq` is available; otherwise add the hook snippet manually.
+### 2. Initialize per project
+
+```bash
+cd your-project
+bacchus init
+```
+
+This sets up everything project-local:
+- `.bacchus/` - task database, workspaces, archetypes
+- `.claude/settings.json` - project-level stop hook
+- `.claude/skills/bacchus/SKILL.md` - Claude Code skill (teaches Claude how to use bacchus)
 
 ### Prerequisites
 

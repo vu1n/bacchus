@@ -3,9 +3,6 @@ set -e
 
 INSTALL_DIR="${BACCHUS_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="bacchus"
-SKILL_DIR="$HOME/.claude/skills/bacchus"
-PLUGIN_DIR="$HOME/.claude/plugins/bacchus"
-SETTINGS_FILE="$HOME/.claude/settings.json"
 
 # Colors
 RED='\033[0;31m'
@@ -29,37 +26,30 @@ remove_binary() {
     fi
 }
 
-# Remove Claude Code skill and plugin
-remove_skill() {
-    # Remove skill directory
-    if [ -d "$SKILL_DIR" ]; then
-        rm -rf "$SKILL_DIR"
-        info "Removed skill: $SKILL_DIR"
+# Remove legacy global skill/plugin/hooks from previous installs
+remove_legacy_global() {
+    # Remove old global skill directory
+    local skill_dir="$HOME/.claude/skills/bacchus"
+    if [ -d "$skill_dir" ]; then
+        rm -rf "$skill_dir"
+        info "Removed legacy global skill: $skill_dir"
     fi
 
-    # Remove old plugin directory (legacy)
-    if [ -d "$PLUGIN_DIR" ]; then
-        rm -rf "$PLUGIN_DIR"
-        info "Removed plugin: $PLUGIN_DIR"
-    fi
-}
-
-# Remove stop hooks from settings.json
-remove_hooks() {
-    if [ ! -f "$SETTINGS_FILE" ]; then
-        return
+    # Remove old plugin directory
+    local plugin_dir="$HOME/.claude/plugins/bacchus"
+    if [ -d "$plugin_dir" ]; then
+        rm -rf "$plugin_dir"
+        info "Removed legacy plugin: $plugin_dir"
     fi
 
-    # Check if jq is available for JSON manipulation
-    if command -v jq &> /dev/null; then
+    # Remove bacchus stop hook from global settings.json if present
+    local settings_file="$HOME/.claude/settings.json"
+    if [ -f "$settings_file" ] && command -v jq &> /dev/null; then
         local hook_cmd='bacchus session check 2>/dev/null || echo "{\"decision\":\"approve\"}"'
-
-        # Check if our hook exists
         if jq -e --arg cmd "$hook_cmd" \
             'any((.hooks.Stop // [])[]?.hooks[]?; .command == $cmd)' \
-            "$SETTINGS_FILE" >/dev/null 2>&1; then
-            # Remove only Bacchus hook entries, preserve other Stop hooks.
-            local tmp_file="${SETTINGS_FILE}.tmp"
+            "$settings_file" >/dev/null 2>&1; then
+            local tmp_file="${settings_file}.tmp"
             jq --arg cmd "$hook_cmd" '
                 .hooks = (.hooks // {}) |
                 .hooks.Stop = (
@@ -75,29 +65,46 @@ remove_hooks() {
                 ) |
                 if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end |
                 if (.hooks | type) == "object" and (.hooks | length) == 0 then del(.hooks) else . end
-            ' "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
-
-            info "Removed Bacchus stop hook from settings"
+            ' "$settings_file" > "$tmp_file" && mv "$tmp_file" "$settings_file"
+            info "Removed legacy global stop hook"
         fi
-    else
-        warn "jq not found - please manually remove bacchus hooks from $SETTINGS_FILE"
     fi
 }
 
-# Remove session files from .bacchus directories
-cleanup_sessions() {
-    local session_files
-    session_files=$(find "$HOME" -maxdepth 5 -path "*/.bacchus/session.json" 2>/dev/null || true)
+# Remove project-level bacchus hook from .claude/settings.json
+remove_project_hook() {
+    local settings_file="$1"
 
-    if [ -n "$session_files" ]; then
-        echo "$session_files" | while read -r file; do
-            rm -f "$file"
-            info "Removed session: $file"
-        done
+    if [ ! -f "$settings_file" ] || ! command -v jq &> /dev/null; then
+        return
+    fi
+
+    local hook_cmd='bacchus session check 2>/dev/null || echo "{\"decision\":\"approve\"}"'
+    if jq -e --arg cmd "$hook_cmd" \
+        'any((.hooks.Stop // [])[]?.hooks[]?; .command == $cmd)' \
+        "$settings_file" >/dev/null 2>&1; then
+        local tmp_file="${settings_file}.tmp"
+        jq --arg cmd "$hook_cmd" '
+            .hooks = (.hooks // {}) |
+            .hooks.Stop = (
+                (.hooks.Stop // [])
+                | map(
+                    if (.hooks | type) == "array" then
+                        .hooks |= map(select((.command // "") != $cmd))
+                    else
+                        .
+                    end
+                )
+                | map(select(((.hooks | type) != "array") or ((.hooks | length) > 0)))
+            ) |
+            if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end |
+            if (.hooks | type) == "object" and (.hooks | length) == 0 then del(.hooks) else . end
+        ' "$settings_file" > "$tmp_file" && mv "$tmp_file" "$settings_file"
+        info "Removed project hook: $settings_file"
     fi
 }
 
-# Find and optionally remove .bacchus directories
+# Find and clean up .bacchus directories
 cleanup_data() {
     local dirs
     dirs=$(find "$HOME" -maxdepth 4 -type d -name ".bacchus" 2>/dev/null || true)
@@ -119,6 +126,17 @@ cleanup_data() {
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "$dirs" | while read -r dir; do
+            # Also clean project-level Claude integration
+            local project_root
+            project_root=$(dirname "$dir")
+            remove_project_hook "$project_root/.claude/settings.json"
+
+            local project_skill="$project_root/.claude/skills/bacchus"
+            if [ -d "$project_skill" ]; then
+                rm -rf "$project_skill"
+                info "Removed project skill: $project_skill"
+            fi
+
             rm -rf "$dir"
             info "Removed: $dir"
         done
@@ -132,19 +150,10 @@ main() {
     echo ""
 
     remove_binary
-    remove_skill
-    cleanup_sessions
+    remove_legacy_global
 
     echo ""
-    read -p "Also remove stop hooks from settings.json? [y/N] " -n 1 -r
-    echo ""
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        remove_hooks
-    fi
-
-    echo ""
-    read -p "Also remove .bacchus data directories (workspaces, database)? [y/N] " -n 1 -r
+    read -p "Also remove .bacchus data directories and project-level hooks/skills? [y/N] " -n 1 -r
     echo ""
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
