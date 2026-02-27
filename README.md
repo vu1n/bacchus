@@ -222,6 +222,23 @@ Claude will analyze your request and create tasks with proper dependencies.
 bacchus task init
 ```
 
+**Option C: Generate recursively with Bun (experimental)**
+
+```bash
+bun scripts/recursive-planner.ts \
+  --goal "Implement user authentication with login, logout, and password reset" \
+  --epic-id AUTH \
+  --llm-provider claude \
+  --task-granularity small \
+  --import \
+  --validate
+```
+
+The recursive planner writes `.bacchus/tasks.yaml`, can split broad tasks into smaller subtasks, and can optionally run `task import` + `task validate`.
+When your prompt is goal-only (no PRD/spec), it generates explicit spec + scaffolding + architecture tasks before implementation slices.
+Use `--llm-provider codex` to decompose with Codex headless, `--llm-provider openai` for API mode, or `--llm-provider off` for heuristic-only planning.
+Use `--task-granularity small` to force finer agent-sized tasks.
+
 Edit `.bacchus/tasks.yaml`:
 
 ```yaml
