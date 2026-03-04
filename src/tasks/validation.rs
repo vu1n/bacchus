@@ -122,7 +122,7 @@ pub fn validate_tasks(_workspace_root: &Path) -> Result<Vec<TaskValidation>, Tas
 
     // Validate footprint syntax based on normalized entries
     let footprint_rows = super::queries::get_footprint_rows(None)
-        .map_err(|e| TasksError::DbError(e))?;
+        .map_err(TasksError::DbError)?;
 
     for row in footprint_rows {
         let (task_id, pattern_type, file_path, symbol, is_wildcard) =

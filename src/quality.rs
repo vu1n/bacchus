@@ -461,10 +461,8 @@ pub fn detect_duplicate_symbols(changed_files: &[String]) -> Vec<DuplicateSymbol
                 })
             })?;
 
-            for row in rows {
-                if let Ok(dup) = row {
-                    duplicates.push(dup);
-                }
+            for dup in rows.flatten() {
+                duplicates.push(dup);
             }
         }
 
