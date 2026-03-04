@@ -415,37 +415,26 @@ fn create_desloppify_cleanup_tasks(
 
 /// Build a markdown table snapshot of all tasks at session start.
 fn build_task_snapshot(epic_id: Option<&str>) -> String {
-    let result = crate::db::with_db(|conn| {
-        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match epic_id {
-            Some(eid) => (
-                "SELECT id, status, title FROM tasks WHERE deleted_at IS NULL AND epic_id = ?1 ORDER BY id LIMIT 51",
-                vec![Box::new(eid.to_string()) as Box<dyn rusqlite::types::ToSql>],
-            ),
-            None => (
-                "SELECT id, status, title FROM tasks WHERE deleted_at IS NULL ORDER BY id LIMIT 51",
-                vec![],
-            ),
-        };
-        let mut stmt = conn.prepare(sql)?;
-        let rows: Vec<(String, String, String)> = stmt
-            .query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    });
+    use std::fmt::Write;
 
-    let rows = match result {
+    const MAX_ROWS: usize = 50;
+
+    let rows = match tasks::list_sqlite_tasks(epic_id, None, false) {
         Ok(r) if !r.is_empty() => r,
-        _ => return String::new(),
+        Ok(_) => return String::new(),
+        Err(e) => {
+            eprintln!("Warning: task snapshot unavailable: {}", e);
+            return String::new();
+        }
     };
 
-    let mut table = String::from("## Task Snapshot (at session start)\n\n| ID | Status | Title |\n|----|--------|-------|\n");
-    let truncated = rows.len() > 50;
-    for (id, status, title) in rows.iter().take(50) {
-        table.push_str(&format!("| {} | {} | {} |\n", id, status, title));
+    let mut table = String::from(
+        "## Task Snapshot (at session start)\n\n| ID | Status | Title |\n|----|--------|-------|\n",
+    );
+    for task in rows.iter().take(MAX_ROWS) {
+        let _ = write!(table, "| {} | {} | {} |\n", task.id, task.status, task.title);
     }
-    if truncated {
+    if rows.len() > MAX_ROWS {
         table.push_str("\n_(truncated — more than 50 tasks)_\n");
     }
     table
@@ -469,7 +458,7 @@ fn write_orchestrator_breadcrumb(
     let snapshot_section = if task_snapshot.is_empty() {
         String::new()
     } else {
-        format!("\n{}\n", task_snapshot)
+        format!("\n{}", task_snapshot)
     };
 
     let content = format!(
