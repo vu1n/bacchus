@@ -24,23 +24,19 @@ mod yaml;
 // (every `pub fn` and `pub struct/enum` accessible as `crate::tasks::*`)
 
 pub use types::{
-    SqliteTask, SqliteTaskStatus, SqliteTaskType, Task, TaskValidation, TasksError,
+    CreateSqliteTaskInput, SqliteTask, SqliteTaskStatus, SqliteTaskType, Task, TaskFootprint,
+    TaskValidation, TasksError,
 };
 
 #[cfg(test)]
-pub use types::{
-    CreateSqliteTaskInput, ResolvedFootprint, TaskFootprint, TasksFile,
-};
+pub use types::{ResolvedFootprint, TasksFile};
 
 pub use crud::{
-    complete_task_release, get_sqlite_task, get_tasks_ready_for_release, heartbeat_sqlite_task,
-    list_sqlite_tasks, mark_task_needs_resolution, mark_task_ready_for_release, reset_sqlite_task,
-    reset_task_from_resolution, reset_task_release_to_ready, set_task_release_commit,
-    start_task_release,
+    complete_task_release, create_sqlite_task, get_sqlite_task, get_tasks_ready_for_release,
+    heartbeat_sqlite_task, list_sqlite_tasks, mark_task_needs_resolution,
+    mark_task_ready_for_release, reset_sqlite_task, reset_task_from_resolution,
+    reset_task_release_to_ready, set_task_release_commit, start_task_release,
 };
-
-#[cfg(test)]
-pub use crud::create_sqlite_task;
 
 pub use readiness::{claim_next_sqlite_task, claim_sqlite_task, get_ready_sqlite_tasks};
 

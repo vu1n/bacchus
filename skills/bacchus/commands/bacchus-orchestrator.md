@@ -71,6 +71,34 @@ tasks:
         - "src/main.rs::register_routes"
 ```
 
+### Test-First for High-Impact Tasks
+
+For feature and refactor tasks that touch core logic or public APIs, include test-first
+instructions in the task description. The SAME worker writes tests then implements —
+don't create separate test tasks for the same code region.
+
+Mark a task as test-first by including this block in the description:
+
+```
+## Test-First
+Write tests BEFORE implementing. Steps:
+1. Read existing tests for patterns (runner, assertions, fixtures)
+2. Write failing tests that define the expected behavior
+3. Implement until all tests pass
+4. Verify: <test_cmd from quality config>
+```
+
+When to use test-first:
+- New public API endpoints or functions
+- Refactors that change behavior contracts
+- Bug fixes (write the regression test first)
+- Any task touching >3 files
+
+When NOT to use:
+- Docs, infra, config-only changes
+- Pure UI/styling tasks
+- Tasks that only add to existing well-tested modules
+
 **Footprint rules:**
 - `src/file.rs` — entire file
 - `src/file.rs::SymbolName` — specific symbol
@@ -92,7 +120,7 @@ bacchus task validate                      # check footprints against symbol ind
 ## Phase 3: Start Orchestrator Session
 
 ```bash
-bacchus session start orchestrator --max-concurrent 3
+bacchus session start orchestrator --max-concurrent 3 --epic-id <EPIC_ID> --goal "<goal from ARGUMENTS>"
 ```
 
 ## Phase 4: Spawn Workers

@@ -62,6 +62,14 @@ Edit files using full paths like `.bacchus/workspaces/<TASK_ID>/src/foo.rs`.
 `pnpm install`, `yarn install`, etc.). The orchestrator handles dependency installation
 after merging your changes. You may add dependencies to `package.json` — just don't run install.
 
+#### Test-First Tasks
+
+If the task description contains a `## Test-First` section, follow its instructions:
+write tests first, then implement to pass them. Do not skip the test step.
+
+The pre-release quality gate will run the project's test suite. Your release will be
+blocked if tests fail.
+
 jj auto-snapshots — no explicit commit step needed.
 
 ```bash

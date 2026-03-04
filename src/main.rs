@@ -8,6 +8,7 @@ mod events;
 mod handles;
 mod indexer;
 mod messages;
+mod quality;
 mod tasks;
 #[cfg(test)]
 mod testutil;
@@ -383,8 +384,8 @@ fn dispatch_process_releases(limit: usize, workspace_root: &std::path::Path) -> 
 
 fn dispatch_session(command: SessionCommands) -> Result<Output, BacchusError> {
     match command {
-        SessionCommands::Start { mode, task_id, max_concurrent, agent_id } => {
-            ok_msg(tools::start_session(mode, task_id.as_deref(), max_concurrent, agent_id.as_deref()))
+        SessionCommands::Start { mode, task_id, max_concurrent, agent_id, epic_id, goal } => {
+            ok_msg(tools::start_session(mode, task_id.as_deref(), max_concurrent, agent_id.as_deref(), epic_id.as_deref(), goal.as_deref()))
         }
         SessionCommands::Stop => ok_msg(tools::stop_session()),
         SessionCommands::Status => to_json(tools::session_status()),

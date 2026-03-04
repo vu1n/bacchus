@@ -179,6 +179,10 @@ pub enum SessionCommands {
         max_concurrent: i32,
         #[arg(long)]
         agent_id: Option<String>,
+        #[arg(long, help = "Epic ID for orchestrator breadcrumb")]
+        epic_id: Option<String>,
+        #[arg(long, help = "Goal description for orchestrator breadcrumb")]
+        goal: Option<String>,
     },
 
     /// Stop the current session

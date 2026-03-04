@@ -4,6 +4,7 @@
 //! ready_for_release -> releasing -> closed / needs_resolution.
 
 use crate::events;
+use crate::quality;
 use crate::tasks::{self, SqliteTaskStatus};
 use crate::workspace::{self, ReleaseResult};
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,7 @@ pub struct ProcessReleasesOutput {
     pub merged: usize,
     pub conflicts: usize,
     pub failed: usize,
+    pub dedup_tasks_created: usize,
     pub results: Vec<ReleaseTaskResult>,
 }
 
@@ -72,6 +74,7 @@ pub fn process_ready_releases(
         merged: 0,
         conflicts: 0,
         failed: 0,
+        dedup_tasks_created: 0,
         results: Vec::new(),
     };
 
@@ -294,6 +297,17 @@ pub fn process_ready_releases(
                     continue;
                 }
 
+                // Detect duplicate symbols post-merge (non-blocking)
+                let dedup_count = detect_and_create_dedup_tasks(
+                    workspace_root,
+                    &task,
+                    run_id,
+                );
+                output.dedup_tasks_created += dedup_count;
+
+                // Re-index changed files so symbols table reflects merged state
+                reindex_workspace_changes(workspace_root, &task.id);
+
                 let cleanup_message = match workspace::complete_release(workspace_root, &task.id) {
                     Ok(_) => "Merged and cleaned workspace".to_string(),
                     Err(e) => format!("Merged but cleanup warning: {}", e),
@@ -305,7 +319,7 @@ pub fn process_ready_releases(
                     "release_merged",
                     "task",
                     &task.id,
-                    &serde_json::json!({ "commit_id": commit_id }),
+                    &serde_json::json!({ "commit_id": commit_id, "dedup_tasks_created": dedup_count }),
                     Some(&format!("release-merged:{}:{}", task.id, commit_id)),
                 );
 
@@ -343,4 +357,153 @@ pub fn process_ready_releases(
 
     output.success = output.failed == 0;
     Ok(output)
+}
+
+/// Detect duplicate symbols between the task's changed files and the existing index,
+/// and auto-create cleanup tasks for any duplicates found.
+///
+/// Returns the number of dedup tasks created.
+fn detect_and_create_dedup_tasks(
+    workspace_root: &Path,
+    task: &tasks::SqliteTask,
+    run_id: Option<&str>,
+) -> usize {
+    // Get list of changed files from workspace via jj diff
+    let ws_path = workspace::get_workspaces_dir(workspace_root).join(&task.id);
+    let changed_files = match get_changed_files(&ws_path) {
+        Ok(files) => files,
+        Err(_) => return 0,
+    };
+
+    if changed_files.is_empty() {
+        return 0;
+    }
+
+    let duplicates = quality::detect_duplicate_symbols(&changed_files);
+    if duplicates.is_empty() {
+        return 0;
+    }
+
+    // Build description listing duplicate pairs
+    let mut desc = String::from("Duplicate symbols detected after merge. Consolidate:\n\n");
+    let mut dedup_files = std::collections::HashSet::new();
+    for dup in &duplicates {
+        desc.push_str(&format!(
+            "- `{}` in `{}` duplicates `{}` in `{}` (hash: {})\n",
+            dup.new_symbol, dup.new_file, dup.existing_symbol, dup.existing_file, dup.hash
+        ));
+        dedup_files.insert(dup.new_file.clone());
+        dedup_files.insert(dup.existing_file.clone());
+    }
+
+    // Create a single cleanup task for all duplicates from this merge
+    let short_hash = &task.id[..task.id.len().min(8)];
+    let dedup_id = format!("{}-DEDUP-{}", task.epic_id, short_hash);
+
+    let footprint = tasks::TaskFootprint {
+        modifies: dedup_files.into_iter().collect(),
+        creates: Vec::new(),
+    };
+
+    let input = tasks::CreateSqliteTaskInput {
+        id: dedup_id.clone(),
+        epic_id: task.epic_id.clone(),
+        title: format!("Consolidate duplicate symbols from {}", task.id),
+        description: Some(desc),
+        priority: 8, // lower priority than normal tasks
+        depends_on: vec![task.id.clone()],
+        task_type: Some(tasks::SqliteTaskType::Refactor),
+        archetype: Some(task.archetype.clone()),
+        footprint,
+    };
+
+    match tasks::create_sqlite_task(input) {
+        Ok(_) => {
+            let _ = events::record_event(
+                run_id,
+                "orchestrator",
+                "duplicate_symbols_detected",
+                "task",
+                &task.id,
+                &serde_json::json!({
+                    "duplicate_count": duplicates.len(),
+                    "dedup_task_id": dedup_id,
+                }),
+                Some(&format!("dedup-task-created:{}:{}", task.id, dedup_id)),
+            );
+            1
+        }
+        Err(tasks::TasksError::DuplicateTask(_)) => 0, // already created
+        Err(e) => {
+            eprintln!("Warning: failed to create dedup task {}: {}", dedup_id, e);
+            0
+        }
+    }
+}
+
+/// Get list of changed files from a workspace using jj diff --stat.
+fn get_changed_files(ws_path: &Path) -> Result<Vec<String>, String> {
+    if !ws_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let output = std::process::Command::new("jj")
+        .args([
+            "-R",
+            ws_path.to_str().unwrap_or("."),
+            "diff",
+            "--stat",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let files: Vec<String> = stdout
+        .lines()
+        .filter_map(|line| {
+            // jj diff --stat format: "file.rs | N +++---"
+            let trimmed = line.trim();
+            if trimmed.contains('|') {
+                Some(
+                    trimmed
+                        .split('|')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        })
+        .filter(|f| !f.is_empty())
+        .collect();
+
+    Ok(files)
+}
+
+/// Re-index changed files from a workspace so the symbols table reflects merged state.
+fn reindex_workspace_changes(workspace_root: &Path, task_id: &str) {
+    let ws_path = workspace::get_workspaces_dir(workspace_root).join(task_id);
+    let files = match get_changed_files(&ws_path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+
+    for file in &files {
+        let file_path = workspace_root.join(file);
+        if file_path.is_file() {
+            let mut parser = match crate::indexer::Parser::new() {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            if let Ok(symbols) = crate::parse_file(&mut parser, &file_path, &workspace_root.to_path_buf()) {
+                let _ = crate::store_symbols(&symbols);
+            }
+        }
+    }
 }

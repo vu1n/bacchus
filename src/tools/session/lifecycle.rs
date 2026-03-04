@@ -2,6 +2,7 @@
 
 use crate::config::{current_session_scope_id, find_workspace_root};
 use crate::handles;
+use crate::quality;
 use crate::tasks;
 use crate::workers;
 use std::fs;
@@ -19,6 +20,8 @@ pub fn start_session(
     task_id: Option<&str>,
     max_concurrent: i32,
     agent_id: Option<&str>,
+    epic_id: Option<&str>,
+    goal: Option<&str>,
 ) -> Result<String, String> {
     let root = find_workspace_root().ok_or("No workspace root found")?;
     let bacchus_dir = root.join(".bacchus");
@@ -134,6 +137,8 @@ pub fn start_session(
                 message = format!("{} (lease loop unavailable: {})", message, e);
             }
         }
+        // Write orchestrator breadcrumb so protocol survives context compaction
+        write_orchestrator_breadcrumb(&root, &session, epic_id, goal);
     }
 
     Ok(message)
@@ -152,6 +157,29 @@ pub fn stop_session() -> Result<String, String> {
                     if let Some(root) = find_workspace_root() {
                         let _ = session_workers::reconcile_failed_worker_tasks(&root, run_id);
                     }
+                }
+
+                // Run desloppify mechanical scan if configured and available (non-blocking)
+                if let Some(root) = find_workspace_root() {
+                    let scan = quality::run_desloppify_scan(&root);
+                    if scan.ran {
+                        if let Some(report) = &scan.report_path {
+                            eprintln!(
+                                "Desloppify scan: {} findings (report: {})",
+                                scan.findings_count, report
+                            );
+                        }
+                        // Create cleanup tasks for findings
+                        if scan.findings_count > 0 {
+                            create_desloppify_cleanup_tasks(&root, &scan);
+                        }
+                    }
+                }
+
+                // Remove orchestrator breadcrumb
+                if let Some(root) = find_workspace_root() {
+                    let breadcrumb = root.join(".bacchus/ORCHESTRATOR.md");
+                    let _ = fs::remove_file(&breadcrumb);
                 }
             }
         }
@@ -323,4 +351,126 @@ pub fn prune_sessions(minutes: i64) -> Result<serde_json::Value, String> {
         "kept_scopes": kept_scopes,
         "released_orchestrator_leases": released_leases
     }))
+}
+
+/// Create cleanup tasks from desloppify scan findings.
+///
+/// Non-blocking: errors are logged but don't affect session stop.
+fn create_desloppify_cleanup_tasks(
+    workspace_root: &std::path::Path,
+    scan: &quality::DesloppifyScanResult,
+) {
+    // Try to read the report for details
+    let report_path = match &scan.report_path {
+        Some(p) => p.clone(),
+        None => return,
+    };
+
+    let report_content = match fs::read_to_string(&report_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Find an active epic to attach the task to
+    let epic_id = match crate::epics::list_epics(Some(crate::epics::EpicStatus::Active)) {
+        Ok(epics) if !epics.is_empty() => epics[0].id.clone(),
+        _ => return, // no active epic, skip
+    };
+
+    let task_id = format!(
+        "{}-DESLOP-{}",
+        epic_id,
+        chrono::Utc::now().timestamp_millis() % 100000
+    );
+
+    let description = format!(
+        "Desloppify scan found {} findings. Review and fix mechanical issues.\n\nReport: {}\n\n{}",
+        scan.findings_count,
+        report_path,
+        &report_content[..report_content.len().min(2000)]
+    );
+
+    let _ = tasks::create_sqlite_task(tasks::CreateSqliteTaskInput {
+        id: task_id,
+        epic_id,
+        title: format!(
+            "Fix {} desloppify findings",
+            scan.findings_count
+        ),
+        description: Some(description),
+        priority: 9, // low priority — cleanup
+        depends_on: Vec::new(),
+        task_type: Some(tasks::SqliteTaskType::Refactor),
+        archetype: Some("review".to_string()),
+        footprint: tasks::TaskFootprint::default(),
+    });
+
+    let _ = workspace_root; // used for context
+}
+
+/// Write `.bacchus/ORCHESTRATOR.md` breadcrumb so the orchestrator protocol
+/// survives context compaction (CLAUDE.md always stays loaded and points here).
+fn write_orchestrator_breadcrumb(
+    root: &std::path::Path,
+    session: &Session,
+    epic_id: Option<&str>,
+    goal: Option<&str>,
+) {
+    let run_id = session.run_id.as_deref().unwrap_or("unknown");
+    let max_concurrent = session.max_concurrent.unwrap_or(3);
+    let started_at = &session.started_at;
+    let epic = epic_id.unwrap_or("unset");
+    let goal_text = goal.unwrap_or("No goal specified — check tasks.yaml for context.");
+
+    let content = format!(
+        r#"# Bacchus Orchestrator — Active Session
+
+You are the orchestrator for this project. Follow this protocol.
+
+## Session
+- Run ID: {run_id}
+- Started: {started_at}
+- Max Concurrent: {max_concurrent}
+- Epic: {epic}
+
+## Goal
+{goal_text}
+
+## Hard Rules
+- NEVER write, edit, or create source code files
+- NEVER run `bacchus claim`, `bacchus next`, or `bacchus release`
+- NEVER edit files in `.bacchus/workspaces/`
+- Your ONLY output artifacts are `.bacchus/tasks.yaml` and messages to workers
+- To get work done, spawn workers via `bacchus session spawn-workers`
+
+## Monitor Loop
+Run this cycle repeatedly until all tasks are closed:
+```
+bacchus status
+bacchus list
+bacchus process-releases
+<run package manager install if releases were merged>
+bacchus stale --minutes 15 --cleanup
+bacchus events --limit 20
+bacchus message list --agent orchestrator
+bacchus task list --ready
+bacchus session spawn-workers --count {max_concurrent}  # if ready tasks and slots available
+```
+
+## Task Planning Reminders
+- High-impact tasks (features, refactors touching core logic) should include test-first instructions
+- Same worker writes tests + implements — don't split into separate tasks for the same code region
+- The pre-release quality gate runs project check/test/lint — workers cannot release if tests fail
+
+## When All Tasks Closed
+```
+bacchus eval --days 7
+bacchus session stop
+bacchus epic set-status {epic} closed
+```
+"#
+    );
+
+    let path = root.join(".bacchus/ORCHESTRATOR.md");
+    let _ = fs::write(&path, content);
 }

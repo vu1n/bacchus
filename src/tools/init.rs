@@ -65,6 +65,10 @@ pub struct InitClaudeStatus {
     pub archetypes_already_exists: bool,
     pub commands_installed: Vec<String>,
     pub commands_already_exist: Vec<String>,
+    pub claude_md_updated: bool,
+    pub claude_md_already_has_pointer: bool,
+    pub quality_config_created: bool,
+    pub quality_config_already_exists: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -343,6 +347,54 @@ fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
     }
 }
 
+/// Install quality config to .bacchus/config.yaml with project-detected defaults
+fn ensure_quality_config(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let path = workspace_root.join(".bacchus/config.yaml");
+
+    if path.exists() {
+        return Ok((false, true)); // (created, already_exists)
+    }
+
+    let content = crate::quality::generate_quality_config(workspace_root);
+    fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok((true, false))
+}
+
+/// The marker we look for to detect an existing bacchus pointer in CLAUDE.md.
+const CLAUDE_MD_MARKER: &str = ".bacchus/ORCHESTRATOR.md";
+
+/// Bacchus pointer section appended to CLAUDE.md.
+const CLAUDE_MD_SECTION: &str = r#"
+## Bacchus
+If `.bacchus/ORCHESTRATOR.md` exists, read it — you are the orchestrator. Follow its protocol.
+"#;
+
+/// Ensure CLAUDE.md has a pointer to the orchestrator breadcrumb.
+/// - If CLAUDE.md doesn't exist: creates it with just the pointer section
+/// - If it exists but has no bacchus section: appends the pointer section
+/// - If it already has the bacchus section: no-op
+fn ensure_claude_md(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let path = workspace_root.join("CLAUDE.md");
+
+    if path.exists() {
+        let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if content.contains(CLAUDE_MD_MARKER) {
+            return Ok((false, true)); // (updated, already_has_pointer)
+        }
+        // Append pointer section
+        let mut new_content = content;
+        if !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        new_content.push_str(CLAUDE_MD_SECTION);
+        fs::write(&path, new_content).map_err(|e| e.to_string())?;
+        Ok((true, false))
+    } else {
+        fs::write(&path, CLAUDE_MD_SECTION.trim_start()).map_err(|e| e.to_string())?;
+        Ok((true, false))
+    }
+}
+
 pub fn init_workspace(
     workspace_root: &Path,
     options: InitOptions<'_>,
@@ -377,6 +429,14 @@ pub fn init_workspace(
     let (installed, already_exist) = ensure_commands(workspace_root)?;
     claude.commands_installed = installed;
     claude.commands_already_exist = already_exist;
+
+    let (updated, already_has) = ensure_claude_md(workspace_root)?;
+    claude.claude_md_updated = updated;
+    claude.claude_md_already_has_pointer = already_has;
+
+    let (created, exists) = ensure_quality_config(workspace_root)?;
+    claude.quality_config_created = created;
+    claude.quality_config_already_exists = exists;
 
     let epic = match options.epic_id {
         Some(id) => Some(ensure_epic(id, options.epic_title)?),

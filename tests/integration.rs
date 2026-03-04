@@ -1990,6 +1990,184 @@ tasks:
 }
 
 // ============================================================================
+// Orchestrator Breadcrumb Tests
+// ============================================================================
+
+mod breadcrumb_tests {
+    use super::*;
+
+    #[test]
+    fn test_orchestrator_session_creates_breadcrumb() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        // Init DB
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let start_output = Command::new(bacchus_bin())
+            .args([
+                "session",
+                "start",
+                "orchestrator",
+                "--epic-id",
+                "TEST-EPIC",
+                "--goal",
+                "Implement breadcrumb test",
+            ])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            start_output.status.success(),
+            "session start failed: {}",
+            String::from_utf8_lossy(&start_output.stderr)
+        );
+
+        let breadcrumb_path = repo_path.join(".bacchus/ORCHESTRATOR.md");
+        assert!(
+            breadcrumb_path.exists(),
+            "ORCHESTRATOR.md should exist after session start"
+        );
+
+        let content = fs::read_to_string(&breadcrumb_path).unwrap();
+        assert!(content.contains("TEST-EPIC"));
+        assert!(content.contains("Implement breadcrumb test"));
+        assert!(content.contains("NEVER write, edit, or create source code files"));
+        assert!(content.contains("Monitor Loop"));
+
+        // Stop session — breadcrumb should be deleted
+        let stop_output = Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+        assert!(stop_output.status.success());
+
+        assert!(
+            !breadcrumb_path.exists(),
+            "ORCHESTRATOR.md should be deleted after session stop"
+        );
+    }
+
+    #[test]
+    fn test_orchestrator_session_breadcrumb_without_epic_and_goal() {
+        let temp = TempDir::new().unwrap();
+        let db_path = temp.path().join("test.db");
+        let repo_path = temp.path();
+
+        fs::create_dir_all(repo_path.join(".bacchus")).unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["status"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        let start_output = Command::new(bacchus_bin())
+            .args(["session", "start", "orchestrator"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output()
+            .unwrap();
+
+        assert!(start_output.status.success());
+
+        let breadcrumb_path = repo_path.join(".bacchus/ORCHESTRATOR.md");
+        assert!(breadcrumb_path.exists());
+
+        let content = fs::read_to_string(&breadcrumb_path).unwrap();
+        assert!(content.contains("Epic: unset"));
+        assert!(content.contains("No goal specified"));
+
+        // Cleanup
+        let _ = Command::new(bacchus_bin())
+            .args(["session", "stop"])
+            .current_dir(repo_path)
+            .env("BACCHUS_DB_PATH", &db_path)
+            .output();
+    }
+
+    #[test]
+    fn test_init_adds_claude_md_pointer() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        let output = Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let claude_md = repo_path.join("CLAUDE.md");
+        assert!(claude_md.exists(), "CLAUDE.md should be created by init");
+        let content = fs::read_to_string(&claude_md).unwrap();
+        assert!(content.contains(".bacchus/ORCHESTRATOR.md"));
+        assert!(content.contains("you are the orchestrator"));
+
+        // Run init again — should be idempotent
+        let output2 = Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        assert!(output2.status.success());
+        let stdout = String::from_utf8_lossy(&output2.stdout);
+        let json: Value = serde_json::from_str(&stdout).unwrap();
+        assert!(
+            json["claude"]["claude_md_already_has_pointer"]
+                .as_bool()
+                .unwrap_or(false),
+            "Second init should report pointer already exists"
+        );
+    }
+
+    #[test]
+    fn test_init_appends_to_existing_claude_md() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // Pre-create CLAUDE.md with existing content
+        let existing = "# My Project\n\nSome existing instructions.\n";
+        fs::write(repo_path.join("CLAUDE.md"), existing).unwrap();
+
+        let output = Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+
+        let content = fs::read_to_string(repo_path.join("CLAUDE.md")).unwrap();
+        assert!(
+            content.starts_with("# My Project"),
+            "Should preserve existing content"
+        );
+        assert!(
+            content.contains(".bacchus/ORCHESTRATOR.md"),
+            "Should append pointer"
+        );
+    }
+}
+
+// ============================================================================
 // Symbol Index Tests
 // ============================================================================
 
@@ -2432,6 +2610,122 @@ mod error_tests {
             stderr.contains("invalid value 'invalid'"),
             "Expected clap validation error, got: {}",
             stderr
+        );
+    }
+}
+
+// ============================================================================
+// Quality Gate Tests
+// ============================================================================
+
+mod quality_tests {
+    use super::*;
+
+    #[test]
+    fn test_init_creates_quality_config() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // Create a Cargo.toml so it detects Rust
+        fs::write(
+            repo_path.join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let output = Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let config_path = repo_path.join(".bacchus/config.yaml");
+        assert!(
+            config_path.exists(),
+            "Quality config should be created by init"
+        );
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("cargo check"), "Should detect Rust project");
+        assert!(content.contains("cargo test"), "Should include test command");
+        assert!(
+            content.contains("cargo clippy"),
+            "Should include lint command"
+        );
+        assert!(
+            content.contains("desloppify: true"),
+            "Should enable desloppify"
+        );
+
+        // Verify the init output includes quality config info
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let json: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(json["claude"]["quality_config_created"], true);
+    }
+
+    #[test]
+    fn test_init_quality_config_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // First init
+        Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        // Modify config to prove it won't be overwritten
+        let config_path = repo_path.join(".bacchus/config.yaml");
+        fs::write(&config_path, "quality:\n  check: \"custom\"\n").unwrap();
+
+        // Second init
+        let output = Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let json: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(json["claude"]["quality_config_already_exists"], true);
+
+        // Content should NOT be overwritten
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("custom"), "Config should not be overwritten");
+    }
+
+    #[test]
+    fn test_init_node_project_detection() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // Create a package.json so it detects Node
+        fs::write(repo_path.join("package.json"), "{}").unwrap();
+
+        Command::new(bacchus_bin())
+            .args(["init", "--skip-jj"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        let config_path = repo_path.join(".bacchus/config.yaml");
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            content.contains("tsc --noEmit"),
+            "Should detect Node project: {}",
+            content
+        );
+        assert!(
+            content.contains("vitest"),
+            "Should include vitest: {}",
+            content
         );
     }
 }

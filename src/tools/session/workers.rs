@@ -799,7 +799,7 @@ pub fn run_worker_command(
     }
 
     // Ensure worker-scoped agent session for heartbeat and stop-hook semantics.
-    let _ = start_session(SessionMode::Agent, Some(task_id), 1, Some(agent_id));
+    let _ = start_session(SessionMode::Agent, Some(task_id), 1, Some(agent_id), None, None);
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
