@@ -58,6 +58,10 @@ All work happens in `.bacchus/workspaces/<TASK_ID>/`.
 Always use `jj -R .bacchus/workspaces/<TASK_ID>/` for VCS commands.
 Edit files using full paths like `.bacchus/workspaces/<TASK_ID>/src/foo.rs`.
 
+**CRITICAL: Do NOT run package manager install commands** (`bun install`, `npm install`,
+`pnpm install`, `yarn install`, etc.). The orchestrator handles dependency installation
+after merging your changes. You may add dependencies to `package.json` — just don't run install.
+
 jj auto-snapshots — no explicit commit step needed.
 
 ```bash
@@ -136,3 +140,4 @@ bacchus handle clear                         # cleanup
 5. Describe changes before releasing
 6. Don't mark `done` if tests fail
 7. Check context for collision warnings before starting
+8. Never run `bun install` / `npm install` / `pnpm install` — orchestrator handles this

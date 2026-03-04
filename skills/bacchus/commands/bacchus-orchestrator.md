@@ -48,6 +48,10 @@ tell them. Include: what to build, which files to reference, which conventions t
 and what "done" looks like. The worker will not read the plan docs or epic description
 unless you paste the relevant parts into the task description.
 
+**Workers must NOT run package manager install** (`bun install`, `npm install`, etc.).
+Include this in task descriptions when tasks add dependencies. You (the orchestrator)
+run install once after processing releases to avoid parallel lockfile mutations.
+
 Example:
 ```yaml
 tasks:
@@ -119,6 +123,11 @@ bacchus list
 
 # Process completed releases (merge finished work into main)
 bacchus process-releases
+
+# IMPORTANT: After processing releases, run dependency install from repo root.
+# Workers do NOT run install — you do it once after merging their changes.
+# Use the project's package manager (bun/npm/pnpm/yarn/cargo):
+bun install          # or: npm install, pnpm install, cargo build, etc.
 
 # Find and recover stale claims (workers that died)
 bacchus stale --minutes 15 --cleanup
