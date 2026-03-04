@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     ready_commit_id TEXT,                   -- jj commit ID when agent marks ready (pre-rebase)
     release_commit_id TEXT,                 -- jj commit ID after rebase (for stuck detection)
     release_started_at INTEGER,             -- When orchestrator started release attempt
+    completed_at INTEGER,                   -- Unix timestamp ms when task closed
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
@@ -305,6 +306,19 @@ BEGIN
 END;
 
 -- ============================================================================
+-- Task Quality Results (per-check pass/fail from quality gates)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS task_quality_results (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    check_name TEXT NOT NULL,
+    passed INTEGER NOT NULL,         -- 0/1 boolean
+    output TEXT,                      -- truncated command output
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (task_id, check_name)
+);
+CREATE INDEX IF NOT EXISTS idx_quality_results_task ON task_quality_results(task_id);
+
+-- ============================================================================
 -- Handles (token-saving handle/pointer system for query results)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS handles (
@@ -348,6 +362,7 @@ mod tests {
             "orchestration_events",
             "orchestrator_leases",
             "agent_workers",
+            "task_quality_results",
             "handles",
             "handle_data",
         ];

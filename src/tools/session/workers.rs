@@ -239,9 +239,30 @@ pub(super) fn spawn_orchestrator_worker(
             "BACCHUS_WORKSPACE_PATH",
             workspace.path.to_string_lossy().to_string(),
         )
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(Stdio::null());
+
+    // Redirect stdout/stderr to per-task log file
+    let logs_dir = workspace_root.join(".bacchus/logs");
+    std::fs::create_dir_all(&logs_dir).ok();
+    let log_path = logs_dir.join(format!("{}.log", task.id));
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(log_file) => match log_file.try_clone() {
+            Ok(log_err) => {
+                cmd.stdout(Stdio::from(log_file))
+                    .stderr(Stdio::from(log_err));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        },
+        Err(_) => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
 
     if let Ok(db_path) = std::env::var("BACCHUS_DB_PATH") {
         if !db_path.trim().is_empty() {
@@ -856,6 +877,27 @@ pub fn run_worker_command(
 
     let output = cmd.output().map_err(|e| e.to_string())?;
     let exit_code = output.status.code();
+
+    // Append captured stdout/stderr to per-task log file
+    {
+        let logs_dir = workspace_root.join(".bacchus/logs");
+        std::fs::create_dir_all(&logs_dir).ok();
+        let log_path = logs_dir.join(format!("{}.log", task_id));
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            if !output.stdout.is_empty() {
+                let _ = f.write_all(&output.stdout);
+            }
+            if !output.stderr.is_empty() {
+                let _ = writeln!(f, "\n--- stderr ---");
+                let _ = f.write_all(&output.stderr);
+            }
+        }
+    }
 
     if output.status.success() {
         let transitioned = workers::mark_worker_completed(worker_id, exit_code).unwrap_or(false);

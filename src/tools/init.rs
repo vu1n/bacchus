@@ -370,6 +370,7 @@ const DB_IGNORE_PATTERNS: &[&str] = &[
     ".bacchus/bacchus.db-wal",
     ".bacchus/bacchus.db-shm",
     ".bacchus/sessions/",
+    ".bacchus/logs/",
 ];
 
 /// Marker comment we add to .gitignore so we can detect our section.

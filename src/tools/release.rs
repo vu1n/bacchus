@@ -139,6 +139,7 @@ pub fn release_task(
                 let ws_path = workspace::get_workspaces_dir(workspace_root).join(task_id);
                 match quality::run_quality_gate(&config, &ws_path) {
                     Ok(gate) if !gate.passed => {
+                        quality::store_quality_results(task_id, &gate.checks);
                         return Ok(ReleaseOutput {
                             success: false,
                             task_id: task_id.to_string(),
@@ -150,8 +151,7 @@ pub fn release_task(
                         });
                     }
                     Ok(gate) => {
-                        // Gate passed — checks included in success output
-                        let _ = gate; // consumed below if needed
+                        quality::store_quality_results(task_id, &gate.checks);
                     }
                     Err(e) => {
                         // Gate runner error — fail-open with warning, don't block release

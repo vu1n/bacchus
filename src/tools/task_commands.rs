@@ -2,6 +2,7 @@
 //!
 //! Provides commands for listing, showing, validating, and initializing tasks.
 
+use crate::quality::QualityCheck;
 use crate::tasks::{self, Task, TaskValidation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -34,6 +35,8 @@ pub struct TaskShowOutput {
     pub is_ready: bool,
     pub blocking_deps: Vec<String>,
     pub footprint_conflicts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality_results: Vec<QualityCheck>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -151,12 +154,14 @@ pub fn show_task(_workspace_root: &Path, task_id: &str) -> Result<TaskShowOutput
     };
 
     let is_ready = ready_ids.contains(task_id);
+    let quality_results = crate::quality::load_quality_results(task_id);
 
     Ok(TaskShowOutput {
         task,
         is_ready,
         blocking_deps,
         footprint_conflicts,
+        quality_results,
     })
 }
 

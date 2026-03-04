@@ -237,6 +237,20 @@ fn main() {
             }
         },
 
+        Commands::Logs { task_id } => {
+            let log_path = workspace_root
+                .join(".bacchus/logs")
+                .join(format!("{}.log", task_id));
+            match std::fs::read_to_string(&log_path) {
+                Ok(content) => Ok(Output::Raw(content)),
+                Err(_) => Err(BacchusError::Task(format!(
+                    "No log file found for task {} (expected {})",
+                    task_id,
+                    log_path.display()
+                ))),
+            }
+        }
+
         Commands::Handle { command } => match command {
             HandleCommands::Expand {
                 handle,

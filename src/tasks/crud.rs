@@ -28,7 +28,7 @@ pub(super) fn require_affected(
 // ============================================================================
 
 pub(crate) const TASK_SELECT_COLUMNS: &str =
-    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, created_at, updated_at, deleted_at";
+    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, completed_at, created_at, updated_at, deleted_at";
 
 pub(crate) fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SqliteTask> {
     let status_str: String = row.get(5)?;
@@ -48,9 +48,10 @@ pub(crate) fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<S
         ready_commit_id: row.get(11)?,
         release_commit_id: row.get(12)?,
         release_started_at: row.get(13)?,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
-        deleted_at: row.get(16)?,
+        completed_at: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        deleted_at: row.get(17)?,
     })
 }
 
@@ -138,6 +139,7 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                 ready_commit_id: None,
                 release_commit_id: None,
                 release_started_at: None,
+                completed_at: None,
                 created_at: now,
                 updated_at: flip_time,
                 deleted_at: None,
@@ -378,6 +380,7 @@ pub fn complete_task_release(task_id: &str) -> Result<(), TasksError> {
             conn,
             "UPDATE tasks
              SET status = 'closed',
+                 completed_at = ?1,
                  claimed_by = NULL,
                  claimed_at = NULL,
                  claimed_heartbeat_at = NULL,

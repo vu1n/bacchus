@@ -180,11 +180,14 @@ pub fn get_ready_sqlite_tasks(epic_id: Option<&str>) -> Result<Vec<SqliteTask>, 
         };
 
         let ready = readiness_predicates("t.id", "?1");
+        let qualified_cols = TASK_SELECT_COLUMNS
+            .split(", ")
+            .map(|c| format!("t.{}", c))
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             r#"
-            SELECT t.id, t.epic_id, t.title, t.description, t.priority, t.status, t.task_type, t.archetype,
-                   t.claimed_by, t.claimed_at, t.claimed_heartbeat_at, t.ready_commit_id, t.release_commit_id, t.release_started_at,
-                   t.created_at, t.updated_at, t.deleted_at
+            SELECT {qualified_cols}
             FROM tasks t
             WHERE t.status = 'open'
               AND t.deleted_at IS NULL

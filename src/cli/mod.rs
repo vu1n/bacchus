@@ -168,6 +168,9 @@ pub enum Commands {
         command: ArchetypeCommands,
     },
 
+    /// Show worker log for a task
+    Logs { task_id: String },
+
     /// Token-saving query result handles
     Handle {
         #[command(subcommand)]

@@ -392,6 +392,9 @@ pub struct SqliteTask {
     /// When orchestrator started release attempt
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_started_at: Option<i64>,
+    /// When task was closed (completed_at timestamp)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -169,6 +169,44 @@ fn truncate_output(s: &str, max: usize) -> String {
     }
 }
 
+/// Persist quality gate check results to the DB for audit/debugging.
+///
+/// Truncates output to 4KB per check to keep the DB lean.
+pub fn store_quality_results(task_id: &str, checks: &[QualityCheck]) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let _ = crate::db::with_db(|conn| {
+        for check in checks {
+            let output = truncate_output(&check.output, 4096);
+            conn.execute(
+                "INSERT OR REPLACE INTO task_quality_results (task_id, check_name, passed, output, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![task_id, check.name, check.passed as i32, output, now],
+            )?;
+        }
+        Ok(())
+    });
+}
+
+/// Load quality gate results from DB for a given task.
+pub fn load_quality_results(task_id: &str) -> Vec<QualityCheck> {
+    crate::db::with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT check_name, passed, output FROM task_quality_results WHERE task_id = ?1 ORDER BY check_name",
+        )?;
+        let rows = stmt
+            .query_map([task_id], |row| {
+                Ok(QualityCheck {
+                    name: row.get(0)?,
+                    passed: row.get::<_, i32>(1)? != 0,
+                    output: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+    .unwrap_or_default()
+}
+
 /// Format quality gate failures for user display.
 pub fn format_gate_failures(gate: &QualityGateResult) -> String {
     let mut msg = String::from("Quality gate failed:\n");
