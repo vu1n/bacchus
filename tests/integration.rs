@@ -332,6 +332,22 @@ mod db_tests {
         );
         assert!(repo_path.join(".bacchus/tasks.yaml").exists());
         assert!(repo_path.join(".bacchus/bacchus.db").exists());
+        assert!(repo_path.join(".bacchus/archetypes.yaml").exists());
+        assert!(
+            repo_path
+                .join(".claude/commands/bacchus-worker.md")
+                .exists()
+        );
+        assert!(
+            repo_path
+                .join(".claude/commands/bacchus-orchestrator.md")
+                .exists()
+        );
+        assert!(
+            repo_path
+                .join(".claude/commands/bacchus-plan.md")
+                .exists()
+        );
     }
 
     #[test]

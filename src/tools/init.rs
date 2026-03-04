@@ -10,9 +10,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Embedded skill and archetypes content (version-matched to binary)
+/// Embedded content (version-matched to binary)
 const SKILL_MD: &str = include_str!("../../skills/bacchus/SKILL.md");
 const ARCHETYPES_YAML: &str = include_str!("../../skills/bacchus/archetypes.yaml");
+const CMD_WORKER: &str = include_str!("../../skills/bacchus/commands/bacchus-worker.md");
+const CMD_ORCHESTRATOR: &str = include_str!("../../skills/bacchus/commands/bacchus-orchestrator.md");
+const CMD_PLAN: &str = include_str!("../../skills/bacchus/commands/bacchus-plan.md");
 
 /// The stop hook command (fail-open design)
 const HOOK_CMD: &str =
@@ -60,6 +63,8 @@ pub struct InitClaudeStatus {
     pub hook_already_exists: bool,
     pub archetypes_installed: bool,
     pub archetypes_already_exists: bool,
+    pub commands_installed: Vec<String>,
+    pub commands_already_exist: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,6 +246,33 @@ fn ensure_archetypes(workspace_root: &Path) -> Result<(bool, bool), String> {
     Ok((true, false))
 }
 
+/// Install slash commands to .claude/commands/
+fn ensure_commands(workspace_root: &Path) -> Result<(Vec<String>, Vec<String>), String> {
+    let commands_dir = workspace_root.join(".claude/commands");
+    fs::create_dir_all(&commands_dir).map_err(|e| e.to_string())?;
+
+    let commands = [
+        ("bacchus-worker.md", CMD_WORKER),
+        ("bacchus-orchestrator.md", CMD_ORCHESTRATOR),
+        ("bacchus-plan.md", CMD_PLAN),
+    ];
+
+    let mut installed = Vec::new();
+    let mut already_exist = Vec::new();
+
+    for (filename, content) in &commands {
+        let path = commands_dir.join(filename);
+        if path.exists() {
+            already_exist.push(filename.to_string());
+        } else {
+            fs::write(&path, content).map_err(|e| e.to_string())?;
+            installed.push(filename.to_string());
+        }
+    }
+
+    Ok((installed, already_exist))
+}
+
 /// Install project-level stop hook in .claude/settings.json
 fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
     let settings_path = workspace_root.join(".claude/settings.json");
@@ -341,6 +373,10 @@ pub fn init_workspace(
     let (installed, exists) = ensure_archetypes(workspace_root)?;
     claude.archetypes_installed = installed;
     claude.archetypes_already_exists = exists;
+
+    let (installed, already_exist) = ensure_commands(workspace_root)?;
+    claude.commands_installed = installed;
+    claude.commands_already_exist = already_exist;
 
     let epic = match options.epic_id {
         Some(id) => Some(ensure_epic(id, options.epic_title)?),
