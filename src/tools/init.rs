@@ -69,6 +69,8 @@ pub struct InitClaudeStatus {
     pub claude_md_already_has_pointer: bool,
     pub quality_config_created: bool,
     pub quality_config_already_exists: bool,
+    pub db_ignore_added: bool,
+    pub db_ignore_already_exists: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +362,72 @@ fn ensure_quality_config(workspace_root: &Path) -> Result<(bool, bool), String> 
     Ok((true, false))
 }
 
+/// Patterns that must be in the VCS ignore file to prevent jj/git from tracking runtime state.
+/// If the DB is tracked, jj workspace operations (rebase, workspace create) will restore it
+/// to an earlier committed state, reverting task statuses and losing runtime data.
+const DB_IGNORE_PATTERNS: &[&str] = &[
+    ".bacchus/bacchus.db",
+    ".bacchus/bacchus.db-wal",
+    ".bacchus/bacchus.db-shm",
+    ".bacchus/sessions/",
+];
+
+/// Marker comment we add to .gitignore so we can detect our section.
+const IGNORE_MARKER: &str = "# bacchus runtime state";
+
+/// Ensure the bacchus DB and session files are excluded from version control.
+///
+/// - Appends ignore patterns to `.gitignore` (creates if needed)
+/// - If jj is available and files are tracked, runs `jj file untrack`
+fn ensure_db_ignored(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let gitignore_path = workspace_root.join(".gitignore");
+
+    // Check if patterns are already present
+    let existing = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    if existing.contains(IGNORE_MARKER) {
+        return Ok((false, true)); // (added, already_ignored)
+    }
+
+    // Append ignore patterns
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&format!("\n{}\n", IGNORE_MARKER));
+    for pattern in DB_IGNORE_PATTERNS {
+        content.push_str(&format!("{}\n", pattern));
+    }
+
+    fs::write(&gitignore_path, content).map_err(|e| e.to_string())?;
+
+    // If jj is available, untrack already-tracked files (quiet — no stdout pollution)
+    let jj_ok = Command::new("jj")
+        .args(["root"])
+        .current_dir(workspace_root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if jj_ok {
+        for pattern in DB_IGNORE_PATTERNS {
+            let full_path = workspace_root.join(pattern);
+            if full_path.exists() {
+                // Ignore errors — file may not be tracked
+                let _ = Command::new("jj")
+                    .args(["file", "untrack", pattern])
+                    .current_dir(workspace_root)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output();
+            }
+        }
+    }
+
+    Ok((true, false))
+}
+
 /// The marker we look for to detect an existing bacchus pointer in CLAUDE.md.
 const CLAUDE_MD_MARKER: &str = ".bacchus/ORCHESTRATOR.md";
 
@@ -437,6 +505,10 @@ pub fn init_workspace(
     let (created, exists) = ensure_quality_config(workspace_root)?;
     claude.quality_config_created = created;
     claude.quality_config_already_exists = exists;
+
+    let (added, exists) = ensure_db_ignored(workspace_root)?;
+    claude.db_ignore_added = added;
+    claude.db_ignore_already_exists = exists;
 
     let epic = match options.epic_id {
         Some(id) => Some(ensure_epic(id, options.epic_title)?),
@@ -524,6 +596,111 @@ mod tests {
         assert!(out.tasks.overwritten);
         let content = fs::read_to_string(&tasks_path).unwrap();
         assert!(content.contains("# Bacchus Task Configuration"));
+
+        close_db();
+    }
+
+    #[test]
+    fn test_init_adds_db_ignore_to_gitignore() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        init_db(Some(db_path.to_str().unwrap())).unwrap();
+
+        let out = init_workspace(
+            dir.path(),
+            InitOptions {
+                skip_jj: true,
+                force_tasks: false,
+                epic_id: None,
+                epic_title: None,
+            },
+        )
+        .unwrap();
+        assert!(out.claude.db_ignore_added);
+        assert!(!out.claude.db_ignore_already_exists);
+
+        let gitignore = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(gitignore.contains("# bacchus runtime state"));
+        assert!(gitignore.contains(".bacchus/bacchus.db"));
+        assert!(gitignore.contains(".bacchus/bacchus.db-wal"));
+        assert!(gitignore.contains(".bacchus/sessions/"));
+
+        close_db();
+    }
+
+    #[test]
+    fn test_init_db_ignore_idempotent() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        init_db(Some(db_path.to_str().unwrap())).unwrap();
+
+        // First init
+        init_workspace(
+            dir.path(),
+            InitOptions {
+                skip_jj: true,
+                force_tasks: false,
+                epic_id: None,
+                epic_title: None,
+            },
+        )
+        .unwrap();
+
+        let first_content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+
+        // Second init
+        let out = init_workspace(
+            dir.path(),
+            InitOptions {
+                skip_jj: true,
+                force_tasks: false,
+                epic_id: None,
+                epic_title: None,
+            },
+        )
+        .unwrap();
+        assert!(!out.claude.db_ignore_added);
+        assert!(out.claude.db_ignore_already_exists);
+
+        let second_content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(
+            first_content, second_content,
+            "gitignore should not change on second init"
+        );
+
+        close_db();
+    }
+
+    #[test]
+    fn test_init_db_ignore_appends_to_existing_gitignore() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        init_db(Some(db_path.to_str().unwrap())).unwrap();
+
+        // Pre-existing .gitignore
+        fs::write(dir.path().join(".gitignore"), "node_modules/\ndist/\n").unwrap();
+
+        let out = init_workspace(
+            dir.path(),
+            InitOptions {
+                skip_jj: true,
+                force_tasks: false,
+                epic_id: None,
+                epic_title: None,
+            },
+        )
+        .unwrap();
+        assert!(out.claude.db_ignore_added);
+
+        let gitignore = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(
+            gitignore.starts_with("node_modules/"),
+            "should preserve existing content"
+        );
+        assert!(
+            gitignore.contains(".bacchus/bacchus.db"),
+            "should add db ignore"
+        );
 
         close_db();
     }
