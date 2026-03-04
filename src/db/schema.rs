@@ -160,15 +160,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_locked ON agent_messages(locked_at) WHER
 -- Triggers (only create if not exists - SQLite doesn't support IF NOT EXISTS for triggers)
 -- ============================================================================
 
--- Same-epic dependency trigger
+-- Cross-epic dependencies are allowed; readiness system is epic-agnostic
 DROP TRIGGER IF EXISTS enforce_same_epic_deps;
-CREATE TRIGGER enforce_same_epic_deps
-BEFORE INSERT ON task_dependencies
-BEGIN
-    SELECT RAISE(ABORT, 'Dependencies must be within the same epic')
-    WHERE (SELECT epic_id FROM tasks WHERE id = NEW.task_id) !=
-          (SELECT epic_id FROM tasks WHERE id = NEW.depends_on);
-END;
 
 -- Auto-update timestamps
 DROP TRIGGER IF EXISTS tasks_set_updated_at;
@@ -444,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn test_same_epic_dependency_trigger() {
+    fn test_cross_epic_dependency_allowed() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
@@ -474,14 +467,14 @@ mod tests {
             [now],
         ).unwrap();
 
-        // Cross-epic should fail
-        let result = conn.execute(
+        // Cross-epic should now succeed
+        conn.execute(
             "INSERT INTO task_dependencies (task_id, depends_on) VALUES ('T1', 'T2')",
             [],
-        );
-        assert!(result.is_err());
+        )
+        .unwrap();
 
-        // Same-epic should work
+        // Same-epic should still work
         conn.execute(
             "INSERT INTO task_dependencies (task_id, depends_on) VALUES ('T1', 'T3')",
             [],

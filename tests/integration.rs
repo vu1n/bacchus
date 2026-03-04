@@ -470,7 +470,7 @@ tasks:
         fs::write(&bad_workspaces, "not-a-directory").unwrap();
 
         let claim_output = Command::new(bacchus_bin())
-            .args(["claim", "ROLLBACK-001", "agent-1"])
+            .args(["claim", "ROLLBACK-001", "--agent-id", "agent-1"])
             .current_dir(repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .env("BACCHUS_WORKSPACES", &bad_workspaces)
@@ -536,7 +536,7 @@ tasks:
         fs::write(&bad_workspaces, "not-a-directory").unwrap();
 
         let next_output = Command::new(bacchus_bin())
-            .args(["next", "agent-1"])
+            .args(["next", "--agent-id", "agent-1"])
             .current_dir(repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .env("BACCHUS_WORKSPACES", &bad_workspaces)
@@ -2298,7 +2298,7 @@ mod workflow_tests {
 
         // Run next - should report no ready tasks (no tasks.yaml exists)
         let output = Command::new(bacchus_bin())
-            .args(["next", "test-agent"])
+            .args(["next", "--agent-id", "test-agent"])
             .current_dir(&repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
@@ -2413,7 +2413,7 @@ tasks:
         assert!(import_output.status.success());
 
         let claim_output = Command::new(bacchus_bin())
-            .args(["claim", "REL-001", "agent-1"])
+            .args(["claim", "REL-001", "--agent-id", "agent-1"])
             .current_dir(&repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
@@ -2512,7 +2512,7 @@ tasks:
             .unwrap();
 
         Command::new(bacchus_bin())
-            .args(["claim", "FORCE-001", "agent-1"])
+            .args(["claim", "FORCE-001", "--agent-id", "agent-1"])
             .current_dir(&repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
@@ -2539,7 +2539,7 @@ tasks:
             .unwrap();
 
         let force_output = Command::new(bacchus_bin())
-            .args(["claim", "FORCE-001", "agent-2", "--force"])
+            .args(["claim", "FORCE-001", "--agent-id", "agent-2", "--force"])
             .current_dir(&repo_path)
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
@@ -2578,7 +2578,7 @@ mod error_tests {
         // Should fail due to missing agent_id
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("agent_id") || stderr.contains("required"));
+        assert!(stderr.contains("agent-id") || stderr.contains("required"));
     }
 
     #[test]

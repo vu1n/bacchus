@@ -413,6 +413,44 @@ fn create_desloppify_cleanup_tasks(
     let _ = workspace_root; // used for context
 }
 
+/// Build a markdown table snapshot of all tasks at session start.
+fn build_task_snapshot(epic_id: Option<&str>) -> String {
+    let result = crate::db::with_db(|conn| {
+        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match epic_id {
+            Some(eid) => (
+                "SELECT id, status, title FROM tasks WHERE deleted_at IS NULL AND epic_id = ?1 ORDER BY id LIMIT 51",
+                vec![Box::new(eid.to_string()) as Box<dyn rusqlite::types::ToSql>],
+            ),
+            None => (
+                "SELECT id, status, title FROM tasks WHERE deleted_at IS NULL ORDER BY id LIMIT 51",
+                vec![],
+            ),
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    });
+
+    let rows = match result {
+        Ok(r) if !r.is_empty() => r,
+        _ => return String::new(),
+    };
+
+    let mut table = String::from("## Task Snapshot (at session start)\n\n| ID | Status | Title |\n|----|--------|-------|\n");
+    let truncated = rows.len() > 50;
+    for (id, status, title) in rows.iter().take(50) {
+        table.push_str(&format!("| {} | {} | {} |\n", id, status, title));
+    }
+    if truncated {
+        table.push_str("\n_(truncated — more than 50 tasks)_\n");
+    }
+    table
+}
+
 /// Write `.bacchus/ORCHESTRATOR.md` breadcrumb so the orchestrator protocol
 /// survives context compaction (CLAUDE.md always stays loaded and points here).
 fn write_orchestrator_breadcrumb(
@@ -426,6 +464,13 @@ fn write_orchestrator_breadcrumb(
     let started_at = &session.started_at;
     let epic = epic_id.unwrap_or("unset");
     let goal_text = goal.unwrap_or("No goal specified — check tasks.yaml for context.");
+    let task_snapshot = build_task_snapshot(epic_id);
+
+    let snapshot_section = if task_snapshot.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}\n", task_snapshot)
+    };
 
     let content = format!(
         r#"# Bacchus Orchestrator — Active Session
@@ -441,6 +486,18 @@ You are the orchestrator for this project. Follow this protocol.
 ## Goal
 {goal_text}
 
+## Recovery After Context Loss
+
+If you lost context (window compacted), run these commands to rebuild state:
+```
+bacchus status          # overview: claims, symbols, health
+bacchus task list       # all tasks with status
+bacchus list            # active claims and workspaces
+bacchus events --limit 20  # recent events (failures, completions)
+```
+Then resume the Monitor Loop below. Task descriptions contain full worker instructions —
+no need to re-read external docs or plan files.
+{snapshot_section}
 ## Hard Rules
 - NEVER write, edit, or create source code files
 - NEVER run `bacchus claim`, `bacchus next`, or `bacchus release`

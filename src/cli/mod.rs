@@ -15,11 +15,15 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Find next ready task, create workspace, and claim it
-    Next { agent_id: String },
+    Next {
+        #[arg(long)]
+        agent_id: String,
+    },
 
     /// Claim a specific task by ID
     Claim {
         task_id: String,
+        #[arg(long)]
         agent_id: String,
         #[arg(long, help = "Force claim even if not ready")]
         force: bool,
@@ -50,7 +54,11 @@ pub enum Commands {
     List,
 
     /// Record heartbeat for an active claim
-    Heartbeat { task_id: String, agent_id: String },
+    Heartbeat {
+        task_id: String,
+        #[arg(long)]
+        agent_id: String,
+    },
 
     /// Advisory pre-release checks (build, test, footprint)
     Review {

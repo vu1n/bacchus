@@ -163,12 +163,12 @@ pub fn import_yaml_tasks(
                 // Dep is in YAML, will be imported
                 valid_deps.push(dep.clone());
             } else {
-                // Check if dep exists in SQLite (same epic)
+                // Check if dep exists in SQLite (any epic)
                 let dep_exists = with_db(|conn| {
                     Ok(conn
                         .query_row(
-                            "SELECT 1 FROM tasks WHERE id = ?1 AND epic_id = ?2 AND deleted_at IS NULL",
-                            params![dep, &epic_id],
+                            "SELECT 1 FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+                            params![dep],
                             |_| Ok(true),
                         )
                         .unwrap_or(false))
