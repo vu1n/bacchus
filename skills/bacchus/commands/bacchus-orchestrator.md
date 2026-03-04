@@ -149,7 +149,7 @@ bacchus status
 # List active claims (see which workers are running)
 bacchus list
 
-# Process completed releases (merge finished work into main)
+# Process completed releases (merge into main, re-index changed symbols)
 bacchus process-releases
 
 # IMPORTANT: After processing releases, run dependency install from repo root.
@@ -204,9 +204,14 @@ When all tasks are closed:
 
 ```bash
 bacchus eval --days 7             # metrics report
-bacchus session stop              # release orchestrator lease
+bacchus session stop              # runs desloppify scan, re-indexes symbols, releases lease
 bacchus epic set-status <EPIC_ID> closed
 ```
+
+`session stop` automatically:
+- Runs desloppify scan (if configured) and creates cleanup tasks for findings
+- Re-indexes the full project so the symbol table is fresh for the next session
+- Releases the orchestrator lease
 
 ## Rules
 

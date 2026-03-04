@@ -174,6 +174,14 @@ pub fn stop_session() -> Result<String, String> {
                             create_desloppify_cleanup_tasks(&root, &scan);
                         }
                     }
+
+                    // Re-index the project so the symbol table is fresh for the next session.
+                    // process-releases re-indexes per-merge, but drift can accumulate from
+                    // manual fixes, desloppify cleanup, or partial indexing failures.
+                    match crate::index_path(".", &root) {
+                        Ok(n) => eprintln!("Re-indexed {} files at session end", n),
+                        Err(e) => eprintln!("Warning: re-index at session end failed: {}", e),
+                    }
                 }
 
                 // Remove orchestrator breadcrumb
