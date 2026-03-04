@@ -58,6 +58,7 @@ archetypes:
       - If the task says "responsive" and doesn't specify breakpoints, match existing breakpoints in the codebase
 
       Release check: Does it render? Does it match the task description? Is it accessible via keyboard?
+      Pre-release: rebase onto main, run /simplify, then bacchus review.
 
   backend:
     name: Backend API
@@ -98,6 +99,7 @@ archetypes:
       - Never swallow errors silently — propagate or log with context
 
       Release check: Does the endpoint return correct responses for valid and invalid input? Are DB queries efficient?
+      Pre-release: rebase onto main, run /simplify, then bacchus review.
 
   data:
     name: Data Engineer
@@ -135,6 +137,7 @@ archetypes:
       - For schema changes: backward-compatible first (add column, backfill, then drop old)
 
       Release check: Does the migration apply cleanly? Does it roll back cleanly? Are queries using indexes?
+      Pre-release: rebase onto main, run /simplify, then bacchus review.
 
   test:
     name: Test Engineer
@@ -173,6 +176,7 @@ archetypes:
       - Tests must be independent — no shared mutable state between tests
 
       Release check: Do all tests pass? Does each test fail when the asserted behavior is broken?
+      Pre-release: rebase onto main, run /simplify, then bacchus review.
 
   infra:
     name: Infrastructure
@@ -213,6 +217,7 @@ archetypes:
       - Don't expose ports, credentials, or internal paths unnecessarily
 
       Release check: Does it validate/lint cleanly? Are secrets handled via env vars? Is there a rollback path?
+      Pre-release: rebase onto main, run /simplify, then bacchus review.
 
   # =============================================================================
   # Review Archetypes
@@ -308,3 +313,4 @@ archetypes:
       4. Verify your changes work (build, run, test as appropriate)
 
       Stay within your footprint. Match existing code patterns. Release when done.
+      Pre-release: rebase onto main, run /simplify, then bacchus review.

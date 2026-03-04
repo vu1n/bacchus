@@ -20,10 +20,10 @@ TASK_ID  = second word of $ARGUMENTS (optional)
 ```bash
 # If TASK_ID was provided:
 bacchus session start agent --agent-id <AGENT_ID> --task-id <TASK_ID>
-bacchus claim <TASK_ID> <AGENT_ID>
+bacchus claim <TASK_ID> --agent-id <AGENT_ID>
 
 # If no TASK_ID — find the next ready task:
-bacchus next <AGENT_ID>
+bacchus next --agent-id <AGENT_ID>
 ```
 
 ### 2. Understand the Task
@@ -89,19 +89,35 @@ If you need code outside your footprint, release as `blocked` and message the or
 ### 6. Heartbeat During Long Work
 
 ```bash
-bacchus heartbeat <TASK_ID>
+bacchus heartbeat <TASK_ID> --agent-id <AGENT_ID>
 ```
 
 Send periodically to avoid being marked stale (default timeout: 15 min).
 
-### 7. Review Before Release
+### 7. Rebase and Review Before Release
+
+Before releasing, rebase onto current main so the quality gate and /simplify run against up-to-date code:
 
 ```bash
+# a. Rebase your workspace onto main
+jj -R .bacchus/workspaces/<TASK_ID>/ rebase -d main
+
+# b. If conflicts appear, resolve them:
+jj -R .bacchus/workspaces/<TASK_ID>/ resolve
+# Then re-run build/tests to verify resolution
+
+# c. Run /simplify to review your changes for quality
+#    (reuse, efficiency, consistency with codebase patterns)
+#    Fix any findings before proceeding
+
+# d. Run the quality gate
 bacchus review <TASK_ID>
 ```
 
-Checks: workspace exists, changes present, footprint compliance.
-Do NOT release as `done` if review fails.
+Do NOT release as `done` if:
+- Rebase conflicts remain unresolved
+- `/simplify` found unaddressed issues
+- `bacchus review` fails
 
 ### 8. Describe and Release
 

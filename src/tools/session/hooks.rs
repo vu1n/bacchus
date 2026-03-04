@@ -137,7 +137,7 @@ pub(super) fn check_agent_session(session: &Session) -> HookCheckOutput {
                 tasks::SqliteTaskStatus::Open | tasks::SqliteTaskStatus::Draft => HookCheckOutput {
                     decision: "block".to_string(),
                     reason: format!(
-                        "Task {} is '{}'. Reclaim it with 'bacchus claim {} <agent_id>' or stop the session if this task is no longer assigned.",
+                        "Task {} is '{}'. Reclaim it with 'bacchus claim {} --agent-id <agent_id>' or stop the session if this task is no longer assigned.",
                         task_id,
                         task.status.as_str(),
                         task_id
@@ -296,7 +296,7 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         }
     } else if orphaned_in_progress_count > 0 {
         let mut reason = format!(
-            "{} task(s) are in_progress without claims: {}. Reclaim with 'bacchus claim <id> <agent> --force' or reset status.",
+            "{} task(s) are in_progress without claims: {}. Reclaim with 'bacchus claim <id> --agent-id <agent> --force' or reset status.",
             orphaned_in_progress_count,
             orphaned_in_progress_ids.join(", ")
         );
@@ -368,7 +368,7 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             }
         } else {
             format!(
-                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus session spawn-workers --count {}' (with BACCHUS_WORKER_CMD set) or 'bacchus claim <task_id> <agent_id>'.",
+                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus session spawn-workers --count {}' (with BACCHUS_WORKER_CMD set) or 'bacchus claim <task_id> --agent-id <agent_id>'.",
                 to_spawn,
                 task_ids.join(", "),
                 active_count,

@@ -432,7 +432,11 @@ fn build_task_snapshot(epic_id: Option<&str>) -> String {
         "## Task Snapshot (at session start)\n\n| ID | Status | Title |\n|----|--------|-------|\n",
     );
     for task in rows.iter().take(MAX_ROWS) {
-        let _ = write!(table, "| {} | {} | {} |\n", task.id, task.status, task.title);
+        let _ = write!(
+            table,
+            "| {} | {} | {} |\n",
+            task.id, task.status, task.title
+        );
     }
     if rows.len() > MAX_ROWS {
         table.push_str("\n_(truncated — more than 50 tasks)_\n");

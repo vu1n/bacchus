@@ -10,7 +10,10 @@ Workspace-based coordination CLI for multi-agent work. Uses jj workspaces + SQLi
 1. Orchestrator spawns agent with archetype prompt
 2. bacchus claim <task-id> --agent-id <agent-id>
 3. Work in .bacchus/workspaces/<task-id>/ (use jj -R, NEVER cd)
-4. bacchus release <task-id> --status done
+4. jj -R .bacchus/workspaces/<task-id>/ rebase -d main
+5. Run /simplify, fix findings
+6. bacchus review <task-id>
+7. bacchus release <task-id> --status done
 ```
 
 ### Key Commands

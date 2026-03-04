@@ -146,6 +146,8 @@ pub struct ImportResult {
     pub epic_id: String,
     /// Any warnings generated during import
     pub warnings: Vec<String>,
+    /// Path to the archived tasks.yaml (if archival succeeded)
+    pub archived_from: Option<String>,
 }
 
 // ============================================================================

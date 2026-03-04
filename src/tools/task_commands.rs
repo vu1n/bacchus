@@ -63,6 +63,7 @@ pub struct TaskImportOutput {
     pub skipped_ids: Vec<String>,
     pub epic_id: String,
     pub warnings: Vec<String>,
+    pub archived_from: Option<String>,
     pub message: String,
 }
 
@@ -236,6 +237,7 @@ pub fn import_tasks(
                 skipped_ids: result.skipped_ids,
                 epic_id: result.epic_id,
                 warnings: result.warnings,
+                archived_from: result.archived_from,
                 message,
             })
         }
@@ -247,6 +249,7 @@ pub fn import_tasks(
             skipped_ids: vec![],
             epic_id: epic_id.unwrap_or("").to_string(),
             warnings: vec![],
+            archived_from: None,
             message: format!("No tasks.yaml found at {}", path),
         }),
         Err(e) => Err(e.to_string()),

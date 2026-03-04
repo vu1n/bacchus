@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use chrono::Utc;
 use rusqlite::params;
 
 use crate::db::with_db;
@@ -75,6 +76,36 @@ tasks:
 }
 
 // ============================================================================
+// Archive Operations
+// ============================================================================
+
+/// Archive tasks.yaml before import, best-effort.
+/// Returns the archive path on success, or None on failure (logs warning).
+fn archive_tasks_yaml(path: &Path) -> Result<String, String> {
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("Invalid path for archival: {}", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("No parent directory for: {}", path.display()))?;
+    let archive_name = format!("{}.pre-import-{}", file_name, timestamp);
+    let archive_path = parent.join(archive_name);
+
+    std::fs::copy(path, &archive_path).map_err(|e| {
+        format!(
+            "Failed to archive {} -> {}: {}",
+            path.display(),
+            archive_path.display(),
+            e
+        )
+    })?;
+
+    Ok(archive_path.to_string_lossy().to_string())
+}
+
+// ============================================================================
 // Import Operations
 // ============================================================================
 
@@ -99,16 +130,26 @@ pub fn import_yaml_tasks(
         return Err(TasksError::NoTasksFile(path.to_string_lossy().to_string()));
     }
 
+    let (archived_from, archive_warning) = match archive_tasks_yaml(&path) {
+        Ok(path) => (Some(path), None),
+        Err(msg) => (None, Some(msg)),
+    };
+
     let yaml_tasks = load_tasks(workspace_root)?;
 
     if yaml_tasks.is_empty() {
+        let mut warnings = vec!["No tasks found in YAML file".to_string()];
+        if let Some(w) = archive_warning {
+            warnings.push(w);
+        }
         return Ok(ImportResult {
             imported: 0,
             skipped: 0,
             imported_ids: vec![],
             skipped_ids: vec![],
             epic_id: epic_id.unwrap_or("").to_string(),
-            warnings: vec!["No tasks found in YAML file".to_string()],
+            warnings,
+            archived_from,
         });
     }
 
@@ -134,6 +175,9 @@ pub fn import_yaml_tasks(
     let mut imported_ids = Vec::new();
     let mut skipped_ids = Vec::new();
     let mut warnings = Vec::new();
+    if let Some(w) = archive_warning {
+        warnings.push(w);
+    }
 
     // First pass: collect task IDs being imported to validate dependencies
     let yaml_task_ids: HashSet<String> = yaml_tasks.iter().map(|t| t.id.clone()).collect();
@@ -224,6 +268,7 @@ pub fn import_yaml_tasks(
         skipped_ids,
         epic_id,
         warnings,
+        archived_from,
     })
 }
 
