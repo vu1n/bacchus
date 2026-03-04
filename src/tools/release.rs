@@ -13,6 +13,28 @@ use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::ToolError;
+
+#[derive(Clone, Debug, clap::ValueEnum)]
+pub enum ReleaseStatus {
+    /// Mark task ready for orchestrator merge
+    Done,
+    /// Keep workspace, mark as blocked
+    Blocked,
+    /// Remove workspace, reset to open
+    Failed,
+}
+
+impl std::fmt::Display for ReleaseStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReleaseStatus::Done => write!(f, "done"),
+            ReleaseStatus::Blocked => write!(f, "blocked"),
+            ReleaseStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReleaseOutput {
     pub success: bool,
@@ -25,40 +47,25 @@ pub struct ReleaseOutput {
 
 pub fn release_task(
     task_id: &str,
-    status: &str,
+    status: ReleaseStatus,
     workspace_root: &Path,
-) -> Result<ReleaseOutput, Box<dyn std::error::Error>> {
-    // Check if SQLite task has a claimed_by
-    let task = match tasks::get_sqlite_task(task_id) {
-        Ok(t) => t,
-        Err(tasks::TasksError::TaskNotFound(_)) => {
+) -> Result<ReleaseOutput, ToolError> {
+    let (_task, agent_id) = match super::require_claimed_task(task_id)? {
+        Ok(pair) => pair,
+        Err(msg) => {
             return Ok(ReleaseOutput {
                 success: false,
                 task_id: task_id.to_string(),
                 status: status.to_string(),
                 ready_for_release: false,
                 commit_id: None,
-                message: format!("Task {} not found", task_id),
+                message: msg,
             });
         }
-        Err(e) => return Err(Box::new(e)),
     };
 
-    if task.claimed_by.is_none() {
-        return Ok(ReleaseOutput {
-            success: false,
-            task_id: task_id.to_string(),
-            status: status.to_string(),
-            ready_for_release: false,
-            commit_id: None,
-            message: format!("No claim found for {}", task_id),
-        });
-    }
-
-    let agent_id = task.claimed_by.clone().unwrap_or_default();
-
     match status {
-        "done" => {
+        ReleaseStatus::Done => {
             // Validate single-commit workflow before marking ready
             let commit_id = match workspace::validate_single_commit(workspace_root, task_id) {
                 Ok(id) => id,
@@ -136,7 +143,7 @@ pub fn release_task(
                 ),
             })
         }
-        "blocked" => {
+        ReleaseStatus::Blocked => {
             // Keep workspace, mark as blocked
             tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Blocked)?;
 
@@ -152,9 +159,9 @@ pub fn release_task(
                 message: format!("Task {} marked as blocked. Workspace preserved.", task_id),
             })
         }
-        "failed" => {
+        ReleaseStatus::Failed => {
             // Remove workspace, reset to open
-            let _ = workspace::remove_workspace(workspace_root, task_id, true);
+            let _ = workspace::remove_workspace(workspace_root, task_id);
             tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Open)?;
 
             // Record eval event
@@ -172,13 +179,5 @@ pub fn release_task(
                 ),
             })
         }
-        _ => Ok(ReleaseOutput {
-            success: false,
-            task_id: task_id.to_string(),
-            status: status.to_string(),
-            ready_for_release: false,
-            commit_id: None,
-            message: format!("Invalid status: {}. Use done, blocked, or failed", status),
-        }),
     }
 }

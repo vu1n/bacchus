@@ -2400,27 +2400,22 @@ mod error_tests {
         let temp = TempDir::new().unwrap();
         let db_path = temp.path().join("test.db");
 
-        // Init DB
-        Command::new(bacchus_bin())
-            .args(["status"])
-            .env("BACCHUS_DB_PATH", &db_path)
-            .output()
-            .unwrap();
-
-        // Try invalid status
+        // Try invalid status — clap rejects before release_task is called
         let output = Command::new(bacchus_bin())
             .args(["release", "test", "--status", "invalid"])
             .env("BACCHUS_DB_PATH", &db_path)
             .output()
             .unwrap();
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("Invalid status")
-                || stdout.contains("not found")
-                || stdout.contains("success\": false"),
-            "Expected error for invalid status, got: {}",
-            stdout
+            !output.status.success(),
+            "Expected non-zero exit for invalid status"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("invalid value 'invalid'"),
+            "Expected clap validation error, got: {}",
+            stderr
         );
     }
 }

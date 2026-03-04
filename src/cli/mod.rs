@@ -1,13 +1,8 @@
-//! CLI module for Bacchus
-//!
-//! Defines command-line interface using clap.
-
+use crate::tools::{ReleaseStatus, SessionMode};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "bacchus")]
-#[command(about = "Workspace-based coordination CLI for multi-agent work")]
-#[command(version)]
+#[command(name = "bacchus", about = "Workspace-based coordination CLI for multi-agent work", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -15,162 +10,110 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // ========================================================================
-    // Coordination Commands (jj workspace-based)
-    // ========================================================================
-    /// Get next ready task, create workspace, claim it
-    Next {
-        /// Your agent ID
-        agent_id: String,
-    },
+    /// Find next ready task, create workspace, and claim it
+    Next { agent_id: String },
 
-    /// Claim a specific task by ID, create workspace
+    /// Claim a specific task by ID
     Claim {
-        /// The task ID to claim
         task_id: String,
-        /// Your agent ID
         agent_id: String,
-        /// Force claim even if task is not ready (blocked/in_progress)
-        #[arg(long)]
+        #[arg(long, help = "Force claim even if not ready")]
         force: bool,
     },
 
-    /// Release a claimed task (marks ready for orchestrator merge)
+    /// Release a claimed task
     Release {
-        /// The task ID to release
         task_id: String,
-        /// Release status: done (ready for merge), blocked (keep), or failed (discard)
-        #[arg(long, default_value = "done")]
-        status: String,
+        #[arg(long, value_enum, default_value = "done")]
+        status: ReleaseStatus,
     },
 
-    /// Abort a release that needs resolution, continue working
-    Abort {
-        /// The task ID to abort release for
-        task_id: String,
-    },
+    /// Abort a release that needs resolution
+    Abort { task_id: String },
 
-    /// Mark task ready for release after resolving conflicts
-    Resolve {
-        /// The task ID with resolved conflicts
-        task_id: String,
-    },
+    /// Re-release after resolving merge conflicts
+    Resolve { task_id: String },
 
     /// Find stale claims and optionally clean them up
     Stale {
-        /// Minutes without activity to consider stale
         #[arg(short, long, default_value = "15")]
         minutes: i64,
-        /// Clean up stale claims (remove workspaces, reset tasks)
         #[arg(long)]
         cleanup: bool,
     },
 
-    /// List all active claims and workspaces
+    /// List active claims and workspaces
     List,
 
-    /// Heartbeat an active claim to keep lease fresh
-    Heartbeat {
-        /// Task ID being worked on
-        task_id: String,
-        /// Agent ID that owns the claim
-        agent_id: String,
-    },
+    /// Record heartbeat for an active claim
+    Heartbeat { task_id: String, agent_id: String },
 
-    /// Review a task before release (advisory checks)
+    /// Advisory pre-release checks (build, test, footprint)
     Review {
-        /// The task ID to review
         task_id: String,
-        /// Build command to run (optional)
         #[arg(long)]
         build_cmd: Option<String>,
-        /// Test command to run (optional)
         #[arg(long)]
         test_cmd: Option<String>,
     },
 
-    /// Orchestrator: merge tasks that are ready_for_release
+    /// Merge tasks that are ready_for_release
     ProcessReleases {
-        /// Max ready tasks to process this run
         #[arg(long, default_value = "20")]
         limit: usize,
     },
 
     /// Generate eval metrics report
     Eval {
-        /// Filter by epic ID
         #[arg(long)]
         epic: Option<String>,
-        /// Number of days to include (default: 7)
         #[arg(long, default_value = "7")]
         days: i64,
     },
 
-    /// Initialize bacchus in this repository (jj bootstrap + tasks template)
+    /// Bootstrap bacchus in this repository
     Init {
-        /// Skip jj bootstrap (only create bacchus files)
         #[arg(long)]
         skip_jj: bool,
-        /// Overwrite existing .bacchus/tasks.yaml template
         #[arg(long)]
         force_tasks: bool,
-        /// Optionally create an initial epic
         #[arg(long)]
         epic_id: Option<String>,
-        /// Epic title when --epic-id is provided
         #[arg(long, requires = "epic_id")]
         epic_title: Option<String>,
     },
 
-    // ========================================================================
-    // Symbol Commands
-    // ========================================================================
-    /// Search for symbols in the codebase
+    /// Search indexed symbols
     Symbols {
-        /// Name pattern (supports * wildcards)
         #[arg(short, long)]
         pattern: Option<String>,
-        /// Filter by kind (function, class, method, interface, type, variable)
-        #[arg(short, long)]
+        #[arg(short, long, help = "Filter by kind: function, class, method, interface, type, variable")]
         kind: Option<String>,
-        /// Filter by file path (supports * wildcards)
         #[arg(short, long)]
         file: Option<String>,
-        /// Filter by language (typescript, javascript, python, go, rust)
         #[arg(short, long)]
         lang: Option<String>,
-        /// Max results
         #[arg(short = 'n', long, default_value = "50")]
         limit: i32,
-        /// Full-text search query (searches name + docstring)
-        #[arg(long)]
+        #[arg(long, help = "Full-text search across name + docstring")]
         search: Option<String>,
-        /// Enable fuzzy matching for typo tolerance
         #[arg(long)]
         fuzzy: bool,
-        /// Return a handle instead of full results (token-saving mode)
-        #[arg(long)]
+        #[arg(long, help = "Return a handle instead of full results")]
         handle: bool,
     },
 
     /// Index a file or directory for symbol search
-    Index {
-        /// Path to file or directory to index
-        path: String,
-    },
+    Index { path: String },
 
-    // ========================================================================
-    // Info Commands
-    // ========================================================================
-    /// Show current claims and status
+    /// Show current claims, symbols, and health
     Status,
 
     /// Print workflow documentation
     Workflow,
 
-    /// Generate context for the current agent (global or task-specific)
+    /// Generate context for the current agent
     Context {
-        /// Force context for a specific task ID
         #[arg(long)]
         task_id: Option<String>,
     },
@@ -183,7 +126,6 @@ pub enum Commands {
 
     /// List recent orchestration events
     Events {
-        /// Number of events to return
         #[arg(long, default_value = "50")]
         limit: i32,
     },
@@ -194,19 +136,19 @@ pub enum Commands {
         command: SessionCommands,
     },
 
-    /// Manage tasks (built-in task management)
+    /// Manage tasks
     Task {
         #[command(subcommand)]
         command: TaskCommands,
     },
 
-    /// Manage epics (high-level work containers)
+    /// Manage epics
     Epic {
         #[command(subcommand)]
         command: EpicCommands,
     },
 
-    /// Manage agent messages (for debugging/monitoring)
+    /// Agent message bus
     Message {
         #[command(subcommand)]
         command: MessageCommands,
@@ -218,7 +160,7 @@ pub enum Commands {
         command: ArchetypeCommands,
     },
 
-    /// Manage query result handles (token-saving pointers)
+    /// Token-saving query result handles
     Handle {
         #[command(subcommand)]
         command: HandleCommands,
@@ -227,17 +169,14 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum SessionCommands {
-    /// Start a session (agent, orchestrator, or architect mode)
+    /// Start a session
     Start {
-        /// Mode: agent, orchestrator, or architect
-        mode: String,
-        /// Task ID (required for agent mode)
+        #[arg(value_enum)]
+        mode: SessionMode,
         #[arg(long)]
         task_id: Option<String>,
-        /// Max concurrent agents (for orchestrator mode)
         #[arg(long, default_value = "3")]
         max_concurrent: i32,
-        /// Agent ID (required for architect mode, optional override for agent mode)
         #[arg(long)]
         agent_id: Option<String>,
     },
@@ -245,79 +184,60 @@ pub enum SessionCommands {
     /// Stop the current session
     Stop,
 
-    /// Show current session status
+    /// Show session status
     Status,
 
-    /// Check if session should block exit (for stop hook)
+    /// Check if session should block exit (stop hook)
     Check,
 
-    /// Spawn ready workers once for the active orchestrator session
+    /// Spawn ready workers once
     SpawnWorkers {
-        /// Max workers to launch this invocation
         #[arg(long)]
         count: Option<usize>,
-        /// Show launch plan without spawning workers
         #[arg(long)]
         dry_run: bool,
     },
 
-    /// Remove stale scoped session files and clean orphaned orchestrator leases
+    /// Remove stale session files and orphaned leases
     Prune {
-        /// Session age threshold in minutes
         #[arg(long, default_value = "240")]
         minutes: i64,
     },
 
-    /// Internal: background loop to keep an agent claim heartbeat fresh.
     #[command(hide = true)]
     HeartbeatLoop {
-        /// Task ID for the agent claim
         #[arg(long)]
         task_id: String,
-        /// Agent ID that owns the claim
         #[arg(long)]
         agent_id: String,
-        /// Unique token that fences stale heartbeat workers
         #[arg(long)]
         token: String,
-        /// Heartbeat interval in milliseconds
         #[arg(long, default_value = "30000")]
         interval_ms: u64,
     },
 
-    /// Internal: background loop to renew orchestrator leader lease.
     #[command(hide = true)]
     LeaseLoop {
-        /// Orchestrator run ID that owns the lease
         #[arg(long)]
         run_id: String,
-        /// Unique token that fences stale lease workers
         #[arg(long)]
         token: String,
-        /// Lease renew interval in milliseconds
         #[arg(long, default_value = "30000")]
         interval_ms: u64,
     },
 
-    /// Internal: run a spawned worker command for a claimed task.
     #[command(hide = true)]
     WorkerRun {
-        /// Worker row ID in agent_workers table
         #[arg(long)]
         worker_id: i64,
-        /// Orchestrator run ID that spawned this worker
         #[arg(long)]
         run_id: String,
-        /// Task ID assigned to worker
         #[arg(long)]
         task_id: String,
-        /// Agent ID assigned to worker
         #[arg(long)]
         agent_id: String,
-        /// Session scope ID allocated to worker
         #[arg(long)]
         scope_id: String,
-        /// Shell command executed by worker
         #[arg(long)]
         command: String,
     },
@@ -325,31 +245,25 @@ pub enum SessionCommands {
 
 #[derive(Subcommand)]
 pub enum TaskCommands {
-    /// List tasks with optional filters
+    /// List tasks
     List {
-        /// Filter by status (open, in_progress, blocked, closed)
-        #[arg(long)]
+        #[arg(long, help = "Filter: open, in_progress, blocked, closed")]
         status: Option<String>,
-        /// Show only ready tasks (open with satisfied dependencies)
-        #[arg(long)]
+        #[arg(long, help = "Show only ready tasks")]
         ready: bool,
     },
 
-    /// Show details for a specific task
-    Show {
-        /// The task ID to show
-        id: String,
-    },
+    /// Show task details
+    Show { id: String },
 
-    /// Validate tasks against the symbol index
+    /// Validate tasks against symbol index
     Validate,
 
-    /// Initialize a tasks.yaml template
+    /// Create tasks.yaml template
     Init,
 
     /// Import tasks from YAML to SQLite
     Import {
-        /// Epic ID to import tasks into (auto-generated if not specified)
         #[arg(long)]
         epic_id: Option<String>,
     },
@@ -357,95 +271,67 @@ pub enum TaskCommands {
 
 #[derive(Subcommand)]
 pub enum EpicCommands {
-    /// List epics with optional status filter
+    /// List epics
     List {
-        /// Filter by status (open, planning, active, closed)
-        #[arg(long)]
+        #[arg(long, help = "Filter: open, planning, active, closed")]
         status: Option<String>,
     },
 
-    /// Show details for a specific epic (with task counts)
-    Show {
-        /// The epic ID to show
-        id: String,
-    },
+    /// Show epic details with task counts
+    Show { id: String },
 
     /// Create a new epic
     Create {
-        /// Epic ID (e.g., AUTH-EPIC)
         #[arg(long)]
         id: String,
-        /// Epic title
         #[arg(long)]
         title: String,
-        /// Epic description
         #[arg(long)]
         description: Option<String>,
     },
 
-    /// Assign an epic to an architect agent for breakdown
-    Assign {
-        /// The epic ID to assign
-        id: String,
-        /// The architect agent ID to assign to
-        agent: String,
-    },
+    /// Assign epic to an architect agent
+    Assign { id: String, agent: String },
 
     /// Update epic status
     SetStatus {
-        /// The epic ID to update
         id: String,
-        /// New status: open, planning, active, or closed
+        #[arg(help = "open, planning, active, or closed")]
         status: String,
     },
 }
 
 #[derive(Subcommand)]
 pub enum MessageCommands {
-    /// List messages with optional filters
+    /// List messages
     List {
-        /// Filter by target agent
         #[arg(long)]
         agent: Option<String>,
-        /// Filter by status (pending, processing, processed, failed)
-        #[arg(long)]
+        #[arg(long, help = "Filter: pending, processing, processed, failed")]
         status: Option<String>,
     },
 
-    /// Send a message to an agent (for testing/debugging)
+    /// Send a message to an agent
     Send {
-        /// Target agent ID
         agent: String,
-        /// Message type (e.g., epic_assigned)
         message_type: String,
-        /// JSON payload
         payload: String,
     },
 
-    /// Claim pending messages for an agent
+    /// Claim pending messages
     Claim {
-        /// Agent ID claiming messages
         agent: String,
-        /// Max messages to claim
         #[arg(long, default_value = "10")]
         limit: i32,
     },
 
-    /// Mark a processing message as processed
-    Ack {
-        /// Message ID
-        message_id: i64,
-        /// Agent ID that owns processing lock
-        agent: String,
-    },
+    /// Mark message as processed
+    Ack { message_id: i64, agent: String },
 
-    /// Mark a processing message as failed
+    /// Mark message as failed
     Fail {
-        /// Message ID
         message_id: i64,
-        /// Agent ID that owns processing lock
         agent: String,
-        /// Optional failure reason
         #[arg(long)]
         reason: Option<String>,
     },
@@ -459,60 +345,42 @@ pub enum ArchetypeCommands {
     /// List available archetypes
     List,
 
-    /// Select the best archetype for a task
-    Select {
-        /// The task ID to select an archetype for
-        task_id: String,
-    },
+    /// Select best archetype for a task
+    Select { task_id: String },
 
-    /// Show details for a specific archetype
-    Show {
-        /// The archetype name (e.g., frontend, backend, security)
-        name: String,
-    },
+    /// Show archetype details
+    Show { name: String },
 
-    /// Get the prompt for a specific archetype
-    Prompt {
-        /// The archetype name (e.g., frontend, backend, security)
-        name: String,
-    },
+    /// Get archetype prompt text
+    Prompt { name: String },
 }
 
 #[derive(Subcommand)]
 pub enum HandleCommands {
     /// Expand a handle to retrieve its data
     Expand {
-        /// The handle to expand (e.g., $sym1)
         handle: String,
-        /// Max results to return
         #[arg(short = 'n', long, default_value = "50")]
         limit: i32,
-        /// Offset for pagination
         #[arg(long, default_value = "0")]
         offset: i32,
     },
 
     /// Filter a handle by criteria, creating a new handle
     Filter {
-        /// The handle to filter (e.g., $sym1)
         handle: String,
-        /// Filter by kind (for symbol handles)
         #[arg(long)]
         kind: Option<String>,
-        /// Filter by file pattern (for symbol handles)
         #[arg(long)]
         file: Option<String>,
     },
 
-    /// List all active handles
+    /// List active handles
     List,
 
-    /// Clear all handles (manual cleanup)
+    /// Clear all handles
     Clear,
 
-    /// Get info about a specific handle
-    Info {
-        /// The handle to inspect (e.g., $sym1)
-        handle: String,
-    },
+    /// Inspect a handle
+    Info { handle: String },
 }

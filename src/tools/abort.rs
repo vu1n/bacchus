@@ -7,6 +7,8 @@ use crate::tasks::{self, SqliteTaskStatus, TasksError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::ToolError;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AbortOutput {
     pub success: bool,
@@ -17,7 +19,7 @@ pub struct AbortOutput {
 pub fn abort_merge(
     task_id: &str,
     _workspace_root: &Path,
-) -> Result<AbortOutput, Box<dyn std::error::Error>> {
+) -> Result<AbortOutput, ToolError> {
     // 1. Check task exists
     let task = match tasks::get_sqlite_task(task_id) {
         Ok(t) => t,
@@ -28,7 +30,7 @@ pub fn abort_merge(
                 message: format!("Task {} not found", task_id),
             });
         }
-        Err(e) => return Err(Box::new(e)),
+        Err(e) => return Err(e.into()),
     };
 
     // 2. Check task is in needs_resolution status

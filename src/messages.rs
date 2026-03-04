@@ -3,9 +3,10 @@
 //! Provides pull-based communication between agents via SQLite.
 //! Messages are claimed atomically to prevent double-processing.
 
-use crate::db::with_db;
+use crate::db::{with_db, with_db_typed};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use thiserror::Error;
 
 // ============================================================================
@@ -31,8 +32,12 @@ impl MessageStatus {
             MessageStatus::Failed => "failed",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Result<Self, MessagesError> {
+impl std::str::FromStr for MessageStatus {
+    type Err = MessagesError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "pending" => Ok(MessageStatus::Pending),
             "processing" => Ok(MessageStatus::Processing),
@@ -141,11 +146,7 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
     let limit = limit.clamp(1, 100);
 
     with_db(|conn| {
-        // Use savepoint for auto-rollback on error
-        conn.execute("SAVEPOINT claim_messages", [])?;
-
-        let result = (|| -> rusqlite::Result<Vec<AgentMessage>> {
-            // Get IDs of messages to claim
+        crate::db::with_savepoint(conn, "claim_messages", || {
             let mut stmt = conn.prepare(
                 "SELECT id FROM agent_messages
                  WHERE target_agent = ?1 AND status = 'pending'
@@ -155,15 +156,12 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
 
             let ids: Vec<i64> = stmt
                 .query_map(params![agent_id, limit], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             if ids.is_empty() {
                 return Ok(Vec::new());
             }
 
-            // Update claimed messages - include status='pending' check to handle contention
-            // If another agent claimed a message between SELECT and UPDATE, we skip it cleanly
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!(
                 "UPDATE agent_messages
@@ -181,8 +179,6 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
                 ),
             )?;
 
-            // Fetch only the messages we actually claimed (status='processing' AND processing_by=us)
-            // This handles cases where another agent claimed some messages between SELECT and UPDATE
             let mut messages = Vec::new();
             for id in ids {
                 if let Ok(msg) = conn.query_row(
@@ -208,23 +204,10 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
                 ) {
                     messages.push(msg);
                 }
-                // If query_row fails (message claimed by another agent), we skip it silently
             }
 
             Ok(messages)
-        })();
-
-        match result {
-            Ok(messages) => {
-                conn.execute("RELEASE claim_messages", [])?;
-                Ok(messages)
-            }
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK TO claim_messages", []);
-                let _ = conn.execute("RELEASE claim_messages", []);
-                Err(e)
-            }
-        }
+        })
     })
     .map_err(|e: rusqlite::Error| MessagesError::DbError(e.to_string()))
 }
@@ -233,7 +216,7 @@ pub fn claim_messages(agent_id: &str, limit: i32) -> Result<Vec<AgentMessage>, M
 pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
 
-    with_db(|conn| {
+    with_db_typed(|conn| {
         let affected = conn.execute(
             "UPDATE agent_messages
              SET status = 'processed', processed_at = ?1, processing_by = NULL, locked_at = NULL
@@ -242,23 +225,10 @@ pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesErr
         )?;
 
         if affected == 0 {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!(
-                    "Message {} not found or not owned by {}",
-                    message_id, agent_id
-                )),
-            ));
+            return Err(MessagesError::NotFound(message_id));
         }
 
         Ok(())
-    })
-    .map_err(|e: rusqlite::Error| {
-        if e.to_string().contains("not found or not owned") {
-            MessagesError::NotFound(message_id)
-        } else {
-            MessagesError::DbError(e.to_string())
-        }
     })
 }
 
@@ -266,11 +236,11 @@ pub fn mark_processed(message_id: i64, agent_id: &str) -> Result<(), MessagesErr
 pub fn mark_failed(
     message_id: i64,
     agent_id: &str,
-    reason: Option<&str>,
+    _reason: Option<&str>,
 ) -> Result<(), MessagesError> {
     let now = chrono::Utc::now().timestamp_millis();
 
-    with_db(|conn| {
+    with_db_typed(|conn| {
         let affected = conn.execute(
             "UPDATE agent_messages
              SET status = 'failed', processed_at = ?1, processing_by = NULL, locked_at = NULL
@@ -279,30 +249,10 @@ pub fn mark_failed(
         )?;
 
         if affected == 0 {
-            return Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(1),
-                Some(format!(
-                    "Message {} not found or not owned by {}",
-                    message_id, agent_id
-                )),
-            ));
-        }
-
-        if let Some(msg) = reason {
-            eprintln!(
-                "Message {} marked failed by {}: {}",
-                message_id, agent_id, msg
-            );
+            return Err(MessagesError::NotFound(message_id));
         }
 
         Ok(())
-    })
-    .map_err(|e: rusqlite::Error| {
-        if e.to_string().contains("not found or not owned") {
-            MessagesError::NotFound(message_id)
-        } else {
-            MessagesError::DbError(e.to_string())
-        }
     })
 }
 
@@ -359,8 +309,7 @@ pub fn list_messages(
                     })
                 },
             )?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(messages)
     })
@@ -407,19 +356,11 @@ pub fn reclaim_stale_messages() -> Result<(usize, usize), MessagesError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_db;
-    use tempfile::tempdir;
-
-    fn setup_test_db() -> tempfile::TempDir {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap())).unwrap();
-        dir
-    }
+    use crate::testutil::setup_empty_test_db;
 
     #[test]
     fn test_send_message() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = SendMessageInput {
             target_agent: "architect-1".to_string(),
@@ -437,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_claim_messages() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         // Send multiple messages
         for i in 1..=3 {
@@ -468,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_mark_processed() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = SendMessageInput {
             target_agent: "worker-1".to_string(),
@@ -491,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_mark_failed() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = SendMessageInput {
             target_agent: "worker-2".to_string(),
@@ -514,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_list_messages_filtered() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         // Send messages to different agents
         for agent in &["agent-1", "agent-2"] {
@@ -537,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_reclaim_stale_no_stale() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = SendMessageInput {
             target_agent: "agent-1".to_string(),

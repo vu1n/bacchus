@@ -9,9 +9,10 @@ use crate::tools::eval::{self, EventType};
 use crate::tools::session;
 use crate::workspace;
 use rusqlite::params;
-use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use super::ToolError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClaimOutput {
@@ -23,24 +24,19 @@ pub struct ClaimOutput {
     pub message: String,
 }
 
-/// Helper to convert TasksError to rusqlite::Error
-fn tasks_error_to_rusqlite(e: tasks::TasksError) -> rusqlite::Error {
-    rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
-}
-
 pub fn claim_task(
     task_id: &str,
     agent_id: &str,
     force: bool,
     workspace_root: &Path,
-) -> Result<ClaimOutput> {
+) -> Result<ClaimOutput, ToolError> {
     let mut rollback_snapshot: Option<tasks::SqliteTask> = None;
 
     // Use the atomic SQLite claim function
     let claim_result: std::result::Result<tasks::SqliteTask, tasks::TasksError> = if force {
         // Force claim bypasses readiness check - manually update status
         // First get the task to verify it exists
-        let task = tasks::get_sqlite_task(task_id).map_err(tasks_error_to_rusqlite)?;
+        let task = tasks::get_sqlite_task(task_id)?;
         rollback_snapshot = Some(task.clone());
 
         match task.status {
@@ -83,10 +79,7 @@ pub fn claim_task(
                 })?;
 
                 if updated == 0 {
-                    return Err(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(1),
-                        Some(format!("Task not found: {}", task_id)),
-                    ));
+                    return Err(tasks::TasksError::TaskNotFound(task_id.to_string()).into());
                 }
                 // Now get the updated task
                 tasks::get_sqlite_task(task_id)
@@ -129,10 +122,7 @@ pub fn claim_task(
                     } else {
                         let _ = tasks::reset_sqlite_task(task_id, SqliteTaskStatus::Open);
                     }
-                    return Err(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(1),
-                        Some(format!("Failed to create workspace: {}", e)),
-                    ));
+                    return Err(format!("Failed to create workspace: {}", e).into());
                 }
             };
 
@@ -182,9 +172,6 @@ pub fn claim_task(
             workspace_path: None,
             message: format!("Task {} not found", task_id),
         }),
-        Err(e) => Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(1),
-            Some(format!("Failed to claim task: {}", e)),
-        )),
+        Err(e) => Err(e.into()),
     }
 }

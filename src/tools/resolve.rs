@@ -8,6 +8,8 @@ use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::ToolError;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResolveOutput {
     pub success: bool,
@@ -20,33 +22,20 @@ pub struct ResolveOutput {
 pub fn resolve_merge(
     task_id: &str,
     workspace_root: &Path,
-) -> Result<ResolveOutput, Box<dyn std::error::Error>> {
+) -> Result<ResolveOutput, ToolError> {
     // 1. Check task exists and is claimed
-    let task = match tasks::get_sqlite_task(task_id) {
-        Ok(t) => t,
-        Err(tasks::TasksError::TaskNotFound(_)) => {
+    let (task, agent_id) = match super::require_claimed_task(task_id)? {
+        Ok(pair) => pair,
+        Err(msg) => {
             return Ok(ResolveOutput {
                 success: false,
                 task_id: task_id.to_string(),
                 ready_for_release: false,
                 commit_id: None,
-                message: format!("Task {} not found", task_id),
+                message: msg,
             });
         }
-        Err(e) => return Err(Box::new(e)),
     };
-
-    if task.claimed_by.is_none() {
-        return Ok(ResolveOutput {
-            success: false,
-            task_id: task_id.to_string(),
-            ready_for_release: false,
-            commit_id: None,
-            message: format!("No claim found for {}", task_id),
-        });
-    }
-
-    let agent_id = task.claimed_by.clone().unwrap_or_default();
 
     // 2. Check task is in needs_resolution status (or in_progress if continuing work)
     if task.status != SqliteTaskStatus::NeedsResolution

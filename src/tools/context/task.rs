@@ -2,7 +2,6 @@
 //!
 //! Generates rich, type-aware context for agents working on tasks.
 
-use crate::db::with_db;
 use crate::tasks::{self, SqliteTaskType};
 use std::path::Path;
 
@@ -34,102 +33,10 @@ pub fn generate_task_context(task_id: &str, _workspace_root: &Path) -> Result<St
 pub fn get_task_context(task_id: &str) -> Result<TaskContext, String> {
     let task = tasks::get_sqlite_task(task_id).map_err(|e| e.to_string())?;
 
-    // Get dependencies (tasks that block this one)
-    let blocking_deps: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT td.depends_on
-             FROM task_dependencies td
-             JOIN tasks dep ON dep.id = td.depends_on
-             WHERE td.task_id = ?1
-               AND dep.status != 'closed'
-               AND dep.deleted_at IS NULL",
-        )?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .map_err(|e: rusqlite::Error| e.to_string())?;
-
-    // Get tasks that this one unblocks
-    let unblocks: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT td.task_id
-             FROM task_dependencies td
-             JOIN tasks t ON t.id = td.task_id
-             WHERE td.depends_on = ?1
-               AND t.deleted_at IS NULL",
-        )?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .map_err(|e: rusqlite::Error| e.to_string())?;
-
-    // Get footprint info
-    let (footprint_modifies, footprint_creates): (Vec<String>, Vec<String>) = with_db(|conn| {
-        let mut modifies = Vec::new();
-        let mut creates = Vec::new();
-
-        let mut stmt = conn.prepare(
-            "SELECT pattern_type, file_path, symbol, is_wildcard
-             FROM task_footprints
-             WHERE task_id = ?1",
-        )?;
-
-        let rows = stmt.query_map([task_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i32>(3)?,
-            ))
-        })?;
-
-        for row in rows.flatten() {
-            let (pattern_type, file_path, symbol, is_wildcard) = row;
-            match pattern_type.as_str() {
-                "modifies" => {
-                    let pattern = if is_wildcard == 1 {
-                        format!("{}::*", file_path)
-                    } else {
-                        format!("{}::{}", file_path, symbol)
-                    };
-                    modifies.push(pattern);
-                }
-                "creates" => {
-                    creates.push(file_path);
-                }
-                _ => {}
-            }
-        }
-
-        Ok((modifies, creates))
-    })
-    .map_err(|e: rusqlite::Error| e.to_string())?;
-
-    let footprint_conflicts_in_progress: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT other.id
-             FROM task_footprints fp1
-             JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
-               AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
-             JOIN tasks other ON other.id = fp2.task_id
-             WHERE fp1.task_id = ?1
-               AND other.id != ?1
-               AND other.status = 'in_progress'
-               AND other.deleted_at IS NULL",
-        )?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .map_err(|e: rusqlite::Error| e.to_string())?;
+    let blocking_deps = tasks::queries::get_blocking_deps(task_id)?;
+    let unblocks = tasks::queries::get_unblocks(task_id)?;
+    let footprint = tasks::queries::get_task_footprint(task_id)?;
+    let footprint_conflicts_in_progress = tasks::queries::get_footprint_conflicts(task_id)?;
 
     let mut ctx = TaskContext {
         task_id: task.id,
@@ -142,8 +49,8 @@ pub fn get_task_context(task_id: &str) -> Result<TaskContext, String> {
         claimed_by: task.claimed_by,
         blocking_deps,
         unblocks,
-        footprint_modifies,
-        footprint_creates,
+        footprint_modifies: footprint.modifies,
+        footprint_creates: footprint.creates,
         footprint_conflicts_in_progress,
         risk_hints: Vec::new(),
     };

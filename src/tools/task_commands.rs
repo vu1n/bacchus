@@ -2,10 +2,9 @@
 //!
 //! Provides commands for listing, showing, validating, and initializing tasks.
 
-use crate::db::with_db;
-use crate::tasks::{self, Task, TaskFootprint, TaskValidation};
+use crate::tasks::{self, Task, TaskValidation};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 // ============================================================================
@@ -82,18 +81,7 @@ pub fn list_tasks(
         .map(|t| t.id)
         .collect();
 
-    let deps_map: HashMap<String, Vec<String>> = with_db(|conn| {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_dependencies")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for (task_id, depends_on) in rows.flatten() {
-            map.entry(task_id).or_default().push(depends_on);
-        }
-        Ok(map)
-    })
-    .map_err(|e| e.to_string())?;
+    let deps_map = tasks::queries::get_all_deps()?;
 
     let total = all_tasks.len();
 
@@ -145,92 +133,10 @@ pub fn show_task(_workspace_root: &Path, task_id: &str) -> Result<TaskShowOutput
         .map(|t| t.id)
         .collect();
 
-    let depends_on: Vec<String> = with_db(|conn| {
-        let mut stmt =
-            conn.prepare("SELECT depends_on FROM task_dependencies WHERE task_id = ?1")?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .map_err(|e| e.to_string())?;
-
-    let blocking_deps: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT td.depends_on
-             FROM task_dependencies td
-             JOIN tasks dep ON dep.id = td.depends_on
-             WHERE td.task_id = ?1
-               AND dep.status != 'closed'
-               AND dep.deleted_at IS NULL",
-        )?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .map_err(|e| e.to_string())?;
-
-    let footprint: TaskFootprint = with_db(|conn| {
-        let mut footprint = TaskFootprint::default();
-        let mut stmt = conn.prepare(
-            "SELECT pattern_type, file_path, symbol, is_wildcard
-             FROM task_footprints
-             WHERE task_id = ?1",
-        )?;
-        let rows = stmt
-            .query_map([task_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)?,
-                ))
-            })?
-            .filter_map(|r| r.ok());
-
-        for (pattern_type, file_path, symbol, is_wildcard) in rows {
-            match pattern_type.as_str() {
-                "modifies" => {
-                    let pattern = if is_wildcard == 1 {
-                        format!("{}::*", file_path)
-                    } else {
-                        format!("{}::{}", file_path, symbol)
-                    };
-                    footprint.modifies.push(pattern);
-                }
-                "creates" => {
-                    footprint.creates.push(file_path);
-                }
-                _ => {}
-            }
-        }
-
-        Ok(footprint)
-    })
-    .map_err(|e| e.to_string())?;
-
-    let footprint_conflicts: Vec<String> = with_db(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT other.id
-             FROM task_footprints fp1
-             JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
-               AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
-             JOIN tasks other ON other.id = fp2.task_id
-             WHERE fp1.task_id = ?1
-               AND other.id != ?1
-               AND other.status = 'in_progress'
-               AND other.deleted_at IS NULL",
-        )?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .map_err(|e| e.to_string())?;
+    let depends_on = tasks::queries::get_depends_on(task_id)?;
+    let blocking_deps = tasks::queries::get_blocking_deps(task_id)?;
+    let footprint = tasks::queries::get_task_footprint(task_id)?;
+    let footprint_conflicts = tasks::queries::get_footprint_conflicts(task_id)?;
 
     let task = Task {
         id: sqlite_task.id,

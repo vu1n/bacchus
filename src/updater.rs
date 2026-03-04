@@ -161,12 +161,7 @@ fn detect_platform() -> (String, String) {
         _ => os,
     };
 
-    let arch_name = match arch {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        "arm" => "aarch64",
-        _ => arch,
-    };
+    let arch_name = arch;
 
     (os_name.to_string(), arch_name.to_string())
 }

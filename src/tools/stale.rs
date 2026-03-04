@@ -9,7 +9,8 @@ use crate::tasks::{self, SqliteTaskStatus};
 use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::ToolError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StaleClaim {
@@ -32,11 +33,8 @@ pub fn find_stale(
     minutes: i64,
     cleanup: bool,
     workspace_root: &Path,
-) -> Result<StaleOutput, Box<dyn std::error::Error>> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+) -> Result<StaleOutput, ToolError> {
+    let now = crate::db::now_ms();
 
     let threshold_ms = minutes * 60 * 1000;
     let cutoff = now - threshold_ms;
@@ -84,7 +82,7 @@ pub fn find_stale(
     if cleanup {
         for claim in &stale_claims {
             // Remove jj workspace (force to discard any changes)
-            if let Err(e) = workspace::remove_workspace(workspace_root, &claim.task_id, true) {
+            if let Err(e) = workspace::remove_workspace(workspace_root, &claim.task_id) {
                 eprintln!(
                     "Warning: Failed to remove workspace for {}: {}",
                     claim.task_id, e

@@ -136,8 +136,7 @@ pub fn find_symbols(input: &FindSymbolsInput) -> Result<FindSymbolsOutput> {
                     language: row.get(9)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(FindSymbolsOutput {
             symbols,
@@ -230,8 +229,7 @@ pub fn search_symbols_fts(query: &str, limit: i32) -> Result<FindSymbolsOutput> 
                     language: row.get(9)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         // Get total count for matching results
         let count_sql = "SELECT COUNT(*) FROM symbols_fts WHERE symbols_fts MATCH ?1";
@@ -315,19 +313,12 @@ pub fn find_symbols_fuzzy(query: &str, limit: i32) -> Result<FindSymbolsOutput> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{close_db, init_db};
-    use tempfile::tempdir;
-
-    fn setup_test_db() -> tempfile::TempDir {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap())).unwrap();
-        dir
-    }
+    use crate::db::close_db;
+    use crate::testutil::setup_empty_test_db;
 
     #[test]
     fn test_find_symbols_empty() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = FindSymbolsInput {
             pattern: None,

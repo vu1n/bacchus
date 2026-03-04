@@ -2,7 +2,7 @@
 //!
 //! Tracks launch attempts, active workers, failures, and completion.
 
-use crate::db::with_db;
+use crate::db::with_db_str;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +52,7 @@ pub fn create_worker_attempt(
     attempt: i32,
 ) -> Result<i64, String> {
     let now = chrono::Utc::now().timestamp_millis();
-    with_db(|conn| {
+    with_db_str(|conn| {
         conn.execute(
             "INSERT INTO agent_workers
              (run_id, task_id, agent_id, scope_id, command, status, attempt, started_at, updated_at)
@@ -61,12 +61,11 @@ pub fn create_worker_attempt(
         )?;
         Ok(conn.last_insert_rowid())
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn mark_worker_running(worker_id: i64, pid: Option<i64>) -> Result<bool, String> {
     let now = chrono::Utc::now().timestamp_millis();
-    with_db(|conn| {
+    with_db_str(|conn| {
         let updated = conn.execute(
             "UPDATE agent_workers
              SET status = 'running', pid = ?1, updated_at = ?2, error = NULL
@@ -75,12 +74,11 @@ pub fn mark_worker_running(worker_id: i64, pid: Option<i64>) -> Result<bool, Str
         )?;
         Ok(updated > 0)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn mark_worker_completed(worker_id: i64, exit_code: Option<i32>) -> Result<bool, String> {
     let now = chrono::Utc::now().timestamp_millis();
-    with_db(|conn| {
+    with_db_str(|conn| {
         let updated = conn.execute(
             "UPDATE agent_workers
              SET status = 'completed', exit_code = ?1, updated_at = ?2, error = NULL
@@ -89,7 +87,6 @@ pub fn mark_worker_completed(worker_id: i64, exit_code: Option<i32>) -> Result<b
         )?;
         Ok(updated > 0)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn mark_worker_failed(
@@ -98,7 +95,7 @@ pub fn mark_worker_failed(
     exit_code: Option<i32>,
 ) -> Result<bool, String> {
     let now = chrono::Utc::now().timestamp_millis();
-    with_db(|conn| {
+    with_db_str(|conn| {
         let updated = conn.execute(
             "UPDATE agent_workers
              SET status = 'failed', error = ?1, exit_code = ?2, updated_at = ?3
@@ -107,11 +104,10 @@ pub fn mark_worker_failed(
         )?;
         Ok(updated > 0)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn get_retry_state(run_id: &str, task_id: &str) -> Result<WorkerRetryState, String> {
-    with_db(|conn| {
+    with_db_str(|conn| {
         let attempts: i32 = conn
             .query_row(
                 "SELECT COALESCE(MAX(attempt), 0)
@@ -139,11 +135,10 @@ pub fn get_retry_state(run_id: &str, task_id: &str) -> Result<WorkerRetryState, 
             last_failed_at,
         })
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn count_active_workers(run_id: &str) -> Result<usize, String> {
-    with_db(|conn| {
+    with_db_str(|conn| {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM agent_workers
@@ -154,12 +149,11 @@ pub fn count_active_workers(run_id: &str) -> Result<usize, String> {
             .unwrap_or(0);
         Ok(count.max(0) as usize)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn fail_active_workers(run_id: &str, reason: &str) -> Result<usize, String> {
     let now = chrono::Utc::now().timestamp_millis();
-    with_db(|conn| {
+    with_db_str(|conn| {
         let updated = conn.execute(
             "UPDATE agent_workers
              SET status = 'failed', error = ?1, updated_at = ?2
@@ -168,11 +162,10 @@ pub fn fail_active_workers(run_id: &str, reason: &str) -> Result<usize, String> 
         )?;
         Ok(updated)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn list_active_worker_snapshots(run_id: &str) -> Result<Vec<ActiveWorkerSnapshot>, String> {
-    with_db(|conn| {
+    with_db_str(|conn| {
         let mut stmt = conn.prepare(
             "SELECT aw.id, aw.task_id, aw.agent_id, aw.status, aw.attempt, aw.pid, aw.started_at, aw.updated_at,
                     t.status, t.claimed_by, COALESCE(t.claimed_heartbeat_at, t.claimed_at)
@@ -201,11 +194,10 @@ pub fn list_active_worker_snapshots(run_id: &str) -> Result<Vec<ActiveWorkerSnap
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn get_run_worker_stats(run_id: &str) -> Result<WorkerRunStats, String> {
-    with_db(|conn| {
+    with_db_str(|conn| {
         let mut stmt = conn.prepare(
             "SELECT status, COUNT(*)
              FROM agent_workers
@@ -237,13 +229,12 @@ pub fn get_run_worker_stats(run_id: &str) -> Result<WorkerRunStats, String> {
 
         Ok(stats)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn list_reopenable_failed_worker_tasks(
     run_id: &str,
 ) -> Result<Vec<FailedWorkerTaskCandidate>, String> {
-    with_db(|conn| {
+    with_db_str(|conn| {
         let mut stmt = conn.prepare(
             "SELECT aw.id, aw.task_id, aw.agent_id
              FROM agent_workers aw
@@ -266,11 +257,10 @@ pub fn list_reopenable_failed_worker_tasks(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 pub fn get_worker_status(worker_id: i64) -> Result<Option<String>, String> {
-    with_db(|conn| {
+    with_db_str(|conn| {
         let status = conn
             .query_row(
                 "SELECT status FROM agent_workers WHERE id = ?1",
@@ -280,36 +270,16 @@ pub fn get_worker_status(worker_id: i64) -> Result<Option<String>, String> {
             .ok();
         Ok(status)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{close_db, init_db};
+    use crate::db::close_db;
+    use crate::testutil::setup_test_db;
 
     fn setup() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap())).unwrap();
-
-        let now = chrono::Utc::now().timestamp_millis();
-        with_db(|conn| {
-            conn.execute(
-                "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
-                 VALUES ('W-EPIC', 'Workers Epic', 'open', 'test', ?1, ?1)",
-                [now],
-            )?;
-            conn.execute(
-                "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, created_at, updated_at)
-                 VALUES ('W-001', 'W-EPIC', 'Worker Task', 1, 'open', 'generic', 'generic', ?1, ?1)",
-                [now],
-            )?;
-            Ok(())
-        })
-        .unwrap();
-
-        dir
+        setup_test_db("W-EPIC", "W-001")
     }
 
     #[test]
@@ -350,7 +320,7 @@ mod tests {
         let _dir = setup();
         let now = chrono::Utc::now().timestamp_millis();
 
-        with_db(|conn| {
+        with_db_str(|conn| {
             conn.execute(
                 "UPDATE tasks
                  SET status = 'in_progress',
@@ -386,7 +356,7 @@ mod tests {
         let _dir = setup();
         let now = chrono::Utc::now().timestamp_millis();
 
-        with_db(|conn| {
+        with_db_str(|conn| {
             conn.execute(
                 "UPDATE tasks
                  SET status = 'in_progress',

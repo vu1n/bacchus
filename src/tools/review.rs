@@ -591,7 +591,7 @@ fn render_hunk(hunk: &DiffHunk) -> String {
 
 fn load_symbol_ranges(file_path: &str, symbol: &str) -> Result<Vec<LineRange>, String> {
     let fq_name = format!("{}::{}", file_path, symbol);
-    with_db(|conn| {
+    crate::db::with_db_str(|conn| {
         let mut stmt = conn.prepare(
             "SELECT span_start_line, span_end_line
              FROM symbols
@@ -608,7 +608,6 @@ fn load_symbol_ranges(file_path: &str, symbol: &str) -> Result<Vec<LineRange>, S
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 /// Run a command and return a check result

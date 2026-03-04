@@ -3,9 +3,10 @@
 //! Epics are high-level work containers created by humans or architect agents.
 //! Tasks belong to epics and cannot exist without one.
 
-use crate::db::with_db;
+use crate::db::{with_db, with_db_typed};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use thiserror::Error;
 
 // ============================================================================
@@ -31,8 +32,12 @@ impl EpicStatus {
             EpicStatus::Closed => "closed",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Result<Self, EpicsError> {
+impl std::str::FromStr for EpicStatus {
+    type Err = EpicsError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "open" => Ok(EpicStatus::Open),
             "planning" => Ok(EpicStatus::Planning),
@@ -176,33 +181,37 @@ pub fn get_epic(epic_id: &str) -> Result<Epic, EpicsError> {
 /// List epics with optional status filter
 pub fn list_epics(status: Option<EpicStatus>) -> Result<Vec<Epic>, EpicsError> {
     with_db(|conn| {
-        let sql = match status {
-            Some(s) => format!(
-                "SELECT id, title, description, status, created_by, created_at, updated_at
-                 FROM epics WHERE status = '{}' ORDER BY created_at DESC",
-                s.as_str()
-            ),
-            None => "SELECT id, title, description, status, created_by, created_at, updated_at
-                     FROM epics ORDER BY created_at DESC"
-                .to_string(),
+        let status_str = status.map(|s| s.as_str().to_string());
+
+        let sql = if status_str.is_some() {
+            "SELECT id, title, description, status, created_by, created_at, updated_at
+             FROM epics WHERE status = ?1 ORDER BY created_at DESC"
+        } else {
+            "SELECT id, title, description, status, created_by, created_at, updated_at
+             FROM epics ORDER BY created_at DESC"
         };
 
-        let mut stmt = conn.prepare(&sql)?;
-        let epics = stmt
-            .query_map([], |row| {
-                let status_str: String = row.get(3)?;
-                Ok(Epic {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    status: EpicStatus::from_str(&status_str).unwrap_or(EpicStatus::Open),
-                    created_by: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
+        let mut stmt = conn.prepare(sql)?;
+        let row_mapper = |row: &rusqlite::Row| {
+            let status_str: String = row.get(3)?;
+            Ok(Epic {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: EpicStatus::from_str(&status_str).unwrap_or(EpicStatus::Open),
+                created_by: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        };
+
+        let epics: Vec<Epic> = if let Some(ref s) = status_str {
+            stmt.query_map([s.as_str()], row_mapper)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            stmt.query_map([], row_mapper)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         Ok(epics)
     })
@@ -219,53 +228,45 @@ pub fn list_epics(status: Option<EpicStatus>) -> Result<Vec<Epic>, EpicsError> {
 pub fn assign_epic(epic_id: &str, architect_agent: &str) -> Result<Epic, EpicsError> {
     let now = chrono::Utc::now().timestamp_millis();
 
-    with_db(|conn| {
-        // Use savepoint for auto-rollback on error
-        conn.execute("SAVEPOINT assign_epic", [])?;
-
-        let result = (|| -> rusqlite::Result<Epic> {
-            // Update epic status (only if currently 'open')
+    with_db_typed(|conn| {
+        crate::db::with_savepoint(conn, "assign_epic", || {
             let affected = conn.execute(
                 "UPDATE epics SET status = 'planning', updated_at = ?1 WHERE id = ?2 AND status = 'open'",
                 params![now, epic_id],
             )?;
 
             if affected == 0 {
-                // Check if epic exists
-                let exists: bool = conn.query_row(
-                    "SELECT 1 FROM epics WHERE id = ?1",
-                    [epic_id],
-                    |_| Ok(true),
-                ).unwrap_or(false);
+                let exists: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM epics WHERE id = ?1",
+                        [epic_id],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
 
                 if !exists {
-                    return Err(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(1),
-                        Some(format!("Epic not found: {}", epic_id)),
-                    ));
+                    return Err(EpicsError::NotFound(epic_id.to_string()));
                 } else {
-                    return Err(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(1),
-                        Some(format!("Epic {} is not in 'open' status", epic_id)),
-                    ));
+                    return Err(EpicsError::InvalidTransition {
+                        from: "non-open".to_string(),
+                        to: "planning".to_string(),
+                    });
                 }
             }
 
-            // Create message payload
             let payload = serde_json::json!({
                 "epic_id": epic_id,
                 "assigned_at": now,
-            }).to_string();
+            })
+            .to_string();
 
-            // Insert message for architect
             conn.execute(
                 "INSERT INTO agent_messages (target_agent, message_type, payload, status, created_at)
                  VALUES (?1, 'epic_assigned', ?2, 'pending', ?3)",
                 params![architect_agent, payload, now],
             )?;
 
-            // Return updated epic
-            conn.query_row(
+            Ok(conn.query_row(
                 "SELECT id, title, description, status, created_by, created_at, updated_at
                  FROM epics WHERE id = ?1",
                 [epic_id],
@@ -281,33 +282,8 @@ pub fn assign_epic(epic_id: &str, architect_agent: &str) -> Result<Epic, EpicsEr
                         updated_at: row.get(6)?,
                     })
                 },
-            )
-        })();
-
-        match result {
-            Ok(epic) => {
-                conn.execute("RELEASE assign_epic", [])?;
-                Ok(epic)
-            }
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK TO assign_epic", []);
-                let _ = conn.execute("RELEASE assign_epic", []);
-                Err(e)
-            }
-        }
-    })
-    .map_err(|e: rusqlite::Error| {
-        let msg = e.to_string();
-        if msg.contains("Epic not found") {
-            EpicsError::NotFound(epic_id.to_string())
-        } else if msg.contains("not in 'open' status") {
-            EpicsError::InvalidTransition {
-                from: "non-open".to_string(),
-                to: "planning".to_string(),
-            }
-        } else {
-            EpicsError::DbError(msg)
-        }
+            )?)
+        })
     })
 }
 
@@ -337,19 +313,15 @@ pub fn update_epic_status(epic_id: &str, status: EpicStatus) -> Result<Epic, Epi
         });
     }
 
-    with_db(|conn| {
+    with_db_typed(|conn| {
         let affected = conn.execute(
             "UPDATE epics SET status = ?1, updated_at = ?2 WHERE id = ?3",
             params![status.as_str(), now, epic_id],
         )?;
         if affected == 0 {
-            return Err(rusqlite::Error::QueryReturnedNoRows);
+            return Err(EpicsError::NotFound(epic_id.to_string()));
         }
         Ok(())
-    })
-    .map_err(|e: rusqlite::Error| match e {
-        rusqlite::Error::QueryReturnedNoRows => EpicsError::NotFound(epic_id.to_string()),
-        other => EpicsError::DbError(other.to_string()),
     })?;
 
     get_epic(epic_id)
@@ -416,19 +388,11 @@ pub fn get_epic_with_counts(epic_id: &str) -> Result<EpicWithCounts, EpicsError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_db;
-    use tempfile::tempdir;
-
-    fn setup_test_db() -> tempfile::TempDir {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap())).unwrap();
-        dir
-    }
+    use crate::testutil::setup_empty_test_db;
 
     #[test]
     fn test_create_epic() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = CreateEpicInput {
             id: "EPIC-001".to_string(),
@@ -446,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_get_epic() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = CreateEpicInput {
             id: "EPIC-002".to_string(),
@@ -465,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_list_epics() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         for i in 1..=3 {
             let input = CreateEpicInput {
@@ -488,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_epic_error() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = CreateEpicInput {
             id: "EPIC-DUP".to_string(),
@@ -506,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_epic_not_found_error() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let result = get_epic("NONEXISTENT");
         assert!(matches!(result, Err(EpicsError::NotFound(_))));
@@ -516,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_update_epic_status_valid_transition() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = CreateEpicInput {
             id: "EPIC-STATUS".to_string(),
@@ -537,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_update_epic_status_invalid_transition() {
-        let _dir = setup_test_db();
+        let _dir = setup_empty_test_db();
 
         let input = CreateEpicInput {
             id: "EPIC-BAD-STATUS".to_string(),

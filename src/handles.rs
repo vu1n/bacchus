@@ -3,44 +3,41 @@
 //! Provides a pointer system that returns compact references instead of full data.
 //! Handles are session-scoped and cleared on session end.
 
+use crate::config::{current_session_scope_id, find_workspace_root};
 use crate::db::with_db;
 use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
 
 /// Counter for generating unique handle names within a session
 static HANDLE_COUNTER: AtomicU32 = AtomicU32::new(1);
 
-/// Flag to track if counter has been initialized from DB
-static COUNTER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+/// One-shot initialization guard for the handle counter
+static COUNTER_INIT: OnceLock<()> = OnceLock::new();
 
 /// Initialize counter from database max values
 fn ensure_counter_initialized() {
-    if COUNTER_INITIALIZED
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return;
-    }
+    COUNTER_INIT.get_or_init(|| {
+        // Get max handle number from database for each type
+        let max_num = with_db(|conn| {
+            let max: i32 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(CAST(SUBSTR(handle, 5) AS INTEGER)), 0) FROM handles",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            Ok(max)
+        })
+        .unwrap_or(0);
 
-    // Get max handle number from database for each type
-    let max_num = with_db(|conn| {
-        let max: i32 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(handle, 5) AS INTEGER)), 0) FROM handles",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        Ok(max)
-    })
-    .unwrap_or(0);
-
-    // Set counter to max + 1
-    if max_num > 0 {
-        HANDLE_COUNTER.store((max_num + 1) as u32, Ordering::SeqCst);
-    }
+        // Set counter to max + 1
+        if max_num > 0 {
+            HANDLE_COUNTER.store((max_num + 1) as u32, Ordering::SeqCst);
+        }
+    });
 }
 
 /// Types of handles supported
@@ -209,8 +206,7 @@ pub fn expand_handle(handle: &str, limit: Option<i32>, offset: Option<i32>) -> R
                 let json: String = row.get(0)?;
                 Ok(serde_json::from_str(&json).unwrap_or(Value::Null))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     })
@@ -292,8 +288,7 @@ pub fn list_handles() -> Result<Vec<HandleInfo>> {
                     created_at: row.get(4)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     })
@@ -316,8 +311,7 @@ pub fn clear_session_handles(session_id: &str) -> Result<usize> {
         let mut stmt = conn.prepare("SELECT handle FROM handles WHERE session_id = ?1")?;
         let handles: Vec<String> = stmt
             .query_map([session_id], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
 
         // Delete data for these handles
@@ -335,7 +329,8 @@ pub fn clear_session_handles(session_id: &str) -> Result<usize> {
 #[cfg(test)]
 pub fn reset_handle_counter() {
     HANDLE_COUNTER.store(1, Ordering::SeqCst);
-    COUNTER_INITIALIZED.store(false, Ordering::SeqCst);
+    // OnceLock cannot be reset, but tests start with empty DBs so
+    // resetting the counter value to 1 is sufficient for isolation.
 }
 
 /// Get current session ID from scoped session file if it exists
@@ -363,68 +358,14 @@ fn get_current_session_id() -> Option<String> {
     None
 }
 
-fn current_session_scope_id() -> String {
-    const KEYS: [&str; 3] = [
-        "BACCHUS_SESSION_ID",
-        "CLAUDE_SESSION_ID",
-        "CLAUDE_CONVERSATION_ID",
-    ];
-    for key in KEYS {
-        if let Ok(v) = std::env::var(key) {
-            let cleaned: String = v
-                .trim()
-                .chars()
-                .map(|ch| {
-                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                        ch
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            if !cleaned.is_empty() {
-                return cleaned;
-            }
-        }
-    }
-    "default".to_string()
-}
-
-/// Find workspace root (duplicated from session.rs to avoid circular deps)
-fn find_workspace_root() -> Option<std::path::PathBuf> {
-    if let Ok(project_dir) = std::env::var("CLAUDE_PROJECT_DIR") {
-        let path = std::path::PathBuf::from(&project_dir);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    let mut current = std::env::current_dir().ok()?;
-    loop {
-        if current.join(".bacchus").exists() {
-            return Some(current);
-        }
-        let git_path = current.join(".git");
-        if git_path.exists() && git_path.is_dir() {
-            return Some(current);
-        }
-        if !current.pop() {
-            break;
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{close_db, init_db};
-    use tempfile::tempdir;
+    use crate::db::close_db;
+    use crate::testutil::setup_empty_test_db;
 
     fn setup_test_db() -> tempfile::TempDir {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap())).unwrap();
+        let dir = setup_empty_test_db();
         reset_handle_counter();
         dir
     }

@@ -65,6 +65,7 @@ A `feature` task could need `frontend` OR `backend` archetype. Planner assigns a
 
 | Archetype | Focus |
 |-----------|-------|
+| `design` | Visual identity, design system, tokens |
 | `frontend` | UI, components, CSS, a11y |
 | `backend` | APIs, auth, validation |
 | `data` | Pipelines, SQL, schemas |
@@ -147,7 +148,7 @@ CREATE TABLE tasks (
     claimed_at INTEGER,
     ready_commit_id TEXT,
     CHECK (task_type IN ('bug_fix','feature','refactor','test','docs','infra','generic')),
-    CHECK (archetype IN ('frontend','backend','data','test','infra','review','security','generic'))
+    CHECK (archetype IN ('design','frontend','backend','data','test','infra','review','security','generic'))
 );
 
 -- Token-saving handle system

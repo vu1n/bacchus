@@ -160,7 +160,6 @@ pub fn create_workspace(
 pub fn remove_workspace(
     workspace_root: &Path,
     task_id: &str,
-    _force: bool,
 ) -> Result<(), WorkspaceError> {
     validate_task_id(task_id)?;
 

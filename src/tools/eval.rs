@@ -8,7 +8,7 @@
 //! - rework: task re-claimed after being released
 //! - reviewed: review command run on task
 
-use crate::db::with_db;
+use crate::db::{with_db, with_db_str};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -100,7 +100,7 @@ pub fn record_event(
 ) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp_millis();
 
-    with_db(|conn| {
+    with_db_str(|conn| {
         conn.execute(
             "INSERT INTO task_eval_metrics (task_id, agent_id, event_type, event_data, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -108,14 +108,13 @@ pub fn record_event(
         )?;
         Ok(())
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 /// Generate eval report
 pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutput, String> {
     let cutoff = chrono::Utc::now().timestamp_millis() - (days * 24 * 60 * 60 * 1000);
 
-    with_db(|conn| {
+    with_db_str(|conn| {
         // Build query with optional epic filter
         let epic_filter = if epic_id.is_some() {
             "AND m.task_id IN (SELECT id FROM tasks WHERE epic_id = ?2)"
@@ -203,12 +202,10 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
 
             if let Some(eid) = epic_id {
                 stmt.query_map(params![cutoff, eid], map_row)?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             } else {
                 stmt.query_map(params![cutoff], map_row)?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             }
         };
 
@@ -237,12 +234,10 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
 
             if let Some(eid) = epic_id {
                 stmt.query_map(params![cutoff, eid], map_row)?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             } else {
                 stmt.query_map(params![cutoff], map_row)?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             }
         };
 
@@ -271,12 +266,10 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
             let mut stmt = conn.prepare(&sql)?;
             let rows: Vec<(String, String)> = if let Some(eid) = epic_id {
                 stmt.query_map(params![cutoff, eid], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             } else {
                 stmt.query_map(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
             let mut metrics = WorkerReliabilityMetrics::default();
@@ -335,7 +328,6 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
             recent_events,
         })
     })
-    .map_err(|e: rusqlite::Error| e.to_string())
 }
 
 /// Check if a task was previously completed (for rework detection)
@@ -355,35 +347,12 @@ pub fn was_previously_completed(task_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{close_db, init_db};
-
-    fn setup() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        init_db(Some(db_path.to_str().unwrap())).unwrap();
-
-        let now = chrono::Utc::now().timestamp_millis();
-        with_db(|conn| {
-            conn.execute(
-                "INSERT INTO epics (id, title, status, created_by, created_at, updated_at)
-                 VALUES ('EV-EPIC', 'Eval Epic', 'open', 'test', ?1, ?1)",
-                [now],
-            )?;
-            conn.execute(
-                "INSERT INTO tasks (id, epic_id, title, priority, status, task_type, archetype, created_at, updated_at)
-                 VALUES ('EV-001', 'EV-EPIC', 'Eval Task', 1, 'open', 'generic', 'generic', ?1, ?1)",
-                [now],
-            )?;
-            Ok(())
-        })
-        .unwrap();
-
-        dir
-    }
+    use crate::db::close_db;
+    use crate::testutil::setup_test_db;
 
     #[test]
     fn test_eval_includes_worker_reliability_metrics() {
-        let _dir = setup();
+        let _dir = setup_test_db("EV-EPIC", "EV-001");
         let now = chrono::Utc::now().timestamp_millis();
 
         with_db(|conn| {

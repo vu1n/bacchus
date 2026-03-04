@@ -6,9 +6,10 @@
 use crate::tasks;
 use crate::tools::session;
 use crate::workspace;
-use rusqlite::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use super::ToolError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NextOutput {
@@ -20,7 +21,10 @@ pub struct NextOutput {
     pub message: String,
 }
 
-pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
+pub fn next_task(
+    agent_id: &str,
+    workspace_root: &Path,
+) -> Result<NextOutput, ToolError> {
     // Atomic claim: claim_next_sqlite_task handles readiness check and claim in one transaction
     match tasks::claim_next_sqlite_task(agent_id) {
         Ok(Some(task)) => {
@@ -30,10 +34,10 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
                 Err(e) => {
                     // Rollback: return task to open state if workspace creation fails.
                     let _ = tasks::reset_sqlite_task(&task.id, tasks::SqliteTaskStatus::Open);
-                    return Err(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(1),
-                        Some(format!("Failed to create workspace: {}", e)),
-                    ));
+                    return Err(ToolError::Other(format!(
+                        "Failed to create workspace: {}",
+                        e
+                    )));
                 }
             };
 
@@ -61,9 +65,6 @@ pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput> {
             workspace_path: None,
             message: "No ready tasks available".to_string(),
         }),
-        Err(e) => Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(1),
-            Some(format!("Failed to query tasks: {}", e)),
-        )),
+        Err(e) => Err(e.into()),
     }
 }

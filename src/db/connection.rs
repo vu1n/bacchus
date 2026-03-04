@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 
-use super::migrations::init_schema;
+use super::schema::init_schema;
 
 thread_local! {
     /// Thread-local connection slot.
@@ -76,6 +76,64 @@ where
         })?;
         f(conn)
     })
+}
+
+/// Convenience wrapper: `with_db` that maps `rusqlite::Error` to `String`.
+///
+/// Eliminates the repeated `.map_err(|e: rusqlite::Error| e.to_string())` tail
+/// found across query helpers.
+pub fn with_db_str<F, T>(f: F) -> std::result::Result<T, String>
+where
+    F: FnOnce(&Connection) -> Result<T>,
+{
+    with_db(f).map_err(|e| e.to_string())
+}
+
+/// Execute a function with the database connection, returning a domain error type.
+///
+/// Unlike [`with_db`], the closure can return any error type that implements
+/// `From<rusqlite::Error>`. This lets callers pass domain errors directly through
+/// the closure boundary instead of encoding them as rusqlite error strings.
+pub fn with_db_typed<F, T, E>(f: F) -> std::result::Result<T, E>
+where
+    F: FnOnce(&Connection) -> std::result::Result<T, E>,
+    E: From<rusqlite::Error>,
+{
+    DB_CONN.with(|slot| {
+        let guard = slot.borrow();
+        let conn = guard.as_ref().ok_or_else(|| {
+            E::from(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some("Database not initialized".to_string()),
+            ))
+        })?;
+        f(conn)
+    })
+}
+
+/// Run a closure inside a SAVEPOINT, automatically handling RELEASE on success
+/// and ROLLBACK + RELEASE on error.
+pub fn with_savepoint<F, T, E>(conn: &Connection, name: &str, f: F) -> std::result::Result<T, E>
+where
+    F: FnOnce() -> std::result::Result<T, E>,
+    E: From<rusqlite::Error>,
+{
+    debug_assert!(
+        name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+        "savepoint name must be alphanumeric/underscore, got: {name}"
+    );
+    conn.execute(&format!("SAVEPOINT {}", name), [])?;
+    match f() {
+        Ok(val) => {
+            conn.execute(&format!("RELEASE {}", name), [])?;
+            Ok(val)
+        }
+        Err(e) => {
+            let _ = conn.execute(&format!("ROLLBACK TO {}", name), []);
+            let _ = conn.execute(&format!("RELEASE {}", name), []);
+            Err(e)
+        }
+    }
 }
 
 /// Close the database connection

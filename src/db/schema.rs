@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
     CHECK (status IN ('draft', 'open', 'in_progress', 'ready_for_release', 'releasing', 'needs_resolution', 'blocked', 'closed')),
     CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic')),
-    CHECK (archetype IN ('frontend', 'backend', 'data', 'test', 'infra', 'review', 'security', 'generic'))
+    CHECK (archetype IN ('design', 'frontend', 'backend', 'data', 'test', 'infra', 'review', 'security', 'generic'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_epic ON tasks(epic_id);
@@ -366,8 +366,8 @@ mod tests {
         let columns: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
         let has_heartbeat = columns.iter().any(|c| c == "claimed_heartbeat_at");
         assert!(has_heartbeat, "tasks.claimed_heartbeat_at should exist");
     }

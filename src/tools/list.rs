@@ -37,10 +37,7 @@ pub fn list_claims() -> Result<ListOutput> {
              ORDER BY claimed_at DESC",
         )?;
 
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let now_ms = crate::db::now_ms();
         let active_cutoff = now_ms - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
 
         let claims: Vec<ClaimInfo> = stmt
