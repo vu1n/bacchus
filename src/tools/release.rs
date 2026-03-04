@@ -155,10 +155,7 @@ pub fn release_task(
                     }
                     Err(e) => {
                         // Gate runner error — fail-open with warning, don't block release
-                        eprintln!(
-                            "Warning: quality gate runner failed for {}: {}",
-                            task_id, e
-                        );
+                        eprintln!("Warning: quality gate runner failed for {}: {}", task_id, e);
                     }
                 }
             }

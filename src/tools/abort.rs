@@ -16,10 +16,7 @@ pub struct AbortOutput {
     pub message: String,
 }
 
-pub fn abort_merge(
-    task_id: &str,
-    _workspace_root: &Path,
-) -> Result<AbortOutput, ToolError> {
+pub fn abort_merge(task_id: &str, _workspace_root: &Path) -> Result<AbortOutput, ToolError> {
     // 1. Check task exists
     let task = match tasks::get_sqlite_task(task_id) {
         Ok(t) => t,

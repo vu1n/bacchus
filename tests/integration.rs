@@ -333,21 +333,13 @@ mod db_tests {
         assert!(repo_path.join(".bacchus/tasks.yaml").exists());
         assert!(repo_path.join(".bacchus/bacchus.db").exists());
         assert!(repo_path.join(".bacchus/archetypes.yaml").exists());
-        assert!(
-            repo_path
-                .join(".claude/commands/bacchus-worker.md")
-                .exists()
-        );
-        assert!(
-            repo_path
-                .join(".claude/commands/bacchus-orchestrator.md")
-                .exists()
-        );
-        assert!(
-            repo_path
-                .join(".claude/commands/bacchus-plan.md")
-                .exists()
-        );
+        assert!(repo_path
+            .join(".claude/commands/bacchus-worker.md")
+            .exists());
+        assert!(repo_path
+            .join(".claude/commands/bacchus-orchestrator.md")
+            .exists());
+        assert!(repo_path.join(".claude/commands/bacchus-plan.md").exists());
     }
 
     #[test]
@@ -2652,8 +2644,14 @@ mod quality_tests {
         );
 
         let content = fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("cargo check"), "Should detect Rust project");
-        assert!(content.contains("cargo test"), "Should include test command");
+        assert!(
+            content.contains("cargo check"),
+            "Should detect Rust project"
+        );
+        assert!(
+            content.contains("cargo test"),
+            "Should include test command"
+        );
         assert!(
             content.contains("cargo clippy"),
             "Should include lint command"
@@ -2698,7 +2696,10 @@ mod quality_tests {
 
         // Content should NOT be overwritten
         let content = fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("custom"), "Config should not be overwritten");
+        assert!(
+            content.contains("custom"),
+            "Config should not be overwritten"
+        );
     }
 
     #[test]

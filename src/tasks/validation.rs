@@ -121,12 +121,16 @@ pub fn validate_tasks(_workspace_root: &Path) -> Result<Vec<TaskValidation>, Tas
         .collect();
 
     // Validate footprint syntax based on normalized entries
-    let footprint_rows = super::queries::get_footprint_rows(None)
-        .map_err(TasksError::DbError)?;
+    let footprint_rows = super::queries::get_footprint_rows(None).map_err(TasksError::DbError)?;
 
     for row in footprint_rows {
-        let (task_id, pattern_type, file_path, symbol, is_wildcard) =
-            (row.task_id, row.pattern_type, row.file_path, row.symbol, row.is_wildcard);
+        let (task_id, pattern_type, file_path, symbol, is_wildcard) = (
+            row.task_id,
+            row.pattern_type,
+            row.file_path,
+            row.symbol,
+            row.is_wildcard,
+        );
         let Some(validation) = validations.get_mut(&task_id) else {
             continue;
         };

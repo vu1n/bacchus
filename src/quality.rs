@@ -277,7 +277,10 @@ pub fn run_desloppify_scan(workspace_root: &Path) -> DesloppifyScanResult {
                 "raw_output": truncate_output(&stdout, 5000),
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             });
-            let _ = std::fs::write(&report_path, serde_json::to_string_pretty(&report).unwrap_or_default());
+            let _ = std::fs::write(
+                &report_path,
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            );
 
             DesloppifyScanResult {
                 ran: true,
@@ -346,7 +349,9 @@ pub fn generate_quality_config(workspace_root: &Path) -> String {
 }
 
 /// Detect project type from marker files and return (check, test, lint) commands.
-fn detect_project_commands(workspace_root: &Path) -> (Option<String>, Option<String>, Option<String>) {
+fn detect_project_commands(
+    workspace_root: &Path,
+) -> (Option<String>, Option<String>, Option<String>) {
     // Rust
     if workspace_root.join("Cargo.toml").exists() {
         return (
@@ -398,9 +403,7 @@ fn detect_project_commands(workspace_root: &Path) -> (Option<String>, Option<Str
     }
 
     // Python
-    if workspace_root.join("pyproject.toml").exists()
-        || workspace_root.join("setup.py").exists()
-    {
+    if workspace_root.join("pyproject.toml").exists() || workspace_root.join("setup.py").exists() {
         return (
             None,
             Some("pytest".to_string()),
@@ -449,7 +452,8 @@ pub fn detect_duplicate_symbols(changed_files: &[String]) -> Vec<DuplicateSymbol
                    AND s2.file NOT IN (SELECT value FROM json_each(?2))",
             )?;
 
-            let changed_json = serde_json::to_string(changed_files).unwrap_or_else(|_| "[]".to_string());
+            let changed_json =
+                serde_json::to_string(changed_files).unwrap_or_else(|_| "[]".to_string());
 
             let rows = stmt.query_map(rusqlite::params![file, changed_json], |row| {
                 Ok(DuplicateSymbol {
@@ -503,7 +507,11 @@ mod tests {
     #[test]
     fn test_generate_quality_config_rust() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"test\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
         let yaml = generate_quality_config(dir.path());
         assert!(yaml.contains("cargo check"));
         assert!(yaml.contains("cargo test"));

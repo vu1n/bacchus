@@ -19,10 +19,7 @@ pub struct ResolveOutput {
     pub message: String,
 }
 
-pub fn resolve_merge(
-    task_id: &str,
-    workspace_root: &Path,
-) -> Result<ResolveOutput, ToolError> {
+pub fn resolve_merge(task_id: &str, workspace_root: &Path) -> Result<ResolveOutput, ToolError> {
     // 1. Check task exists and is claimed
     let (task, agent_id) = match super::require_claimed_task(task_id)? {
         Ok(pair) => pair,

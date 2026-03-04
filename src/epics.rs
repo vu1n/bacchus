@@ -237,11 +237,7 @@ pub fn assign_epic(epic_id: &str, architect_agent: &str) -> Result<Epic, EpicsEr
 
             if affected == 0 {
                 let exists: bool = conn
-                    .query_row(
-                        "SELECT 1 FROM epics WHERE id = ?1",
-                        [epic_id],
-                        |_| Ok(true),
-                    )
+                    .query_row("SELECT 1 FROM epics WHERE id = ?1", [epic_id], |_| Ok(true))
                     .unwrap_or(false);
 
                 if !exists {

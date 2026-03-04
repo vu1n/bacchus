@@ -116,10 +116,9 @@ pub fn claim_sqlite_task(task_id: &str, agent_id: &str) -> Result<SqliteTask, Ta
 
             return Err(match task_status {
                 None => TasksError::TaskNotFound(task_id.to_string()),
-                Some(s) if s != "open" => TasksError::NotReady(format!(
-                    "Task {} has status '{}', not 'open'",
-                    task_id, s
-                )),
+                Some(s) if s != "open" => {
+                    TasksError::NotReady(format!("Task {} has status '{}', not 'open'", task_id, s))
+                }
                 _ => TasksError::NotReady(format!(
                     "Task {} is not ready (deps or footprint collision)",
                     task_id

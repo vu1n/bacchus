@@ -393,10 +393,7 @@ fn create_desloppify_cleanup_tasks(
     let _ = tasks::create_sqlite_task(tasks::CreateSqliteTaskInput {
         id: task_id,
         epic_id,
-        title: format!(
-            "Fix {} desloppify findings",
-            scan.findings_count
-        ),
+        title: format!("Fix {} desloppify findings", scan.findings_count),
         description: Some(description),
         priority: 9, // low priority — cleanup
         depends_on: Vec::new(),

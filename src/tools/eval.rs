@@ -142,9 +142,11 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
                 epic_filter
             );
             if let Some(eid) = epic_id {
-                conn.query_row(&sql, params![event, cutoff, eid], |r| r.get(0)).unwrap_or(0)
+                conn.query_row(&sql, params![event, cutoff, eid], |r| r.get(0))
+                    .unwrap_or(0)
             } else {
-                conn.query_row(&sql, params![event, cutoff], |r| r.get(0)).unwrap_or(0)
+                conn.query_row(&sql, params![event, cutoff], |r| r.get(0))
+                    .unwrap_or(0)
             }
         };
 

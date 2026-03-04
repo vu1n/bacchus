@@ -2,7 +2,11 @@ use crate::tools::{ReleaseStatus, SessionMode};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "bacchus", about = "Workspace-based coordination CLI for multi-agent work", version)]
+#[command(
+    name = "bacchus",
+    about = "Workspace-based coordination CLI for multi-agent work",
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -87,7 +91,11 @@ pub enum Commands {
     Symbols {
         #[arg(short, long)]
         pattern: Option<String>,
-        #[arg(short, long, help = "Filter by kind: function, class, method, interface, type, variable")]
+        #[arg(
+            short,
+            long,
+            help = "Filter by kind: function, class, method, interface, type, variable"
+        )]
         kind: Option<String>,
         #[arg(short, long)]
         file: Option<String>,

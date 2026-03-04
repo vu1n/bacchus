@@ -58,28 +58,42 @@ pub(super) fn run_recovery_cycle(
     stale_cutoff_ms: i64,
     max_runtime_ms: Option<i64>,
 ) -> RecoveryCycleResult {
-    let recovery = recover_stale_workers(workspace_root, run_id, now_ms, stale_cutoff_ms, max_runtime_ms);
+    let recovery = recover_stale_workers(
+        workspace_root,
+        run_id,
+        now_ms,
+        stale_cutoff_ms,
+        max_runtime_ms,
+    );
     let reconcile = reconcile_failed_worker_tasks(workspace_root, run_id);
 
-    let recovery_note = if recovery.recovered > 0 || !recovery.errors.is_empty() {
-        Some(format!(
+    let recovery_note =
+        if recovery.recovered > 0 || !recovery.errors.is_empty() {
+            Some(format!(
             "Recovered stale workers: {} (tasks reset: {}, dead pid: {}, kill: {}/{}, errors: {}).",
             recovery.recovered, recovery.reset_tasks, recovery.pid_dead,
             recovery.kill_succeeded, recovery.kill_attempted, recovery.errors.len()
         ))
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     let reconcile_note = if reconcile.reopened > 0 || !reconcile.errors.is_empty() {
         Some(format!(
             "Reopened tasks from failed workers: {} of {} candidates (errors: {}).",
-            reconcile.reopened, reconcile.candidates, reconcile.errors.len()
+            reconcile.reopened,
+            reconcile.candidates,
+            reconcile.errors.len()
         ))
     } else {
         None
     };
 
-    RecoveryCycleResult { recovery, reconcile, recovery_note, reconcile_note }
+    RecoveryCycleResult {
+        recovery,
+        reconcile,
+        recovery_note,
+        reconcile_note,
+    }
 }
 
 pub(super) fn generate_run_id(prefix: &str) -> String {
@@ -646,7 +660,11 @@ pub fn spawn_workers_once(
 
     let workspace_root = find_workspace_root().ok_or("No workspace root found")?;
     let cycle = run_recovery_cycle(
-        &workspace_root, &run_id, now, worker_stale_cutoff, configured_worker_max_runtime_ms(),
+        &workspace_root,
+        &run_id,
+        now,
+        worker_stale_cutoff,
+        configured_worker_max_runtime_ms(),
     );
     let recovery_note = cycle.recovery_note;
     let failed_reconcile_note = cycle.reconcile_note;
@@ -799,7 +817,14 @@ pub fn run_worker_command(
     }
 
     // Ensure worker-scoped agent session for heartbeat and stop-hook semantics.
-    let _ = start_session(SessionMode::Agent, Some(task_id), 1, Some(agent_id), None, None);
+    let _ = start_session(
+        SessionMode::Agent,
+        Some(task_id),
+        1,
+        Some(agent_id),
+        None,
+        None,
+    );
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");

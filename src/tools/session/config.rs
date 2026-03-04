@@ -38,15 +38,27 @@ fn env_bool(key: &str, default: bool) -> bool {
 }
 
 pub(super) fn configured_agent_heartbeat_interval_ms() -> u64 {
-    env_or("BACCHUS_AGENT_HEARTBEAT_INTERVAL_MS", DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS, |v| *v > 0)
+    env_or(
+        "BACCHUS_AGENT_HEARTBEAT_INTERVAL_MS",
+        DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS,
+        |v| *v > 0,
+    )
 }
 
 pub(super) fn configured_orchestrator_lease_ttl_ms() -> i64 {
-    env_or("BACCHUS_ORCHESTRATOR_LEASE_TTL_MS", tasks::ORCHESTRATOR_LEASE_TTL_MS, |v| *v > 0)
+    env_or(
+        "BACCHUS_ORCHESTRATOR_LEASE_TTL_MS",
+        tasks::ORCHESTRATOR_LEASE_TTL_MS,
+        |v| *v > 0,
+    )
 }
 
 pub(super) fn configured_orchestrator_lease_interval_ms() -> u64 {
-    env_or("BACCHUS_ORCHESTRATOR_LEASE_INTERVAL_MS", DEFAULT_ORCHESTRATOR_LEASE_RENEW_INTERVAL_MS, |v| *v > 0)
+    env_or(
+        "BACCHUS_ORCHESTRATOR_LEASE_INTERVAL_MS",
+        DEFAULT_ORCHESTRATOR_LEASE_RENEW_INTERVAL_MS,
+        |v| *v > 0,
+    )
 }
 
 pub(super) fn configured_orchestrator_auto_spawn() -> bool {
@@ -61,15 +73,27 @@ pub(super) fn configured_worker_command() -> Option<String> {
 }
 
 pub(super) fn configured_worker_retry_backoff_ms() -> i64 {
-    env_or("BACCHUS_WORKER_RETRY_BACKOFF_MS", DEFAULT_WORKER_RETRY_BACKOFF_MS, |v| *v > 0)
+    env_or(
+        "BACCHUS_WORKER_RETRY_BACKOFF_MS",
+        DEFAULT_WORKER_RETRY_BACKOFF_MS,
+        |v| *v > 0,
+    )
 }
 
 pub(super) fn configured_worker_max_retries() -> i32 {
-    env_or("BACCHUS_WORKER_MAX_RETRIES", DEFAULT_WORKER_MAX_RETRIES, |v| *v > 0)
+    env_or(
+        "BACCHUS_WORKER_MAX_RETRIES",
+        DEFAULT_WORKER_MAX_RETRIES,
+        |v| *v > 0,
+    )
 }
 
 pub(super) fn configured_worker_stale_grace_ms() -> i64 {
-    env_or("BACCHUS_WORKER_STALE_GRACE_MS", DEFAULT_WORKER_STALE_GRACE_MS, |v| *v >= 0)
+    env_or(
+        "BACCHUS_WORKER_STALE_GRACE_MS",
+        DEFAULT_WORKER_STALE_GRACE_MS,
+        |v| *v >= 0,
+    )
 }
 
 pub(super) fn configured_worker_max_runtime_ms() -> Option<i64> {

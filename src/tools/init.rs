@@ -14,12 +14,12 @@ use std::process::Command;
 const SKILL_MD: &str = include_str!("../../skills/bacchus/SKILL.md");
 const ARCHETYPES_YAML: &str = include_str!("../../skills/bacchus/archetypes.yaml");
 const CMD_WORKER: &str = include_str!("../../skills/bacchus/commands/bacchus-worker.md");
-const CMD_ORCHESTRATOR: &str = include_str!("../../skills/bacchus/commands/bacchus-orchestrator.md");
+const CMD_ORCHESTRATOR: &str =
+    include_str!("../../skills/bacchus/commands/bacchus-orchestrator.md");
 const CMD_PLAN: &str = include_str!("../../skills/bacchus/commands/bacchus-plan.md");
 
 /// The stop hook command (fail-open design)
-const HOOK_CMD: &str =
-    r#"bacchus session check 2>/dev/null || echo '{"decision":"approve"}'"#;
+const HOOK_CMD: &str = r#"bacchus session check 2>/dev/null || echo '{"decision":"approve"}'"#;
 
 #[derive(Debug, Clone, Copy)]
 pub struct InitOptions<'a> {

@@ -50,11 +50,10 @@ pub use validation::{footprints_overlap, normalize_footprint};
 
 pub use yaml::{generate_template, import_yaml_tasks, tasks_file_path};
 
-
 // Lease management
 pub use lease::{
-    CLAIM_HEARTBEAT_TIMEOUT_MS, ORCHESTRATOR_LEASE_TTL_MS, get_orchestrator_lease,
-    release_orchestrator_lease, try_acquire_orchestrator_lease,
+    get_orchestrator_lease, release_orchestrator_lease, try_acquire_orchestrator_lease,
+    CLAIM_HEARTBEAT_TIMEOUT_MS, ORCHESTRATOR_LEASE_TTL_MS,
 };
 
 // ============================================================================

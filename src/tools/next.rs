@@ -21,10 +21,7 @@ pub struct NextOutput {
     pub message: String,
 }
 
-pub fn next_task(
-    agent_id: &str,
-    workspace_root: &Path,
-) -> Result<NextOutput, ToolError> {
+pub fn next_task(agent_id: &str, workspace_root: &Path) -> Result<NextOutput, ToolError> {
     // Atomic claim: claim_next_sqlite_task handles readiness check and claim in one transaction
     match tasks::claim_next_sqlite_task(agent_id) {
         Ok(Some(task)) => {

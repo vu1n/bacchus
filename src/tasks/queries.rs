@@ -69,10 +69,14 @@ pub struct FootprintRow {
 pub fn get_footprint_rows(task_id: Option<&str>) -> Result<Vec<FootprintRow>, String> {
     with_db_str(|conn| {
         let sql = match task_id {
-            Some(_) => "SELECT task_id, pattern_type, file_path, symbol, is_wildcard
-                        FROM task_footprints WHERE task_id = ?1",
-            None => "SELECT task_id, pattern_type, file_path, symbol, is_wildcard
-                     FROM task_footprints",
+            Some(_) => {
+                "SELECT task_id, pattern_type, file_path, symbol, is_wildcard
+                        FROM task_footprints WHERE task_id = ?1"
+            }
+            None => {
+                "SELECT task_id, pattern_type, file_path, symbol, is_wildcard
+                     FROM task_footprints"
+            }
         };
         let mut stmt = conn.prepare(sql)?;
         let map_row = |row: &rusqlite::Row| {
@@ -121,8 +125,7 @@ pub fn get_task_footprint(task_id: &str) -> Result<TaskFootprint, String> {
 ///
 /// Shared between `get_footprint_conflicts` (standalone query) and
 /// `readiness_predicates` (NOT EXISTS sub-select) to avoid divergence.
-pub const FOOTPRINT_OVERLAP_JOIN: &str =
-    "task_footprints fp1
+pub const FOOTPRINT_OVERLAP_JOIN: &str = "task_footprints fp1
      JOIN task_footprints fp2 ON fp1.file_path = fp2.file_path
        AND (fp1.is_wildcard = 1 OR fp2.is_wildcard = 1 OR fp1.symbol = fp2.symbol)
      JOIN tasks other ON other.id = fp2.task_id";

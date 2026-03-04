@@ -77,11 +77,9 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
 
         // Check for duplicate task ID
         let task_exists: bool = conn
-            .query_row(
-                "SELECT 1 FROM tasks WHERE id = ?1",
-                [&input.id],
-                |_| Ok(true),
-            )
+            .query_row("SELECT 1 FROM tasks WHERE id = ?1", [&input.id], |_| {
+                Ok(true)
+            })
             .unwrap_or(false);
 
         if task_exists {
@@ -292,7 +290,12 @@ pub fn mark_task_ready_for_release(
                AND claimed_by = ?4
                AND status = 'in_progress'
                AND deleted_at IS NULL",
-            &[&commit_id as &dyn rusqlite::ToSql, &now, &task_id, &agent_id],
+            &[
+                &commit_id as &dyn rusqlite::ToSql,
+                &now,
+                &task_id,
+                &agent_id,
+            ],
             TasksError::TaskNotFound(format!(
                 "Task {} not owned by {} or not in_progress",
                 task_id, agent_id
@@ -451,10 +454,7 @@ pub fn reset_task_from_resolution(task_id: &str) -> Result<(), TasksError> {
                AND status = 'needs_resolution'
                AND deleted_at IS NULL",
             &[&now as &dyn rusqlite::ToSql, &task_id],
-            TasksError::InvalidStatus(format!(
-                "Task {} not in needs_resolution status",
-                task_id
-            )),
+            TasksError::InvalidStatus(format!("Task {} not in needs_resolution status", task_id)),
         )
     })
 }

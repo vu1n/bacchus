@@ -70,7 +70,9 @@ fn ok_msg<E: std::fmt::Display>(
 ) -> Result<Output, BacchusError> {
     result
         .map_err(|e| BacchusError::Task(e.to_string()))
-        .and_then(|msg| pretty_json(&serde_json::json!({"success": true, "message": msg.to_string()})))
+        .and_then(|msg| {
+            pretty_json(&serde_json::json!({"success": true, "message": msg.to_string()}))
+        })
 }
 
 fn main() {
@@ -111,9 +113,16 @@ fn main() {
 
     let result: Result<Output, BacchusError> = match cli.command {
         Commands::Next { agent_id } => to_json(tools::next_task(&agent_id, &workspace_root)),
-        Commands::Claim { task_id, agent_id, force } => {
-            to_json(tools::claim_task(&task_id, &agent_id, force, &workspace_root))
-        }
+        Commands::Claim {
+            task_id,
+            agent_id,
+            force,
+        } => to_json(tools::claim_task(
+            &task_id,
+            &agent_id,
+            force,
+            &workspace_root,
+        )),
         Commands::Release { task_id, status } => {
             to_json(tools::release_task(&task_id, status, &workspace_root))
         }
@@ -126,47 +135,78 @@ fn main() {
         Commands::Heartbeat { task_id, agent_id } => {
             ok_msg(tasks::heartbeat_sqlite_task(&task_id, &agent_id).map(|_| "Heartbeat recorded"))
         }
-        Commands::Review { task_id, build_cmd, test_cmd } => to_json(tools::review_task(
-            &task_id, &workspace_root, build_cmd.as_deref(), test_cmd.as_deref(),
+        Commands::Review {
+            task_id,
+            build_cmd,
+            test_cmd,
+        } => to_json(tools::review_task(
+            &task_id,
+            &workspace_root,
+            build_cmd.as_deref(),
+            test_cmd.as_deref(),
         )),
         Commands::ProcessReleases { limit } => dispatch_process_releases(limit, &workspace_root),
         Commands::Eval { epic, days } => {
             to_json(tools::generate_eval_report(epic.as_deref(), days))
         }
-        Commands::Init { skip_jj, force_tasks, epic_id, epic_title } => {
-            to_json(tools::init_workspace(&workspace_root, tools::InitOptions {
-                skip_jj, force_tasks,
+        Commands::Init {
+            skip_jj,
+            force_tasks,
+            epic_id,
+            epic_title,
+        } => to_json(tools::init_workspace(
+            &workspace_root,
+            tools::InitOptions {
+                skip_jj,
+                force_tasks,
                 epic_id: epic_id.as_deref(),
                 epic_title: epic_title.as_deref(),
-            }))
-        }
-        Commands::Symbols { pattern, kind, file, lang, limit, search, fuzzy, handle } => {
+            },
+        )),
+        Commands::Symbols {
+            pattern,
+            kind,
+            file,
+            lang,
+            limit,
+            search,
+            fuzzy,
+            handle,
+        } => {
             let input = tools::FindSymbolsInput {
-                pattern, kind, file, language: lang,
-                limit: Some(limit), search, fuzzy, handle,
+                pattern,
+                kind,
+                file,
+                language: lang,
+                limit: Some(limit),
+                search,
+                fuzzy,
+                handle,
             };
-            if handle { to_json(tools::find_symbols_handle(&input)) }
-            else { to_json(tools::find_symbols(&input)) }
+            if handle {
+                to_json(tools::find_symbols_handle(&input))
+            } else {
+                to_json(tools::find_symbols(&input))
+            }
         }
-        Commands::Index { path } => {
-            index_path(&path, &workspace_root)
-                .map_err(BacchusError::Task)
-                .and_then(|count| pretty_json(&serde_json::json!({
+        Commands::Index { path } => index_path(&path, &workspace_root)
+            .map_err(BacchusError::Task)
+            .and_then(|count| {
+                pretty_json(&serde_json::json!({
                     "success": true, "files_indexed": count, "path": path
-                })))
-        }
+                }))
+            }),
         Commands::Status => to_json(get_status()),
-        Commands::Workflow => { println!("{}", WORKFLOW_DOC); Ok(Output::Empty) }
-        Commands::SelfUpdate => {
-            updater::self_update()
-                .map_err(|e| BacchusError::Task(e.to_string()))
-                .and_then(|v| pretty_json(&serde_json::json!({"success": true, "updated_to": v})))
+        Commands::Workflow => {
+            println!("{}", WORKFLOW_DOC);
+            Ok(Output::Empty)
         }
-        Commands::Context { task_id } => {
-            tools::generate_context(task_id, &workspace_root)
-                .map(Output::Raw)
-                .map_err(BacchusError::Task)
-        }
+        Commands::SelfUpdate => updater::self_update()
+            .map_err(|e| BacchusError::Task(e.to_string()))
+            .and_then(|v| pretty_json(&serde_json::json!({"success": true, "updated_to": v}))),
+        Commands::Context { task_id } => tools::generate_context(task_id, &workspace_root)
+            .map(Output::Raw)
+            .map_err(BacchusError::Task),
         Commands::CheckUpdate => to_json(updater::check_for_updates()),
         Commands::Events { limit } => to_json(events::list_recent_events(limit)),
 
@@ -189,22 +229,33 @@ fn main() {
         Commands::Archetype { command } => match command {
             ArchetypeCommands::List => Ok(Output::Raw(tools::cmd_list_archetypes())),
             ArchetypeCommands::Show { name } => Ok(Output::Raw(tools::cmd_show_archetype(&name))),
-            ArchetypeCommands::Prompt { name } => Ok(Output::Raw(tools::cmd_archetype_prompt(&name))),
-            ArchetypeCommands::Select { task_id } => Ok(Output::Raw(tools::cmd_select_archetype(&task_id))),
+            ArchetypeCommands::Prompt { name } => {
+                Ok(Output::Raw(tools::cmd_archetype_prompt(&name)))
+            }
+            ArchetypeCommands::Select { task_id } => {
+                Ok(Output::Raw(tools::cmd_select_archetype(&task_id)))
+            }
         },
 
         Commands::Handle { command } => match command {
-            HandleCommands::Expand { handle, limit, offset } => {
-                to_json(handles::expand_handle(&handle, Some(limit), Some(offset)))
-            }
+            HandleCommands::Expand {
+                handle,
+                limit,
+                offset,
+            } => to_json(handles::expand_handle(&handle, Some(limit), Some(offset))),
             HandleCommands::Filter { handle, kind, file } => to_json(handles::filter_handle(
                 &handle,
                 |v| {
-                    let kind_match = kind.as_ref().is_none_or(|k| v["kind"].as_str() == Some(k.as_str()));
+                    let kind_match = kind
+                        .as_ref()
+                        .is_none_or(|k| v["kind"].as_str() == Some(k.as_str()));
                     let file_match = file.as_ref().is_none_or(|f| {
                         v["file"].as_str().is_some_and(|vf| {
-                            if f.contains('*') { vf.contains(&f.replace('*', "")) }
-                            else { vf.contains(f) }
+                            if f.contains('*') {
+                                vf.contains(&f.replace('*', ""))
+                            } else {
+                                vf.contains(f)
+                            }
                         })
                     });
                     kind_match && file_match
@@ -214,7 +265,9 @@ fn main() {
             HandleCommands::List => to_json(handles::list_handles()),
             HandleCommands::Clear => handles::clear_all_handles()
                 .map_err(BacchusError::Db)
-                .and_then(|count| pretty_json(&serde_json::json!({"success": true, "cleared": count}))),
+                .and_then(|count| {
+                    pretty_json(&serde_json::json!({"success": true, "cleared": count}))
+                }),
             HandleCommands::Info { handle } => to_json(handles::get_handle_info(&handle)),
         },
     };
@@ -354,7 +407,10 @@ fn store_symbols(symbols: &[indexer::ExtractedSymbol]) -> Result<(), String> {
     }).map_err(|e: rusqlite::Error| e.to_string())
 }
 
-fn dispatch_process_releases(limit: usize, workspace_root: &std::path::Path) -> Result<Output, BacchusError> {
+fn dispatch_process_releases(
+    limit: usize,
+    workspace_root: &std::path::Path,
+) -> Result<Output, BacchusError> {
     let run_id = format!(
         "manual-orchestrator-{}-{}",
         chrono::Utc::now().timestamp_millis(),
@@ -363,7 +419,9 @@ fn dispatch_process_releases(limit: usize, workspace_root: &std::path::Path) -> 
     match tasks::try_acquire_orchestrator_lease(&run_id, tasks::ORCHESTRATOR_LEASE_TTL_MS) {
         Ok(true) => {
             let result = to_json(tools::process_ready_releases(
-                workspace_root, Some(limit), Some(&run_id),
+                workspace_root,
+                Some(limit),
+                Some(&run_id),
             ));
             let _ = tasks::release_orchestrator_lease(&run_id);
             result
@@ -375,7 +433,8 @@ fn dispatch_process_releases(limit: usize, workspace_root: &std::path::Path) -> 
                 .map(|l| format!("holder={} expires_at={}", l.holder_id, l.lease_expires_at))
                 .unwrap_or_else(|| "holder=unknown".to_string());
             Err(BacchusError::Task(format!(
-                "Another orchestrator leader lease is active ({}).", lease_msg
+                "Another orchestrator leader lease is active ({}).",
+                lease_msg
             )))
         }
         Err(e) => Err(BacchusError::Task(e.to_string())),
@@ -384,46 +443,88 @@ fn dispatch_process_releases(limit: usize, workspace_root: &std::path::Path) -> 
 
 fn dispatch_session(command: SessionCommands) -> Result<Output, BacchusError> {
     match command {
-        SessionCommands::Start { mode, task_id, max_concurrent, agent_id, epic_id, goal } => {
-            ok_msg(tools::start_session(mode, task_id.as_deref(), max_concurrent, agent_id.as_deref(), epic_id.as_deref(), goal.as_deref()))
-        }
+        SessionCommands::Start {
+            mode,
+            task_id,
+            max_concurrent,
+            agent_id,
+            epic_id,
+            goal,
+        } => ok_msg(tools::start_session(
+            mode,
+            task_id.as_deref(),
+            max_concurrent,
+            agent_id.as_deref(),
+            epic_id.as_deref(),
+            goal.as_deref(),
+        )),
         SessionCommands::Stop => ok_msg(tools::stop_session()),
         SessionCommands::Status => to_json(tools::session_status()),
         SessionCommands::Check => to_json(Ok::<_, String>(tools::check_session())),
-        SessionCommands::SpawnWorkers { count, dry_run } => to_json(tools::spawn_workers_once(count, dry_run)),
+        SessionCommands::SpawnWorkers { count, dry_run } => {
+            to_json(tools::spawn_workers_once(count, dry_run))
+        }
         SessionCommands::Prune { minutes } => to_json(tools::prune_sessions(minutes)),
-        SessionCommands::HeartbeatLoop { task_id, agent_id, token, interval_ms } => {
-            ok_msg(tools::run_agent_heartbeat_loop(&task_id, &agent_id, &token, interval_ms))
-        }
-        SessionCommands::LeaseLoop { run_id, token, interval_ms } => {
-            ok_msg(tools::run_orchestrator_lease_loop(&run_id, &token, interval_ms))
-        }
-        SessionCommands::WorkerRun { worker_id, run_id, task_id, agent_id, scope_id, command } => {
-            ok_msg(tools::run_worker_command(worker_id, &run_id, &task_id, &agent_id, &scope_id, &command))
-        }
+        SessionCommands::HeartbeatLoop {
+            task_id,
+            agent_id,
+            token,
+            interval_ms,
+        } => ok_msg(tools::run_agent_heartbeat_loop(
+            &task_id,
+            &agent_id,
+            &token,
+            interval_ms,
+        )),
+        SessionCommands::LeaseLoop {
+            run_id,
+            token,
+            interval_ms,
+        } => ok_msg(tools::run_orchestrator_lease_loop(
+            &run_id,
+            &token,
+            interval_ms,
+        )),
+        SessionCommands::WorkerRun {
+            worker_id,
+            run_id,
+            task_id,
+            agent_id,
+            scope_id,
+            command,
+        } => ok_msg(tools::run_worker_command(
+            worker_id, &run_id, &task_id, &agent_id, &scope_id, &command,
+        )),
     }
 }
 
 fn dispatch_epic(command: EpicCommands) -> Result<Output, BacchusError> {
     match command {
         EpicCommands::List { status } => {
-            let status_filter = status.as_ref().and_then(|s| epics::EpicStatus::from_str(s).ok());
+            let status_filter = status
+                .as_ref()
+                .and_then(|s| epics::EpicStatus::from_str(s).ok());
             to_json(epics::list_epics(status_filter))
         }
         EpicCommands::Show { id } => to_json(epics::get_epic_with_counts(&id)),
-        EpicCommands::Create { id, title, description } => {
-            to_json(epics::create_epic(epics::CreateEpicInput {
-                id, title, description, created_by: "human".to_string(),
-            }))
-        }
-        EpicCommands::Assign { id, agent } => {
-            epics::assign_epic(&id, &agent)
-                .map_err(|e| BacchusError::Task(e.to_string()))
-                .and_then(|epic| pretty_json(&serde_json::json!({
+        EpicCommands::Create {
+            id,
+            title,
+            description,
+        } => to_json(epics::create_epic(epics::CreateEpicInput {
+            id,
+            title,
+            description,
+            created_by: "human".to_string(),
+        })),
+        EpicCommands::Assign { id, agent } => epics::assign_epic(&id, &agent)
+            .map_err(|e| BacchusError::Task(e.to_string()))
+            .and_then(|epic| {
+                pretty_json(&serde_json::json!({
                     "success": true, "epic": epic,
                     "message": format!("Epic {} assigned to {}", id, agent)
-                })))
-        }
+                }))
+            }),
         EpicCommands::SetStatus { id, status } => {
             let parsed = epics::EpicStatus::from_str(&status)
                 .map_err(|e| BacchusError::Task(e.to_string()))?;
@@ -435,38 +536,50 @@ fn dispatch_epic(command: EpicCommands) -> Result<Output, BacchusError> {
 fn dispatch_message(command: MessageCommands) -> Result<Output, BacchusError> {
     match command {
         MessageCommands::List { agent, status } => {
-            let status_filter = status.as_ref().and_then(|s| messages::MessageStatus::from_str(s).ok());
+            let status_filter = status
+                .as_ref()
+                .and_then(|s| messages::MessageStatus::from_str(s).ok());
             to_json(messages::list_messages(agent.as_deref(), status_filter))
         }
-        MessageCommands::Send { agent, message_type, payload } => {
+        MessageCommands::Send {
+            agent,
+            message_type,
+            payload,
+        } => {
             let payload_json = serde_json::from_str::<serde_json::Value>(&payload)
                 .map_err(|e| BacchusError::Task(format!("Invalid JSON payload: {}", e)))?;
             to_json(messages::send_message(messages::SendMessageInput {
-                target_agent: agent, message_type, payload: payload_json,
+                target_agent: agent,
+                message_type,
+                payload: payload_json,
             }))
         }
         MessageCommands::Claim { agent, limit } => to_json(messages::claim_messages(&agent, limit)),
-        MessageCommands::Ack { message_id, agent } => {
-            messages::mark_processed(message_id, &agent)
-                .map_err(|e| BacchusError::Task(e.to_string()))
-                .and_then(|_| pretty_json(&serde_json::json!({
+        MessageCommands::Ack { message_id, agent } => messages::mark_processed(message_id, &agent)
+            .map_err(|e| BacchusError::Task(e.to_string()))
+            .and_then(|_| {
+                pretty_json(&serde_json::json!({
                     "success": true, "message_id": message_id, "agent": agent, "status": "processed"
-                })))
-        }
-        MessageCommands::Fail { message_id, agent, reason } => {
-            messages::mark_failed(message_id, &agent, reason.as_deref())
-                .map_err(|e| BacchusError::Task(e.to_string()))
-                .and_then(|_| pretty_json(&serde_json::json!({
+                }))
+            }),
+        MessageCommands::Fail {
+            message_id,
+            agent,
+            reason,
+        } => messages::mark_failed(message_id, &agent, reason.as_deref())
+            .map_err(|e| BacchusError::Task(e.to_string()))
+            .and_then(|_| {
+                pretty_json(&serde_json::json!({
                     "success": true, "message_id": message_id, "agent": agent, "status": "failed"
-                })))
-        }
-        MessageCommands::ReclaimStale => {
-            messages::reclaim_stale_messages()
-                .map_err(|e| BacchusError::Task(e.to_string()))
-                .and_then(|(requeued, failed)| pretty_json(&serde_json::json!({
+                }))
+            }),
+        MessageCommands::ReclaimStale => messages::reclaim_stale_messages()
+            .map_err(|e| BacchusError::Task(e.to_string()))
+            .and_then(|(requeued, failed)| {
+                pretty_json(&serde_json::json!({
                     "success": true, "requeued": requeued, "failed": failed
-                })))
-        }
+                }))
+            }),
     }
 }
 

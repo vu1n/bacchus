@@ -1,7 +1,7 @@
 //! Session file I/O: paths, reading, writing, and age calculation.
 
-use crate::config::{current_session_scope_id, find_workspace_root, sanitize_scope};
 use super::types::Session;
+use crate::config::{current_session_scope_id, find_workspace_root, sanitize_scope};
 use std::fs;
 use std::path::Path;
 

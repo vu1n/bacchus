@@ -157,10 +157,7 @@ pub fn create_workspace(
 }
 
 /// Remove a jj workspace (preserves commits in repo)
-pub fn remove_workspace(
-    workspace_root: &Path,
-    task_id: &str,
-) -> Result<(), WorkspaceError> {
+pub fn remove_workspace(workspace_root: &Path, task_id: &str) -> Result<(), WorkspaceError> {
     validate_task_id(task_id)?;
 
     let workspace_path = get_workspaces_dir(workspace_root).join(task_id);

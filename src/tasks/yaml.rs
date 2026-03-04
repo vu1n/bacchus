@@ -188,7 +188,10 @@ pub fn import_yaml_tasks(
 
         // Create the SQLite task
         // Parse task_type from YAML if provided
-        let task_type = task.task_type.as_ref().map(|t| SqliteTaskType::from_str_lossy(t));
+        let task_type = task
+            .task_type
+            .as_ref()
+            .map(|t| SqliteTaskType::from_str_lossy(t));
         let input = CreateSqliteTaskInput {
             id: task.id.clone(),
             epic_id: epic_id.clone(),

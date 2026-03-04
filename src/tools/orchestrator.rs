@@ -298,11 +298,7 @@ pub fn process_ready_releases(
                 }
 
                 // Detect duplicate symbols post-merge (non-blocking)
-                let dedup_count = detect_and_create_dedup_tasks(
-                    workspace_root,
-                    &task,
-                    run_id,
-                );
+                let dedup_count = detect_and_create_dedup_tasks(workspace_root, &task, run_id);
                 output.dedup_tasks_created += dedup_count;
 
                 // Re-index changed files so symbols table reflects merged state
@@ -448,12 +444,7 @@ fn get_changed_files(ws_path: &Path) -> Result<Vec<String>, String> {
     }
 
     let output = std::process::Command::new("jj")
-        .args([
-            "-R",
-            ws_path.to_str().unwrap_or("."),
-            "diff",
-            "--stat",
-        ])
+        .args(["-R", ws_path.to_str().unwrap_or("."), "diff", "--stat"])
         .output()
         .map_err(|e| e.to_string())?;
 
@@ -468,14 +459,7 @@ fn get_changed_files(ws_path: &Path) -> Result<Vec<String>, String> {
             // jj diff --stat format: "file.rs | N +++---"
             let trimmed = line.trim();
             if trimmed.contains('|') {
-                Some(
-                    trimmed
-                        .split('|')
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string(),
-                )
+                Some(trimmed.split('|').next().unwrap_or("").trim().to_string())
             } else {
                 None
             }
@@ -501,7 +485,9 @@ fn reindex_workspace_changes(workspace_root: &Path, task_id: &str) {
                 Ok(p) => p,
                 Err(_) => return,
             };
-            if let Ok(symbols) = crate::parse_file(&mut parser, &file_path, &workspace_root.to_path_buf()) {
+            if let Ok(symbols) =
+                crate::parse_file(&mut parser, &file_path, &workspace_root.to_path_buf())
+            {
                 let _ = crate::store_symbols(&symbols);
             }
         }

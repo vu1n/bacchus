@@ -196,7 +196,11 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     };
 
     let cycle = session_workers::run_recovery_cycle(
-        &workspace_root, run_id, now, worker_stale_cutoff, configured_worker_max_runtime_ms(),
+        &workspace_root,
+        run_id,
+        now,
+        worker_stale_cutoff,
+        configured_worker_max_runtime_ms(),
     );
     let recovery_note = cycle.recovery_note;
     let failed_reconcile_note = cycle.reconcile_note;
