@@ -11,11 +11,51 @@ use std::process::Command;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
-/// Quality configuration from `.bacchus/config.yaml`
+/// Project-level configuration from `.bacchus/config.yaml`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QualityConfig {
+pub struct BacchusConfig {
     #[serde(default)]
     pub quality: QualitySection,
+    #[serde(default)]
+    pub worker: WorkerSection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerSection {
+    /// Worker command (e.g., "claude")
+    pub cmd: Option<String>,
+    /// Whether auto-spawn is enabled (overrides env var)
+    #[serde(default = "default_true")]
+    pub auto_spawn: bool,
+    /// Retry backoff in milliseconds
+    pub retry_backoff_ms: Option<i64>,
+    /// Maximum number of retries before blocking the task
+    pub max_retries: Option<i32>,
+    /// Grace period before considering a worker stale (ms)
+    pub stale_grace_ms: Option<i64>,
+    /// Maximum runtime before a worker is considered stale (ms)
+    pub max_runtime_ms: Option<i64>,
+    /// Whether to kill stale workers
+    #[serde(default)]
+    pub kill_stale: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WorkerSection {
+    fn default() -> Self {
+        Self {
+            cmd: None,
+            auto_spawn: true,
+            retry_backoff_ms: None,
+            max_retries: None,
+            stale_grace_ms: None,
+            max_runtime_ms: None,
+            kill_stale: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -49,8 +89,8 @@ pub struct QualityCheck {
 const CONFIG_FILENAME: &str = "config.yaml";
 const GATE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
-/// Load quality config from `.bacchus/config.yaml`. Returns None if missing or unparseable.
-pub fn load_quality_config(workspace_root: &Path) -> Option<QualityConfig> {
+/// Load project config from `.bacchus/config.yaml`. Returns None if missing or unparseable.
+pub fn load_config(workspace_root: &Path) -> Option<BacchusConfig> {
     let path = workspace_root.join(".bacchus").join(CONFIG_FILENAME);
     let content = std::fs::read_to_string(&path).ok()?;
     serde_yaml::from_str(&content).ok()
@@ -61,7 +101,7 @@ pub fn load_quality_config(workspace_root: &Path) -> Option<QualityConfig> {
 /// Commands run sequentially with cwd set to `workspace_path`.
 /// Stops on first failure (short-circuit).
 pub fn run_quality_gate(
-    config: &QualityConfig,
+    config: &BacchusConfig,
     workspace_path: &Path,
 ) -> Result<QualityGateResult, String> {
     let mut checks = Vec::new();
@@ -240,7 +280,7 @@ const DESLOPPIFY_TIMEOUT: Duration = Duration::from_secs(600); // 10 minutes
 ///
 /// Non-blocking: returns results but never causes the caller to fail.
 pub fn run_desloppify_scan(workspace_root: &Path) -> DesloppifyScanResult {
-    let config = match load_quality_config(workspace_root) {
+    let config = match load_config(workspace_root) {
         Some(c) if c.quality.desloppify => c,
         _ => {
             return DesloppifyScanResult {
@@ -369,8 +409,8 @@ fn parse_desloppify_findings(output: &str) -> usize {
 // Config Generation (for bacchus init)
 // ============================================================================
 
-/// Detect project type and generate default quality config YAML content.
-pub fn generate_quality_config(workspace_root: &Path) -> String {
+/// Detect project type and generate default config YAML content (quality + worker sections).
+pub fn generate_config(workspace_root: &Path) -> String {
     let (check, test, lint) = detect_project_commands(workspace_root);
     let mut yaml = String::from("quality:\n");
     if let Some(c) = check {
@@ -383,6 +423,8 @@ pub fn generate_quality_config(workspace_root: &Path) -> String {
         yaml.push_str(&format!("  lint: \"{}\"\n", l));
     }
     yaml.push_str("  desloppify: true\n");
+    yaml.push_str("\nworker:\n");
+    yaml.push_str("  cmd: \"claude\"\n");
     yaml
 }
 
@@ -519,13 +561,13 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_load_quality_config_missing() {
+    fn test_load_config_missing() {
         let dir = tempdir().unwrap();
-        assert!(load_quality_config(dir.path()).is_none());
+        assert!(load_config(dir.path()).is_none());
     }
 
     #[test]
-    fn test_load_quality_config_valid() {
+    fn test_load_config_valid() {
         let dir = tempdir().unwrap();
         let bacchus_dir = dir.path().join(".bacchus");
         std::fs::create_dir_all(&bacchus_dir).unwrap();
@@ -535,43 +577,67 @@ mod tests {
         )
         .unwrap();
 
-        let config = load_quality_config(dir.path()).unwrap();
+        let config = load_config(dir.path()).unwrap();
         assert_eq!(config.quality.check.as_deref(), Some("cargo check"));
         assert_eq!(config.quality.test.as_deref(), Some("cargo test"));
         assert!(config.quality.lint.is_none());
         assert!(config.quality.desloppify);
+        // Worker section should default
+        assert!(config.worker.cmd.is_none());
+        assert!(config.worker.auto_spawn);
     }
 
     #[test]
-    fn test_generate_quality_config_rust() {
+    fn test_load_config_with_worker_section() {
+        let dir = tempdir().unwrap();
+        let bacchus_dir = dir.path().join(".bacchus");
+        std::fs::create_dir_all(&bacchus_dir).unwrap();
+        std::fs::write(
+            bacchus_dir.join("config.yaml"),
+            "quality:\n  check: \"cargo check\"\nworker:\n  cmd: \"claude\"\n  kill_stale: true\n",
+        )
+        .unwrap();
+
+        let config = load_config(dir.path()).unwrap();
+        assert_eq!(config.worker.cmd.as_deref(), Some("claude"));
+        assert!(config.worker.kill_stale);
+        assert!(config.worker.auto_spawn); // default
+    }
+
+    #[test]
+    fn test_generate_config_rust() {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n",
         )
         .unwrap();
-        let yaml = generate_quality_config(dir.path());
+        let yaml = generate_config(dir.path());
         assert!(yaml.contains("cargo check"));
         assert!(yaml.contains("cargo test"));
         assert!(yaml.contains("cargo clippy"));
+        assert!(yaml.contains("worker:"));
+        assert!(yaml.contains("cmd: \"claude\""));
     }
 
     #[test]
-    fn test_generate_quality_config_node() {
+    fn test_generate_config_node() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
-        let yaml = generate_quality_config(dir.path());
+        let yaml = generate_config(dir.path());
         assert!(yaml.contains("tsc --noEmit"));
         assert!(yaml.contains("vitest"));
+        assert!(yaml.contains("cmd: \"claude\""));
     }
 
     #[test]
-    fn test_generate_quality_config_go() {
+    fn test_generate_config_go() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("go.mod"), "module test\n").unwrap();
-        let yaml = generate_quality_config(dir.path());
+        let yaml = generate_config(dir.path());
         assert!(yaml.contains("go build"));
         assert!(yaml.contains("go test"));
+        assert!(yaml.contains("cmd: \"claude\""));
     }
 
     #[test]
@@ -600,13 +666,14 @@ mod tests {
     #[test]
     fn test_run_quality_gate_passes() {
         let dir = tempdir().unwrap();
-        let config = QualityConfig {
+        let config = BacchusConfig {
             quality: QualitySection {
                 check: Some("true".to_string()),
                 test: Some("true".to_string()),
                 lint: None,
                 desloppify: false,
             },
+            worker: WorkerSection::default(),
         };
         let result = run_quality_gate(&config, dir.path()).unwrap();
         assert!(result.passed);
@@ -616,13 +683,14 @@ mod tests {
     #[test]
     fn test_run_quality_gate_fails() {
         let dir = tempdir().unwrap();
-        let config = QualityConfig {
+        let config = BacchusConfig {
             quality: QualitySection {
                 check: Some("true".to_string()),
                 test: Some("false".to_string()),
                 lint: Some("true".to_string()),
                 desloppify: false,
             },
+            worker: WorkerSection::default(),
         };
         let result = run_quality_gate(&config, dir.path()).unwrap();
         assert!(!result.passed);

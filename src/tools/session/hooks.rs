@@ -156,7 +156,6 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
     let max_concurrent = session.max_concurrent.unwrap_or(3);
     let now = chrono::Utc::now().timestamp_millis();
     let active_cutoff = now - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
-    let worker_stale_cutoff = active_cutoff - configured_worker_stale_grace_ms();
     let run_id = session
         .run_id
         .as_deref()
@@ -184,7 +183,7 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         }
     }
 
-    // Get workspace root for task lookup
+    // Get workspace root for task lookup and config loading
     let workspace_root = match find_workspace_root() {
         Some(root) => root,
         None => {
@@ -194,13 +193,16 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             }
         }
     };
+    let wcfg = resolve_worker_config(Some(&workspace_root));
+    let worker_stale_cutoff = active_cutoff - wcfg.stale_grace_ms;
 
     let cycle = session_workers::run_recovery_cycle(
         &workspace_root,
         run_id,
         now,
         worker_stale_cutoff,
-        configured_worker_max_runtime_ms(),
+        wcfg.max_runtime_ms,
+        wcfg.kill_stale,
     );
     let recovery_note = cycle.recovery_note;
     let failed_reconcile_note = cycle.reconcile_note;
@@ -318,14 +320,15 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             .map(|t| t.id.as_str())
             .collect();
 
-        let mut reason = if configured_orchestrator_auto_spawn() {
-            if let Some(worker_cmd) = configured_worker_command() {
+        let mut reason = if configured_orchestrator_auto_spawn(&wcfg) {
+            if let Some(ref worker_cmd) = wcfg.cmd {
                 let summary = session_workers::try_spawn_workers(
                     &workspace_root,
                     run_id,
                     &ready_tasks,
                     slots,
-                    &worker_cmd,
+                    worker_cmd,
+                    &wcfg,
                 );
                 let post_active_count = session_workers::count_active_claims(active_cutoff);
                 let post_active_workers = workers::count_active_workers(run_id).unwrap_or(0);
@@ -358,7 +361,7 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
                 msg
             } else {
                 format!(
-                    "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Auto-spawn enabled but BACCHUS_WORKER_CMD is not set. Set it, then run 'bacchus session spawn-workers --count {}'.",
+                    "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Auto-spawn enabled but worker.cmd is not configured. Set worker.cmd in .bacchus/config.yaml (or BACCHUS_WORKER_CMD env var), then run 'bacchus session spawn-workers --count {}'.",
                     to_spawn,
                     task_ids.join(", "),
                     active_count,
@@ -368,7 +371,7 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
             }
         } else {
             format!(
-                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus session spawn-workers --count {}' (with BACCHUS_WORKER_CMD set) or 'bacchus claim <task_id> --agent-id <agent_id>'.",
+                "Ready to spawn {} agent(s) for: {}. Active: {}/{}. Use 'bacchus session spawn-workers --count {}' (with worker.cmd in .bacchus/config.yaml or BACCHUS_WORKER_CMD env var) or 'bacchus claim <task_id> --agent-id <agent_id>'.",
                 to_spawn,
                 task_ids.join(", "),
                 active_count,

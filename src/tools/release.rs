@@ -135,7 +135,7 @@ pub fn release_task(
             }
 
             // Run quality gate if configured
-            if let Some(config) = quality::load_quality_config(workspace_root) {
+            if let Some(config) = quality::load_config(workspace_root) {
                 let ws_path = workspace::get_workspaces_dir(workspace_root).join(task_id);
                 match quality::run_quality_gate(&config, &ws_path) {
                     Ok(gate) if !gate.passed => {

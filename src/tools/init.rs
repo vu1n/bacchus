@@ -67,8 +67,8 @@ pub struct InitClaudeStatus {
     pub commands_already_exist: Vec<String>,
     pub claude_md_updated: bool,
     pub claude_md_already_has_pointer: bool,
-    pub quality_config_created: bool,
-    pub quality_config_already_exists: bool,
+    pub config_created: bool,
+    pub config_already_exists: bool,
     pub db_ignore_added: bool,
     pub db_ignore_already_exists: bool,
 }
@@ -349,15 +349,15 @@ fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
     }
 }
 
-/// Install quality config to .bacchus/config.yaml with project-detected defaults
-fn ensure_quality_config(workspace_root: &Path) -> Result<(bool, bool), String> {
+/// Install project config to .bacchus/config.yaml with project-detected defaults (quality + worker)
+fn ensure_config(workspace_root: &Path) -> Result<(bool, bool), String> {
     let path = workspace_root.join(".bacchus/config.yaml");
 
     if path.exists() {
         return Ok((false, true)); // (created, already_exists)
     }
 
-    let content = crate::quality::generate_quality_config(workspace_root);
+    let content = crate::quality::generate_config(workspace_root);
     fs::write(&path, content).map_err(|e| e.to_string())?;
     Ok((true, false))
 }
@@ -503,9 +503,9 @@ pub fn init_workspace(
     claude.claude_md_updated = updated;
     claude.claude_md_already_has_pointer = already_has;
 
-    let (created, exists) = ensure_quality_config(workspace_root)?;
-    claude.quality_config_created = created;
-    claude.quality_config_already_exists = exists;
+    let (created, exists) = ensure_config(workspace_root)?;
+    claude.config_created = created;
+    claude.config_already_exists = exists;
 
     let (added, exists) = ensure_db_ignored(workspace_root)?;
     claude.db_ignore_added = added;

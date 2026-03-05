@@ -2664,7 +2664,7 @@ mod quality_tests {
         // Verify the init output includes quality config info
         let stdout = String::from_utf8_lossy(&output.stdout);
         let json: Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(json["claude"]["quality_config_created"], true);
+        assert_eq!(json["claude"]["config_created"], true);
     }
 
     #[test]
@@ -2692,7 +2692,7 @@ mod quality_tests {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let json: Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(json["claude"]["quality_config_already_exists"], true);
+        assert_eq!(json["claude"]["config_already_exists"], true);
 
         // Content should NOT be overwritten
         let content = fs::read_to_string(&config_path).unwrap();

@@ -57,6 +57,7 @@ pub(super) fn run_recovery_cycle(
     now_ms: i64,
     stale_cutoff_ms: i64,
     max_runtime_ms: Option<i64>,
+    kill_stale: bool,
 ) -> RecoveryCycleResult {
     let recovery = recover_stale_workers(
         workspace_root,
@@ -64,6 +65,7 @@ pub(super) fn run_recovery_cycle(
         now_ms,
         stale_cutoff_ms,
         max_runtime_ms,
+        kill_stale,
     );
     let reconcile = reconcile_failed_worker_tasks(workspace_root, run_id);
 
@@ -150,12 +152,13 @@ pub(super) fn spawn_orchestrator_worker(
     run_id: &str,
     task: &tasks::SqliteTask,
     worker_cmd: &str,
+    wcfg: &ResolvedWorkerConfig,
     now_ms: i64,
 ) -> Result<Option<String>, String> {
     let retry = workers::get_retry_state(run_id, &task.id)?;
     let next_attempt = retry.attempts + 1;
 
-    let max_retries = configured_worker_max_retries();
+    let max_retries = wcfg.max_retries;
     if retry.attempts >= max_retries {
         let _ = tasks::reset_sqlite_task(&task.id, tasks::SqliteTaskStatus::Blocked);
         let _ = workers::create_worker_attempt(
@@ -190,7 +193,7 @@ pub(super) fn spawn_orchestrator_worker(
     }
 
     if let Some(last_failed_at) = retry.last_failed_at {
-        let backoff_ms = configured_worker_retry_backoff_ms();
+        let backoff_ms = wcfg.retry_backoff_ms;
         if now_ms - last_failed_at < backoff_ms {
             return Ok(Some("backoff".to_string()));
         }
@@ -358,13 +361,14 @@ pub(super) fn try_spawn_workers(
     ready_tasks: &[tasks::SqliteTask],
     slots: usize,
     worker_cmd: &str,
+    wcfg: &ResolvedWorkerConfig,
 ) -> WorkerSpawnSummary {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut summary = WorkerSpawnSummary::default();
 
     for task in ready_tasks.iter().take(slots) {
         summary.attempted += 1;
-        match spawn_orchestrator_worker(workspace_root, run_id, task, worker_cmd, now_ms) {
+        match spawn_orchestrator_worker(workspace_root, run_id, task, worker_cmd, wcfg, now_ms) {
             Ok(Some(kind)) if kind == "backoff" => summary.skipped_backoff += 1,
             Ok(Some(kind)) if kind == "exhausted" => summary.exhausted += 1,
             Ok(Some(_)) => {}
@@ -461,9 +465,9 @@ pub(super) fn recover_stale_workers(
     now_ms: i64,
     stale_cutoff_ms: i64,
     max_runtime_ms: Option<i64>,
+    kill_stale: bool,
 ) -> WorkerRecoverySummary {
     let mut summary = WorkerRecoverySummary::default();
-    let kill_stale = configured_worker_kill_stale();
 
     let snapshots = match workers::list_active_worker_snapshots(run_id) {
         Ok(v) => v,
@@ -665,7 +669,6 @@ pub fn spawn_workers_once(
     let requested = count.unwrap_or(max_concurrent).max(1);
     let now = chrono::Utc::now().timestamp_millis();
     let active_cutoff = now - tasks::CLAIM_HEARTBEAT_TIMEOUT_MS;
-    let worker_stale_cutoff = active_cutoff - configured_worker_stale_grace_ms();
 
     let lease_ok =
         tasks::try_acquire_orchestrator_lease(&run_id, configured_orchestrator_lease_ttl_ms())
@@ -680,12 +683,15 @@ pub fn spawn_workers_once(
     }
 
     let workspace_root = find_workspace_root().ok_or("No workspace root found")?;
+    let wcfg = resolve_worker_config(Some(&workspace_root));
+    let worker_stale_cutoff = active_cutoff - wcfg.stale_grace_ms;
     let cycle = run_recovery_cycle(
         &workspace_root,
         &run_id,
         now,
         worker_stale_cutoff,
-        configured_worker_max_runtime_ms(),
+        wcfg.max_runtime_ms,
+        wcfg.kill_stale,
     );
     let recovery_note = cycle.recovery_note;
     let failed_reconcile_note = cycle.reconcile_note;
@@ -750,8 +756,8 @@ pub fn spawn_workers_once(
         }));
     }
 
-    let worker_cmd = configured_worker_command().ok_or(
-        "BACCHUS_WORKER_CMD is not set. Set it and rerun `bacchus session spawn-workers`.",
+    let worker_cmd = wcfg.cmd.as_deref().ok_or(
+        "worker.cmd is not configured. Set worker.cmd in .bacchus/config.yaml (or BACCHUS_WORKER_CMD env var) and rerun `bacchus session spawn-workers`.",
     )?;
 
     let summary = if spawn_slots == 0 {
@@ -762,7 +768,8 @@ pub fn spawn_workers_once(
             &run_id,
             &ready_tasks,
             spawn_slots,
-            &worker_cmd,
+            worker_cmd,
+            &wcfg,
         )
     };
 
