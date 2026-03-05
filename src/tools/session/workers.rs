@@ -237,6 +237,10 @@ pub(super) fn spawn_orchestrator_worker(
         .arg("--command")
         .arg(worker_cmd)
         .current_dir(workspace_root)
+        // Strip Claude Code env vars so spawned `claude -p` workers don't hit
+        // "cannot be launched inside another Claude Code session" guard.
+        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env("BACCHUS_SESSION_ID", &scope_id)
         .env(
             "BACCHUS_WORKSPACE_PATH",
@@ -869,6 +873,10 @@ pub fn run_worker_command(
     } else {
         workspace_root.as_path()
     })
+    // Strip Claude Code env vars so spawned `claude -p` workers don't hit
+    // "cannot be launched inside another Claude Code session" guard.
+    .env_remove("CLAUDECODE")
+    .env_remove("CLAUDE_CODE_ENTRYPOINT")
     .env("BACCHUS_TASK_ID", task_id)
     .env("BACCHUS_AGENT_ID", agent_id)
     .env("BACCHUS_RUN_ID", run_id)
