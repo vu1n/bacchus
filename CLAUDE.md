@@ -184,7 +184,7 @@ quality:
   desloppify: true
 
 worker:
-  cmd: "claude"          # Worker command (required for auto-spawn)
+  cmd: "claude -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'"
   # auto_spawn: true     # Enable auto-spawn (default: true)
   # retry_backoff_ms: 60000
   # max_retries: 3
