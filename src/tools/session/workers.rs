@@ -858,21 +858,34 @@ pub fn run_worker_command(
         None,
     );
 
+    // Substitute env var placeholders in the command string so the worker
+    // receives resolved values regardless of shell quoting (single vs double).
+    let expanded = command
+        .replace("$BACCHUS_TASK_ID", task_id)
+        .replace("$BACCHUS_AGENT_ID", agent_id)
+        .replace("$BACCHUS_RUN_ID", run_id)
+        .replace("$BACCHUS_WORKER_ID", &worker_id.to_string())
+        .replace(
+            "$BACCHUS_WORKSPACE_ROOT",
+            &workspace_root.to_string_lossy(),
+        )
+        .replace(
+            "$BACCHUS_WORKSPACE_PATH",
+            &workspace_path.to_string_lossy(),
+        );
+
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
-        c.args(["/C", command]);
+        c.args(["/C", &expanded]);
         c
     } else {
         let mut c = Command::new("sh");
-        c.args(["-c", command]);
+        c.args(["-c", &expanded]);
         c
     };
 
-    cmd.current_dir(if workspace_path.exists() {
-        workspace_path.as_path()
-    } else {
-        workspace_root.as_path()
-    })
+    // Always run from project root so Claude Code's sandbox includes .bacchus/
+    cmd.current_dir(&workspace_root)
     // Strip Claude Code env vars so spawned `claude -p` workers don't hit
     // "cannot be launched inside another Claude Code session" guard.
     .env_remove("CLAUDECODE")

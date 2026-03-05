@@ -424,7 +424,7 @@ pub fn generate_config(workspace_root: &Path) -> String {
     }
     yaml.push_str("  desloppify: true\n");
     yaml.push_str("\nworker:\n");
-    yaml.push_str("  cmd: \"claude -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'\"\n");
+    yaml.push_str("  cmd: \"claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'\"\n");
     yaml
 }
 
@@ -617,7 +617,7 @@ mod tests {
         assert!(yaml.contains("cargo test"));
         assert!(yaml.contains("cargo clippy"));
         assert!(yaml.contains("worker:"));
-        assert!(yaml.contains("cmd: \"claude -p"));
+        assert!(yaml.contains("cmd: \"claude --dangerously-skip-permissions -p"));
     }
 
     #[test]
@@ -627,7 +627,7 @@ mod tests {
         let yaml = generate_config(dir.path());
         assert!(yaml.contains("tsc --noEmit"));
         assert!(yaml.contains("vitest"));
-        assert!(yaml.contains("cmd: \"claude -p"));
+        assert!(yaml.contains("cmd: \"claude --dangerously-skip-permissions -p"));
     }
 
     #[test]
@@ -637,7 +637,7 @@ mod tests {
         let yaml = generate_config(dir.path());
         assert!(yaml.contains("go build"));
         assert!(yaml.contains("go test"));
-        assert!(yaml.contains("cmd: \"claude -p"));
+        assert!(yaml.contains("cmd: \"claude --dangerously-skip-permissions -p"));
     }
 
     #[test]
