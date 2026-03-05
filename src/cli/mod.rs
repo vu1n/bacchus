@@ -237,6 +237,9 @@ pub enum SessionCommands {
         token: String,
         #[arg(long, default_value = "30000")]
         interval_ms: u64,
+        /// PID of the owning process. Loop exits when this PID dies.
+        #[arg(long)]
+        owner_pid: Option<u32>,
     },
 
     #[command(hide = true)]
@@ -247,6 +250,9 @@ pub enum SessionCommands {
         token: String,
         #[arg(long, default_value = "30000")]
         interval_ms: u64,
+        /// PID of the owning process. Loop exits when this PID dies.
+        #[arg(long)]
+        owner_pid: Option<u32>,
     },
 
     #[command(hide = true)]

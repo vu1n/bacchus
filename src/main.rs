@@ -484,20 +484,24 @@ fn dispatch_session(command: SessionCommands) -> Result<Output, BacchusError> {
             agent_id,
             token,
             interval_ms,
+            owner_pid,
         } => ok_msg(tools::run_agent_heartbeat_loop(
             &task_id,
             &agent_id,
             &token,
             interval_ms,
+            owner_pid,
         )),
         SessionCommands::LeaseLoop {
             run_id,
             token,
             interval_ms,
+            owner_pid,
         } => ok_msg(tools::run_orchestrator_lease_loop(
             &run_id,
             &token,
             interval_ms,
+            owner_pid,
         )),
         SessionCommands::WorkerRun {
             worker_id,
