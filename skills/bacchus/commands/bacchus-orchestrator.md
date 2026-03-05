@@ -225,3 +225,11 @@ bacchus epic set-status <EPIC_ID> closed
 8. Monitor stale claims and recover promptly
 9. Communicate with workers through the message bus
 10. Validate tasks before spawning workers
+
+## CRITICAL: What NOT to Do
+
+- **NEVER use the Agent tool to spawn workers.** In-process Agent tool calls deadlock the orchestrator session. Workers MUST be spawned as external processes via `bacchus session spawn-workers`.
+- **NEVER use git worktrees.** Bacchus uses jj workspaces, not git worktrees. Workers operate in `.bacchus/workspaces/<task-id>/` via `jj -R`.
+- **NEVER manually claim tasks for workers.** `bacchus session spawn-workers` handles claiming, workspace creation, and worker process launch atomically.
+- **NEVER cd into a workspace directory.** Always use `jj -R <path>` or `bacchus` commands.
+- **Your only job after Phase 3 is:** start the orchestrator session, spawn workers via `bacchus session spawn-workers`, then monitor/recover.
