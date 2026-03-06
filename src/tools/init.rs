@@ -420,8 +420,13 @@ fn ensure_worker_hooks(workspace_root: &Path) -> Result<(bool, bool), String> {
     let hook_entry = serde_json::json!({
         "hooks": [{"type": "command", "command": ACTIVITY_HOOK_CMD, "timeout": 5000}]
     });
-    let hook_registered =
-        upsert_settings_hook(workspace_root, "PostToolUse", ACTIVITY_HOOK_CMD, hook_entry, false)?;
+    let hook_registered = upsert_settings_hook(
+        workspace_root,
+        "PostToolUse",
+        ACTIVITY_HOOK_CMD,
+        hook_entry,
+        false,
+    )?;
 
     Ok((script_installed, hook_registered))
 }

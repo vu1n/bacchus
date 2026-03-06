@@ -223,7 +223,11 @@ pub fn list_sqlite_tasks(
 ///
 /// Called by worker hooks to report what the agent is doing (reading, editing, testing, etc.).
 /// Also refreshes the heartbeat timestamp as a side effect.
-pub fn update_task_activity(task_id: &str, agent_id: &str, activity: &str) -> Result<(), TasksError> {
+pub fn update_task_activity(
+    task_id: &str,
+    agent_id: &str,
+    activity: &str,
+) -> Result<(), TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
     with_db_typed(|conn| {
@@ -238,12 +242,7 @@ pub fn update_task_activity(task_id: &str, agent_id: &str, activity: &str) -> Re
                AND claimed_by = ?4
                AND status = 'in_progress'
                AND deleted_at IS NULL",
-            &[
-                &activity as &dyn rusqlite::ToSql,
-                &now,
-                &task_id,
-                &agent_id,
-            ],
+            &[&activity as &dyn rusqlite::ToSql, &now, &task_id, &agent_id],
             TasksError::TaskNotFound(format!(
                 "Task {} not owned by {} or not in_progress",
                 task_id, agent_id

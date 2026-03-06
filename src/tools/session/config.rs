@@ -85,7 +85,9 @@ pub(super) struct ResolvedWorkerConfig {
 }
 
 /// Load worker config once: env vars → config.yaml → built-in defaults.
-pub(super) fn resolve_worker_config(workspace_root: Option<&std::path::Path>) -> ResolvedWorkerConfig {
+pub(super) fn resolve_worker_config(
+    workspace_root: Option<&std::path::Path>,
+) -> ResolvedWorkerConfig {
     let yaml_worker = workspace_root
         .and_then(crate::quality::load_config)
         .map(|c| c.worker);
@@ -121,7 +123,10 @@ pub(super) fn resolve_worker_config(workspace_root: Option<&std::path::Path>) ->
         kill_stale: if let Some(v) = env_opt("BACCHUS_WORKER_KILL_STALE", |_: &bool| true) {
             v
         } else {
-            yaml_worker.as_ref().map(|w| w.kill_stale).unwrap_or(DEFAULT_WORKER_KILL_STALE)
+            yaml_worker
+                .as_ref()
+                .map(|w| w.kill_stale)
+                .unwrap_or(DEFAULT_WORKER_KILL_STALE)
         },
     }
 }

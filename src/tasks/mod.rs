@@ -35,8 +35,7 @@ pub use crud::{
     complete_task_release, create_sqlite_task, get_sqlite_task, get_tasks_ready_for_release,
     heartbeat_sqlite_task, list_sqlite_tasks, mark_task_needs_resolution,
     mark_task_ready_for_release, reset_sqlite_task, reset_task_from_resolution,
-    reset_task_release_to_ready, set_task_release_commit, start_task_release,
-    update_task_activity,
+    reset_task_release_to_ready, set_task_release_commit, start_task_release, update_task_activity,
 };
 
 pub use readiness::{claim_next_sqlite_task, claim_sqlite_task, get_ready_sqlite_tasks};

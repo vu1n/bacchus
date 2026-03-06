@@ -865,14 +865,8 @@ pub fn run_worker_command(
         .replace("$BACCHUS_AGENT_ID", agent_id)
         .replace("$BACCHUS_RUN_ID", run_id)
         .replace("$BACCHUS_WORKER_ID", &worker_id.to_string())
-        .replace(
-            "$BACCHUS_WORKSPACE_ROOT",
-            &workspace_root.to_string_lossy(),
-        )
-        .replace(
-            "$BACCHUS_WORKSPACE_PATH",
-            &workspace_path.to_string_lossy(),
-        );
+        .replace("$BACCHUS_WORKSPACE_ROOT", &workspace_root.to_string_lossy())
+        .replace("$BACCHUS_WORKSPACE_PATH", &workspace_path.to_string_lossy());
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
@@ -886,22 +880,22 @@ pub fn run_worker_command(
 
     // Always run from project root so Claude Code's sandbox includes .bacchus/
     cmd.current_dir(&workspace_root)
-    // Strip Claude Code env vars so spawned `claude -p` workers don't hit
-    // "cannot be launched inside another Claude Code session" guard.
-    .env_remove("CLAUDECODE")
-    .env_remove("CLAUDE_CODE_ENTRYPOINT")
-    .env("BACCHUS_TASK_ID", task_id)
-    .env("BACCHUS_AGENT_ID", agent_id)
-    .env("BACCHUS_RUN_ID", run_id)
-    .env("BACCHUS_WORKER_ID", worker_id.to_string())
-    .env(
-        "BACCHUS_WORKSPACE_ROOT",
-        workspace_root.to_string_lossy().to_string(),
-    )
-    .env(
-        "BACCHUS_WORKSPACE_PATH",
-        workspace_path.to_string_lossy().to_string(),
-    );
+        // Strip Claude Code env vars so spawned `claude -p` workers don't hit
+        // "cannot be launched inside another Claude Code session" guard.
+        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
+        .env("BACCHUS_TASK_ID", task_id)
+        .env("BACCHUS_AGENT_ID", agent_id)
+        .env("BACCHUS_RUN_ID", run_id)
+        .env("BACCHUS_WORKER_ID", worker_id.to_string())
+        .env(
+            "BACCHUS_WORKSPACE_ROOT",
+            workspace_root.to_string_lossy().to_string(),
+        )
+        .env(
+            "BACCHUS_WORKSPACE_PATH",
+            workspace_path.to_string_lossy().to_string(),
+        );
 
     let output = cmd.output().map_err(|e| e.to_string())?;
     let exit_code = output.status.code();

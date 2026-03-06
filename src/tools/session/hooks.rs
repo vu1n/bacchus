@@ -52,7 +52,10 @@ fn write_block_counter(path: &Path, count: u32, ts: i64) {
 fn block_counter_path() -> Option<std::path::PathBuf> {
     sessions_dir().map(|dir| {
         let scope = crate::config::current_session_scope_id();
-        dir.join(format!("{}_block_count", crate::config::sanitize_scope(&scope)))
+        dir.join(format!(
+            "{}_block_count",
+            crate::config::sanitize_scope(&scope)
+        ))
     })
 }
 
