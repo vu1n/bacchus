@@ -181,7 +181,6 @@ quality:
   check: "cargo check --quiet"
   test: "cargo test --quiet"
   lint: "cargo clippy --quiet -- -D warnings"
-  desloppify: true
 
 worker:
   cmd: "claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'"

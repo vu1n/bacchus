@@ -2,7 +2,6 @@
 
 use crate::config::{current_session_scope_id, find_workspace_root};
 use crate::handles;
-use crate::quality;
 use crate::tasks;
 use crate::workers;
 use std::fs;
@@ -172,25 +171,10 @@ pub fn stop_session() -> Result<String, String> {
                     }
                 }
 
-                // Run desloppify mechanical scan if configured and available (non-blocking)
+                // Re-index the project so the symbol table is fresh for the next session.
                 if let Some(root) = find_workspace_root() {
-                    let scan = quality::run_desloppify_scan(&root);
-                    if scan.ran {
-                        if let Some(report) = &scan.report_path {
-                            eprintln!(
-                                "Desloppify scan: {} findings (report: {})",
-                                scan.findings_count, report
-                            );
-                        }
-                        // Create cleanup tasks for findings
-                        if scan.findings_count > 0 {
-                            create_desloppify_cleanup_tasks(&root, &scan);
-                        }
-                    }
-
-                    // Re-index the project so the symbol table is fresh for the next session.
                     // process-releases re-indexes per-merge, but drift can accumulate from
-                    // manual fixes, desloppify cleanup, or partial indexing failures.
+                    // manual fixes or partial indexing failures.
                     match crate::index_path(".", &root) {
                         Ok(n) => eprintln!("Re-indexed {} files at session end", n),
                         Err(e) => eprintln!("Warning: re-index at session end failed: {}", e),
@@ -375,58 +359,6 @@ pub fn prune_sessions(minutes: i64) -> Result<serde_json::Value, String> {
         "kept_scopes": kept_scopes,
         "released_orchestrator_leases": released_leases
     }))
-}
-
-/// Create cleanup tasks from desloppify scan findings.
-///
-/// Non-blocking: errors are logged but don't affect session stop.
-fn create_desloppify_cleanup_tasks(
-    workspace_root: &std::path::Path,
-    scan: &quality::DesloppifyScanResult,
-) {
-    // Try to read the report for details
-    let report_path = match &scan.report_path {
-        Some(p) => p.clone(),
-        None => return,
-    };
-
-    let report_content = match fs::read_to_string(&report_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    // Find an active epic to attach the task to
-    let epic_id = match crate::epics::list_epics(Some(crate::epics::EpicStatus::Active)) {
-        Ok(epics) if !epics.is_empty() => epics[0].id.clone(),
-        _ => return, // no active epic, skip
-    };
-
-    let task_id = format!(
-        "{}-DESLOP-{}",
-        epic_id,
-        chrono::Utc::now().timestamp_millis() % 100000
-    );
-
-    let description = format!(
-        "Desloppify scan found {} findings. Review and fix mechanical issues.\n\nReport: {}\n\n{}",
-        scan.findings_count,
-        report_path,
-        &report_content[..report_content.len().min(2000)]
-    );
-
-    let _ = tasks::create_sqlite_task(tasks::CreateSqliteTaskInput {
-        id: task_id,
-        epic_id,
-        title: format!("Fix {} desloppify findings", scan.findings_count),
-        description: Some(description),
-        priority: 9, // low priority — cleanup
-        depends_on: Vec::new(),
-        task_type: Some(tasks::SqliteTaskType::Refactor),
-        archetype: Some("review".to_string()),
-        footprint: tasks::TaskFootprint::default(),
-    });
-
-    let _ = workspace_root; // used for context
 }
 
 /// Build a markdown table snapshot of all tasks at session start.

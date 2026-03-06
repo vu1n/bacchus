@@ -2656,11 +2656,6 @@ mod quality_tests {
             content.contains("cargo clippy"),
             "Should include lint command"
         );
-        assert!(
-            content.contains("desloppify: true"),
-            "Should enable desloppify"
-        );
-
         // Verify the init output includes quality config info
         let stdout = String::from_utf8_lossy(&output.stdout);
         let json: Value = serde_json::from_str(&stdout).unwrap();

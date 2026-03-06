@@ -3,7 +3,6 @@
 //! Provides:
 //! - `QualityConfig` loaded from `.bacchus/config.yaml`
 //! - Pre-release quality gate (check, test, lint commands)
-//! - Post-session desloppify scan integration
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -66,9 +65,6 @@ pub struct QualitySection {
     pub test: Option<String>,
     /// Lint command (e.g., "cargo clippy --quiet -- -D warnings")
     pub lint: Option<String>,
-    /// Whether to run desloppify scan on session stop
-    #[serde(default)]
-    pub desloppify: bool,
 }
 
 /// Result of running the quality gate
@@ -262,150 +258,6 @@ pub fn format_gate_failures(gate: &QualityGateResult) -> String {
 }
 
 // ============================================================================
-// Desloppify Integration
-// ============================================================================
-
-/// Result of a desloppify scan
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DesloppifyScanResult {
-    pub ran: bool,
-    pub findings_count: usize,
-    pub report_path: Option<String>,
-    pub error: Option<String>,
-}
-
-const DESLOPPIFY_TIMEOUT: Duration = Duration::from_secs(600); // 10 minutes
-
-/// Run desloppify mechanical scan if configured and available.
-///
-/// Non-blocking: returns results but never causes the caller to fail.
-pub fn run_desloppify_scan(workspace_root: &Path) -> DesloppifyScanResult {
-    let config = match load_config(workspace_root) {
-        Some(c) if c.quality.desloppify => c,
-        _ => {
-            return DesloppifyScanResult {
-                ran: false,
-                findings_count: 0,
-                report_path: None,
-                error: None,
-            }
-        }
-    };
-    let _ = config; // used only for the desloppify check above
-
-    // Check if desloppify binary is available
-    let available = Command::new("which")
-        .arg("desloppify")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !available {
-        return DesloppifyScanResult {
-            ran: false,
-            findings_count: 0,
-            report_path: None,
-            error: Some("desloppify binary not found".to_string()),
-        };
-    }
-
-    // Run desloppify scan
-    let child = Command::new("desloppify")
-        .args(["scan", "--path", "."])
-        .current_dir(workspace_root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-
-    let mut child = match child {
-        Ok(c) => c,
-        Err(e) => {
-            return DesloppifyScanResult {
-                ran: false,
-                findings_count: 0,
-                report_path: None,
-                error: Some(format!("Failed to spawn desloppify: {}", e)),
-            }
-        }
-    };
-
-    let result = child.wait_timeout(DESLOPPIFY_TIMEOUT).ok().flatten();
-
-    match result {
-        Some(status) => {
-            let stdout = child
-                .stdout
-                .take()
-                .map(|mut s| {
-                    let mut buf = String::new();
-                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                    buf
-                })
-                .unwrap_or_default();
-
-            // Try to parse findings from stdout/state file
-            let findings_count = parse_desloppify_findings(&stdout);
-
-            // Write quality report
-            let report_path = workspace_root.join(".bacchus/quality-report.json");
-            let report = serde_json::json!({
-                "scan_type": "desloppify",
-                "success": status.success(),
-                "findings_count": findings_count,
-                "raw_output": truncate_output(&stdout, 5000),
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            });
-            let _ = std::fs::write(
-                &report_path,
-                serde_json::to_string_pretty(&report).unwrap_or_default(),
-            );
-
-            DesloppifyScanResult {
-                ran: true,
-                findings_count,
-                report_path: Some(report_path.to_string_lossy().to_string()),
-                error: if status.success() {
-                    None
-                } else {
-                    Some(format!("desloppify exited with code {:?}", status.code()))
-                },
-            }
-        }
-        None => {
-            let _ = child.kill();
-            DesloppifyScanResult {
-                ran: true,
-                findings_count: 0,
-                report_path: None,
-                error: Some(format!(
-                    "desloppify timed out after {}s",
-                    DESLOPPIFY_TIMEOUT.as_secs()
-                )),
-            }
-        }
-    }
-}
-
-/// Parse finding count from desloppify output.
-/// Looks for JSON with "findings" array or "count" field, falls back to line counting.
-fn parse_desloppify_findings(output: &str) -> usize {
-    // Try JSON parse first
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(output) {
-        if let Some(arr) = val.get("findings").and_then(|f| f.as_array()) {
-            return arr.len();
-        }
-        if let Some(count) = val.get("count").and_then(|c| c.as_u64()) {
-            return count as usize;
-        }
-    }
-    // Fallback: count non-empty lines that look like findings
-    output
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .count()
-}
-
-// ============================================================================
 // Config Generation (for bacchus init)
 // ============================================================================
 
@@ -422,7 +274,6 @@ pub fn generate_config(workspace_root: &Path) -> String {
     if let Some(l) = lint {
         yaml.push_str(&format!("  lint: \"{}\"\n", l));
     }
-    yaml.push_str("  desloppify: true\n");
     yaml.push_str("\nworker:\n");
     yaml.push_str("  cmd: \"claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'\"\n");
     yaml
@@ -573,7 +424,7 @@ mod tests {
         std::fs::create_dir_all(&bacchus_dir).unwrap();
         std::fs::write(
             bacchus_dir.join("config.yaml"),
-            "quality:\n  check: \"cargo check\"\n  test: \"cargo test\"\n  desloppify: true\n",
+            "quality:\n  check: \"cargo check\"\n  test: \"cargo test\"\n",
         )
         .unwrap();
 
@@ -581,7 +432,6 @@ mod tests {
         assert_eq!(config.quality.check.as_deref(), Some("cargo check"));
         assert_eq!(config.quality.test.as_deref(), Some("cargo test"));
         assert!(config.quality.lint.is_none());
-        assert!(config.quality.desloppify);
         // Worker section should default
         assert!(config.worker.cmd.is_none());
         assert!(config.worker.auto_spawn);
@@ -671,7 +521,6 @@ mod tests {
                 check: Some("true".to_string()),
                 test: Some("true".to_string()),
                 lint: None,
-                desloppify: false,
             },
             worker: WorkerSection::default(),
         };
@@ -688,7 +537,6 @@ mod tests {
                 check: Some("true".to_string()),
                 test: Some("false".to_string()),
                 lint: Some("true".to_string()),
-                desloppify: false,
             },
             worker: WorkerSection::default(),
         };
@@ -706,15 +554,4 @@ mod tests {
         assert_eq!(truncate_output("hello world", 5), "hello... (truncated)");
     }
 
-    #[test]
-    fn test_parse_desloppify_findings_json() {
-        let json = r#"{"findings": [{"type": "dupe"}, {"type": "unused"}]}"#;
-        assert_eq!(parse_desloppify_findings(json), 2);
-    }
-
-    #[test]
-    fn test_parse_desloppify_findings_count() {
-        let json = r#"{"count": 5}"#;
-        assert_eq!(parse_desloppify_findings(json), 5);
-    }
 }
