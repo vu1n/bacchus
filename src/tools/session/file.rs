@@ -58,6 +58,16 @@ pub(super) fn sessions_dir() -> Option<std::path::PathBuf> {
     find_workspace_root().map(|root| root.join(".bacchus").join("sessions"))
 }
 
+/// Get the current process's parent PID.
+pub(super) fn get_ppid() -> Option<u32> {
+    std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+}
+
 pub(super) fn same_default_scope_identity(existing: &Session, new_session: &Session) -> bool {
     if existing.mode != new_session.mode {
         return false;

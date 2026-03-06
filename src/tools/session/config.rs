@@ -8,6 +8,7 @@ pub(super) const DEFAULT_WORKER_RETRY_BACKOFF_MS: i64 = 60_000;
 pub(super) const DEFAULT_WORKER_MAX_RETRIES: i32 = 3;
 pub(super) const DEFAULT_WORKER_STALE_GRACE_MS: i64 = 60_000;
 pub(super) const DEFAULT_WORKER_KILL_STALE: bool = false;
+pub(super) const DEFAULT_EVENT_POLL_TIMEOUT_MS: u32 = 28_000;
 
 /// Read a typed env var with validation, returning `default` when absent or invalid.
 fn env_or<T: std::str::FromStr>(key: &str, default: T, valid: impl Fn(&T) -> bool) -> T {
@@ -57,6 +58,14 @@ pub(super) fn configured_orchestrator_lease_interval_ms() -> u64 {
     env_or(
         "BACCHUS_ORCHESTRATOR_LEASE_INTERVAL_MS",
         DEFAULT_ORCHESTRATOR_LEASE_RENEW_INTERVAL_MS,
+        |v| *v > 0,
+    )
+}
+
+pub(super) fn configured_event_poll_timeout_ms() -> u32 {
+    env_or(
+        "BACCHUS_EVENT_POLL_TIMEOUT_MS",
+        DEFAULT_EVENT_POLL_TIMEOUT_MS,
         |v| *v > 0,
     )
 }

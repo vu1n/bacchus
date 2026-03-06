@@ -7,6 +7,7 @@ mod file;
 mod heartbeat;
 mod hooks;
 mod lifecycle;
+mod server;
 pub mod types;
 mod workers;
 

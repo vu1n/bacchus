@@ -24,16 +24,6 @@ fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
-/// Get the current process's parent PID.
-fn get_ppid() -> Option<u32> {
-    std::process::Command::new("ps")
-        .args(["-o", "ppid=", "-p", &std::process::id().to_string()])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-}
-
 use super::config::*;
 use super::file::*;
 use super::types::SessionMode;

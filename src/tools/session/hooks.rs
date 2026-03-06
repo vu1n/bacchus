@@ -243,6 +243,48 @@ pub(super) fn check_orchestrator_session(session: &Session) -> HookCheckOutput {
         .as_deref()
         .unwrap_or(session.started_at.as_str());
 
+    // Fast path: long-poll event server instead of spinning.
+    // When the server is running, block for up to 28s waiting for worker events.
+    // Only fall through to the expensive full cycle when events actually arrive.
+    if let Some(rid) = session.run_id.as_deref() {
+        if let Some(port) = super::server::read_server_port(rid) {
+            let timeout = configured_event_poll_timeout_ms();
+            match super::server::event_server_poll(port, timeout) {
+                Some(response) => {
+                    // Parse poll response
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&response) {
+                        if val.get("shutdown").and_then(|v| v.as_bool()) == Some(true) {
+                            return HookCheckOutput {
+                                decision: "approve".to_string(),
+                                reason: "Event server shutting down".to_string(),
+                            };
+                        }
+                        let events = val
+                            .get("events")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        if events == 0 {
+                            // Timeout with no events — cheap block, skip full cycle
+                            return HookCheckOutput {
+                                decision: "block".to_string(),
+                                reason: format!(
+                                    "Monitoring {} worker(s). No events for {}s.",
+                                    max_concurrent,
+                                    timeout / 1000
+                                ),
+                            };
+                        }
+                        // Events arrived — fall through to full cycle below
+                    }
+                }
+                None => {
+                    // Server unreachable — fall through to existing full scan
+                }
+            }
+        }
+    }
+
     match tasks::try_acquire_orchestrator_lease(run_id, configured_orchestrator_lease_ttl_ms()) {
         Ok(true) => {}
         Ok(false) => {

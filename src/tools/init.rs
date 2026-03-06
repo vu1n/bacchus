@@ -47,6 +47,16 @@ AGENT_ID="${BACCHUS_AGENT_ID:-}"
 [ -z "$TASK_ID" ] && exit 0
 
 bacchus activity "$TASK_ID" "$AGENT_ID" "$ACTIVITY" 2>/dev/null &
+
+# Notify event server (if running) so orchestrator wakes from long-poll
+RUN_ID="${BACCHUS_RUN_ID:-}"
+if [ -n "$RUN_ID" ]; then
+  PORT_FILE="${CLAUDE_PROJECT_DIR:-.}/.bacchus/sessions/server_port_${RUN_ID}"
+  [ -f "$PORT_FILE" ] && PORT=$(cat "$PORT_FILE" 2>/dev/null) && [ -n "$PORT" ] && \
+    curl -s --max-time 1 -X POST -H 'Content-Type: application/json' \
+      -d "{\"type\":\"activity\",\"task_id\":\"$TASK_ID\",\"agent_id\":\"$AGENT_ID\",\"activity\":\"$ACTIVITY\"}" \
+      "http://127.0.0.1:$PORT/event" >/dev/null 2>&1 &
+fi
 "#;
 
 /// The activity hook command reference for settings.json

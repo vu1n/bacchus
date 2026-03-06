@@ -137,6 +137,13 @@ pub fn start_session(
                 message = format!("{} (lease loop unavailable: {})", message, e);
             }
         }
+        // Spawn event server (non-blocking — falls back gracefully if bun unavailable)
+        if let Some(ref rid) = session.run_id {
+            if let Err(e) = super::server::spawn_event_server(&root, rid) {
+                message = format!("{} (event server unavailable: {})", message, e);
+            }
+        }
+
         // Write orchestrator breadcrumb so protocol survives context compaction
         write_orchestrator_breadcrumb(&root, &session, epic_id, goal);
     }
@@ -152,6 +159,12 @@ pub fn stop_session() -> Result<String, String> {
         if let Some(s) = session.as_ref() {
             if s.mode == SessionMode::Orchestrator {
                 if let Some(run_id) = s.run_id.as_deref() {
+                    // Shutdown event server before releasing lease
+                    if let Some(port) = super::server::read_server_port(run_id) {
+                        super::server::shutdown_event_server(port);
+                    }
+                    super::server::cleanup_server_port_file(run_id);
+
                     let _ = tasks::release_orchestrator_lease(run_id);
                     let _ = workers::fail_active_workers(run_id, "orchestrator session stopped");
                     if let Some(root) = find_workspace_root() {
@@ -342,6 +355,9 @@ pub fn prune_sessions(minutes: i64) -> Result<serde_json::Value, String> {
             }
         }
     }
+    // Prune orphaned event server port files
+    super::server::prune_orphaned_port_files(&active_run_ids);
+
     if let Ok(Some(lease)) = tasks::get_orchestrator_lease() {
         if lease.lease_expires_at < now_ms
             && !active_run_ids.contains(&lease.holder_id)
@@ -432,11 +448,7 @@ fn build_task_snapshot(epic_id: Option<&str>) -> String {
         "## Task Snapshot (at session start)\n\n| ID | Status | Title |\n|----|--------|-------|\n",
     );
     for task in rows.iter().take(MAX_ROWS) {
-        let _ = write!(
-            table,
-            "| {} | {} | {} |\n",
-            task.id, task.status, task.title
-        );
+        let _ = writeln!(table, "| {} | {} | {} |", task.id, task.status, task.title);
     }
     if rows.len() > MAX_ROWS {
         table.push_str("\n_(truncated — more than 50 tasks)_\n");
