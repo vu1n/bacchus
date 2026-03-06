@@ -7,12 +7,54 @@ use crate::tasks;
 use crate::tools::orchestrator;
 use crate::workers;
 
+use std::path::Path;
+
 use super::config::*;
 use super::file::*;
 use super::heartbeat::attach_agent_session_heartbeat;
 use super::lifecycle::stop_session;
 use super::types::{HookCheckOutput, Session, SessionMode};
 use super::workers as session_workers;
+
+// ============================================================================
+// Circuit breaker: rapid-block detection for agent stop hooks
+// ============================================================================
+
+/// Window (ms) within which consecutive blocks are considered "rapid".
+const RAPID_BLOCK_WINDOW_MS: i64 = 2000;
+/// After this many rapid blocks, emit a softer "you may be rate-limited" message.
+const RAPID_BLOCK_SOFT_THRESHOLD: u32 = 5;
+/// After this many rapid blocks, approve exit to break the feedback loop.
+const RAPID_BLOCK_HARD_THRESHOLD: u32 = 20;
+
+/// Read the block counter file. Returns (count, last_timestamp_ms).
+fn read_block_counter(path: &Path) -> (u32, i64) {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let mut parts = content.trim().splitn(2, ' ');
+            let count = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let ts = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            (count, ts)
+        }
+        Err(_) => (0, 0),
+    }
+}
+
+/// Write block counter state.
+fn write_block_counter(path: &Path, count: u32, ts: i64) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, format!("{} {}", count, ts));
+}
+
+/// Get the block counter file path for the current session scope.
+fn block_counter_path() -> Option<std::path::PathBuf> {
+    sessions_dir().map(|dir| {
+        let scope = crate::config::current_session_scope_id();
+        dir.join(format!("{}_block_count", crate::config::sanitize_scope(&scope)))
+    })
+}
 
 /// Check if session should block exit (for stop hook)
 pub fn check_session() -> HookCheckOutput {
@@ -105,6 +147,43 @@ pub(super) fn check_agent_session(session: &Session) -> HookCheckOutput {
                             let _ = tasks::heartbeat_sqlite_task(task_id, session_agent_id);
                         }
                     }
+
+                    // Circuit breaker: detect rapid-fire blocks (rate limit loops)
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    if let Some(counter_path) = block_counter_path() {
+                        let (count, last_ts) = read_block_counter(&counter_path);
+                        let is_rapid = (now_ms - last_ts) < RAPID_BLOCK_WINDOW_MS;
+
+                        if is_rapid && count >= RAPID_BLOCK_HARD_THRESHOLD {
+                            // Probable rate limit loop — let agent exit to break the cycle
+                            write_block_counter(&counter_path, 0, now_ms);
+                            return HookCheckOutput {
+                                decision: "approve".to_string(),
+                                reason: format!(
+                                    "Task {} is in_progress but agent appears rate-limited ({} rapid blocks). Allowing exit to break feedback loop.",
+                                    task_id, count
+                                ),
+                            };
+                        }
+
+                        if is_rapid {
+                            write_block_counter(&counter_path, count + 1, now_ms);
+                        } else {
+                            // Normal cadence — reset counter
+                            write_block_counter(&counter_path, 1, now_ms);
+                        }
+
+                        if is_rapid && count >= RAPID_BLOCK_SOFT_THRESHOLD {
+                            return HookCheckOutput {
+                                decision: "block".to_string(),
+                                reason: format!(
+                                    "Task {} is in_progress. You may be rate-limited — pause briefly before retrying. If stuck, run 'bacchus release {} --status blocked'.",
+                                    task_id, task_id
+                                ),
+                            };
+                        }
+                    }
+
                     HookCheckOutput {
                         decision: "block".to_string(),
                         reason: format!(

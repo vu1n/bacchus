@@ -237,6 +237,15 @@ fn main() {
             }
         },
 
+        Commands::Activity {
+            task_id,
+            agent_id,
+            activity,
+        } => ok_msg(
+            tasks::update_task_activity(&task_id, &agent_id, &activity)
+                .map(|_| "Activity recorded"),
+        ),
+
         Commands::Logs { task_id } => {
             let log_path = workspace_root
                 .join(".bacchus/logs")

@@ -21,6 +21,37 @@ const CMD_PLAN: &str = include_str!("../../skills/bacchus/commands/bacchus-plan.
 /// The stop hook command (fail-open design)
 const HOOK_CMD: &str = r#"bacchus session check 2>/dev/null || echo '{"decision":"approve"}'"#;
 
+/// The activity reporter hook script (generated into .bacchus/hooks/)
+const ACTIVITY_HOOK_SCRIPT: &str = r#"#!/bin/bash
+# Async hook — reports worker activity to bacchus DB
+INPUT=$(cat)
+TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
+
+case "$TOOL" in
+  Read|Glob|Grep) ACTIVITY="reading" ;;
+  Edit|Write)     ACTIVITY="editing" ;;
+  Bash)
+    CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    case "$CMD" in
+      *test*|*spec*|*jest*|*vitest*|*pytest*) ACTIVITY="testing" ;;
+      *build*|*compile*|*cargo*build*)        ACTIVITY="building" ;;
+      *lint*|*clippy*|*biome*|*eslint*)       ACTIVITY="linting" ;;
+      *)                                       ACTIVITY="running command" ;;
+    esac
+    ;;
+  *) exit 0 ;;
+esac
+
+TASK_ID="${BACCHUS_TASK_ID:-}"
+AGENT_ID="${BACCHUS_AGENT_ID:-}"
+[ -z "$TASK_ID" ] && exit 0
+
+bacchus activity "$TASK_ID" "$AGENT_ID" "$ACTIVITY" 2>/dev/null &
+"#;
+
+/// The activity hook command reference for settings.json
+const ACTIVITY_HOOK_CMD: &str = ".bacchus/hooks/report-activity.sh";
+
 #[derive(Debug, Clone, Copy)]
 pub struct InitOptions<'a> {
     pub skip_jj: bool,
@@ -71,6 +102,8 @@ pub struct InitClaudeStatus {
     pub config_already_exists: bool,
     pub db_ignore_added: bool,
     pub db_ignore_already_exists: bool,
+    pub activity_hook_installed: bool,
+    pub activity_hook_registered: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,8 +312,17 @@ fn ensure_commands(workspace_root: &Path) -> Result<(Vec<String>, Vec<String>), 
     Ok((installed, already_exist))
 }
 
-/// Install project-level stop hook in .claude/settings.json
-fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
+/// Upsert a hook entry into `.claude/settings.json` under the given event key.
+///
+/// Returns `Ok(true)` if the hook was added, `Ok(false)` if already present or settings.json
+/// doesn't exist yet. Creates `.claude/` and `settings.json` when `create_if_missing` is true.
+fn upsert_settings_hook(
+    workspace_root: &Path,
+    event_key: &str,
+    command: &str,
+    hook_entry: serde_json::Value,
+    create_if_missing: bool,
+) -> Result<bool, String> {
     let settings_path = workspace_root.join(".claude/settings.json");
 
     if settings_path.exists() {
@@ -289,64 +331,99 @@ fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
             serde_json::from_str(&content).map_err(|e| format!("invalid settings.json: {}", e))?;
 
         // Check if hook already exists
-        if let Some(stops) = settings
+        let already = settings
             .get("hooks")
-            .and_then(|h| h.get("Stop"))
+            .and_then(|h| h.get(event_key))
             .and_then(|s| s.as_array())
-        {
-            let already = stops.iter().any(|entry| {
-                entry
-                    .get("hooks")
-                    .and_then(|h| h.as_array())
-                    .is_some_and(|hooks| {
-                        hooks
-                            .iter()
-                            .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(HOOK_CMD))
-                    })
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(|h| h.as_array())
+                        .is_some_and(|hooks| {
+                            hooks
+                                .iter()
+                                .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+                        })
+                })
             });
-            if already {
-                return Ok((false, true));
-            }
+        if already {
+            return Ok(false);
         }
 
         // Append hook
-        let hook_entry = serde_json::json!({
-            "hooks": [{"type": "command", "command": HOOK_CMD}]
-        });
-
         let hooks = settings
             .as_object_mut()
             .ok_or("settings.json is not an object")?
             .entry("hooks")
             .or_insert_with(|| serde_json::json!({}));
-        let stop = hooks
+        let event_arr = hooks
             .as_object_mut()
             .ok_or("hooks is not an object")?
-            .entry("Stop")
+            .entry(event_key)
             .or_insert_with(|| serde_json::json!([]));
-        stop.as_array_mut()
-            .ok_or("hooks.Stop is not an array")?
+        event_arr
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{} is not an array", event_key))?
             .push(hook_entry);
 
         let out = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
         fs::write(&settings_path, out + "\n").map_err(|e| e.to_string())?;
-        Ok((true, false))
-    } else {
-        // Create new settings.json with just the hook
+        Ok(true)
+    } else if create_if_missing {
         let claude_dir = workspace_root.join(".claude");
         fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
 
         let settings = serde_json::json!({
-            "hooks": {
-                "Stop": [{
-                    "hooks": [{"type": "command", "command": HOOK_CMD}]
-                }]
-            }
+            "hooks": { event_key: [hook_entry] }
         });
         let out = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
         fs::write(&settings_path, out + "\n").map_err(|e| e.to_string())?;
-        Ok((true, false))
+        Ok(true)
+    } else {
+        Ok(false)
     }
+}
+
+/// Install project-level stop hook in .claude/settings.json
+fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let hook_entry = serde_json::json!({
+        "hooks": [{"type": "command", "command": HOOK_CMD}]
+    });
+    let added = upsert_settings_hook(workspace_root, "Stop", HOOK_CMD, hook_entry, true)?;
+    Ok(if added { (true, false) } else { (false, true) })
+}
+
+/// Install worker activity reporting hook script and register PostToolUse hook in settings.json.
+///
+/// Returns (script_installed, hook_registered) tuple.
+fn ensure_worker_hooks(workspace_root: &Path) -> Result<(bool, bool), String> {
+    let hooks_dir = workspace_root.join(".bacchus/hooks");
+    let script_path = hooks_dir.join("report-activity.sh");
+
+    // Install the shell script
+    let script_installed = if !script_path.exists() {
+        fs::create_dir_all(&hooks_dir).map_err(|e| e.to_string())?;
+        fs::write(&script_path, ACTIVITY_HOOK_SCRIPT).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            fs::set_permissions(&script_path, perms).map_err(|e| e.to_string())?;
+        }
+        true
+    } else {
+        false
+    };
+
+    // Register PostToolUse hook in settings.json (don't create file — ensure_hook does that)
+    let hook_entry = serde_json::json!({
+        "hooks": [{"type": "command", "command": ACTIVITY_HOOK_CMD, "timeout": 5000}]
+    });
+    let hook_registered =
+        upsert_settings_hook(workspace_root, "PostToolUse", ACTIVITY_HOOK_CMD, hook_entry, false)?;
+
+    Ok((script_installed, hook_registered))
 }
 
 /// Install project config to .bacchus/config.yaml with project-detected defaults (quality + worker)
@@ -510,6 +587,10 @@ pub fn init_workspace(
     let (added, exists) = ensure_db_ignored(workspace_root)?;
     claude.db_ignore_added = added;
     claude.db_ignore_already_exists = exists;
+
+    let (script_installed, hook_registered) = ensure_worker_hooks(workspace_root)?;
+    claude.activity_hook_installed = script_installed;
+    claude.activity_hook_registered = hook_registered;
 
     let epic = match options.epic_id {
         Some(id) => Some(ensure_epic(id, options.epic_title)?),

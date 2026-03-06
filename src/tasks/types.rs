@@ -397,6 +397,12 @@ pub struct SqliteTask {
     /// When task was closed (completed_at timestamp)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<i64>,
+    /// Current worker phase: "reading", "editing", "testing", etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity: Option<String>,
+    /// Unix timestamp ms of last activity report
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

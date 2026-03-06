@@ -23,13 +23,17 @@ pub struct ClaimInfo {
     pub workspace_path: String,
     pub age_minutes: i64,
     pub last_seen_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_age_secs: Option<i64>,
 }
 
 /// List all active claims from SQLite
 pub fn list_claims() -> Result<ListOutput> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at
+            "SELECT id, claimed_by, claimed_at, claimed_heartbeat_at, last_activity, last_activity_at
              FROM tasks
              WHERE status = 'in_progress'
                AND claimed_by IS NOT NULL
@@ -45,12 +49,15 @@ pub fn list_claims() -> Result<ListOutput> {
                 let task_id: String = row.get(0)?;
                 let claimed_at: Option<i64> = row.get(2)?;
                 let heartbeat_at: Option<i64> = row.get(3)?;
+                let activity: Option<String> = row.get(4)?;
+                let activity_at: Option<i64> = row.get(5)?;
                 let last_seen = heartbeat_at.or(claimed_at).unwrap_or(0);
                 let age_minutes = if last_seen > 0 {
                     (now_ms - last_seen) / 60000
                 } else {
                     0
                 };
+                let activity_age_secs = activity_at.map(|at| (now_ms - at) / 1000);
 
                 Ok(ClaimInfo {
                     task_id: task_id.clone(),
@@ -58,6 +65,8 @@ pub fn list_claims() -> Result<ListOutput> {
                     workspace_path: format!(".bacchus/workspaces/{}", task_id),
                     age_minutes,
                     last_seen_at: last_seen,
+                    activity,
+                    activity_age_secs,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

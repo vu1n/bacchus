@@ -28,7 +28,7 @@ pub(super) fn require_affected(
 // ============================================================================
 
 pub(crate) const TASK_SELECT_COLUMNS: &str =
-    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, completed_at, created_at, updated_at, deleted_at";
+    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, completed_at, last_activity, last_activity_at, created_at, updated_at, deleted_at";
 
 pub(crate) fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SqliteTask> {
     let status_str: String = row.get(5)?;
@@ -49,9 +49,11 @@ pub(crate) fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<S
         release_commit_id: row.get(12)?,
         release_started_at: row.get(13)?,
         completed_at: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
-        deleted_at: row.get(17)?,
+        last_activity: row.get(15)?,
+        last_activity_at: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
+        deleted_at: row.get(19)?,
     })
 }
 
@@ -140,6 +142,8 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                 release_commit_id: None,
                 release_started_at: None,
                 completed_at: None,
+                last_activity: None,
+                last_activity_at: None,
                 created_at: now,
                 updated_at: flip_time,
                 deleted_at: None,
@@ -213,6 +217,39 @@ pub fn list_sqlite_tasks(
         Ok(tasks)
     })
     .map_err(|e: rusqlite::Error| TasksError::DbError(e.to_string()))
+}
+
+/// Update the current activity phase for an in-progress task.
+///
+/// Called by worker hooks to report what the agent is doing (reading, editing, testing, etc.).
+/// Also refreshes the heartbeat timestamp as a side effect.
+pub fn update_task_activity(task_id: &str, agent_id: &str, activity: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db_typed(|conn| {
+        require_affected(
+            conn,
+            "UPDATE tasks
+             SET last_activity = ?1,
+                 last_activity_at = ?2,
+                 claimed_heartbeat_at = ?2,
+                 updated_at = ?2
+             WHERE id = ?3
+               AND claimed_by = ?4
+               AND status = 'in_progress'
+               AND deleted_at IS NULL",
+            &[
+                &activity as &dyn rusqlite::ToSql,
+                &now,
+                &task_id,
+                &agent_id,
+            ],
+            TasksError::TaskNotFound(format!(
+                "Task {} not owned by {} or not in_progress",
+                task_id, agent_id
+            )),
+        )
+    })
 }
 
 /// Heartbeat an in-progress claim to prevent stale cleanup.

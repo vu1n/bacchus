@@ -176,6 +176,13 @@ pub enum Commands {
         command: ArchetypeCommands,
     },
 
+    /// Report worker activity for a task (used by hooks)
+    Activity {
+        task_id: String,
+        agent_id: String,
+        activity: String,
+    },
+
     /// Show worker log for a task
     Logs { task_id: String },
 

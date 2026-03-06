@@ -5,10 +5,23 @@
 use rusqlite::{Connection, Result};
 
 /// Initialize the database schema
-/// Creates all tables if they don't exist
+/// Creates all tables if they don't exist, then applies column migrations.
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
+    migrate_add_columns(conn);
     Ok(())
+}
+
+/// Best-effort column migrations for existing databases.
+/// Each ALTER TABLE is harmless if the column already exists (duplicate column error is ignored).
+fn migrate_add_columns(conn: &Connection) {
+    let migrations = [
+        "ALTER TABLE tasks ADD COLUMN last_activity TEXT",
+        "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER",
+    ];
+    for sql in &migrations {
+        let _ = conn.execute_batch(sql); // Ignore "duplicate column" errors
+    }
 }
 
 /// Complete database schema
@@ -93,6 +106,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     release_commit_id TEXT,                 -- jj commit ID after rebase (for stuck detection)
     release_started_at INTEGER,             -- When orchestrator started release attempt
     completed_at INTEGER,                   -- Unix timestamp ms when task closed
+    last_activity TEXT,                     -- Current worker phase: "reading", "editing", "testing", etc.
+    last_activity_at INTEGER,              -- Unix timestamp ms of last activity report
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
@@ -378,6 +393,10 @@ mod tests {
             .unwrap();
         let has_heartbeat = columns.iter().any(|c| c == "claimed_heartbeat_at");
         assert!(has_heartbeat, "tasks.claimed_heartbeat_at should exist");
+        let has_activity = columns.iter().any(|c| c == "last_activity");
+        assert!(has_activity, "tasks.last_activity should exist");
+        let has_activity_at = columns.iter().any(|c| c == "last_activity_at");
+        assert!(has_activity_at, "tasks.last_activity_at should exist");
     }
 
     #[test]
