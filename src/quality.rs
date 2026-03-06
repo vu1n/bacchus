@@ -553,5 +553,4 @@ mod tests {
         assert_eq!(truncate_output("short", 100), "short");
         assert_eq!(truncate_output("hello world", 5), "hello... (truncated)");
     }
-
 }
