@@ -275,11 +275,11 @@ fn ensure_epic(epic_id: &str, epic_title: Option<&str>) -> Result<InitEpicStatus
 }
 
 /// Install project-level SKILL.md to .claude/skills/bacchus/
-fn ensure_skill(workspace_root: &Path) -> Result<(bool, bool), String> {
+fn ensure_skill(workspace_root: &Path, force: bool) -> Result<(bool, bool), String> {
     let skill_dir = workspace_root.join(".claude/skills/bacchus");
     let skill_path = skill_dir.join("SKILL.md");
 
-    if skill_path.exists() {
+    if skill_path.exists() && !force {
         return Ok((false, true)); // (installed, already_exists)
     }
 
@@ -289,10 +289,10 @@ fn ensure_skill(workspace_root: &Path) -> Result<(bool, bool), String> {
 }
 
 /// Install project-level archetypes.yaml to .bacchus/
-fn ensure_archetypes(workspace_root: &Path) -> Result<(bool, bool), String> {
+fn ensure_archetypes(workspace_root: &Path, force: bool) -> Result<(bool, bool), String> {
     let path = workspace_root.join(".bacchus/archetypes.yaml");
 
-    if path.exists() {
+    if path.exists() && !force {
         return Ok((false, true));
     }
 
@@ -301,7 +301,7 @@ fn ensure_archetypes(workspace_root: &Path) -> Result<(bool, bool), String> {
 }
 
 /// Install slash commands to .claude/commands/
-fn ensure_commands(workspace_root: &Path) -> Result<(Vec<String>, Vec<String>), String> {
+fn ensure_commands(workspace_root: &Path, force: bool) -> Result<(Vec<String>, Vec<String>), String> {
     let commands_dir = workspace_root.join(".claude/commands");
     fs::create_dir_all(&commands_dir).map_err(|e| e.to_string())?;
 
@@ -316,7 +316,7 @@ fn ensure_commands(workspace_root: &Path) -> Result<(Vec<String>, Vec<String>), 
 
     for (filename, content) in &commands {
         let path = commands_dir.join(filename);
-        if path.exists() {
+        if path.exists() && !force {
             already_exist.push(filename.to_string());
         } else {
             fs::write(&path, content).map_err(|e| e.to_string())?;
@@ -412,12 +412,12 @@ fn ensure_hook(workspace_root: &Path) -> Result<(bool, bool), String> {
 /// Install worker activity reporting hook script and register PostToolUse hook in settings.json.
 ///
 /// Returns (script_installed, hook_registered) tuple.
-fn ensure_worker_hooks(workspace_root: &Path) -> Result<(bool, bool), String> {
+fn ensure_worker_hooks(workspace_root: &Path, force: bool) -> Result<(bool, bool), String> {
     let hooks_dir = workspace_root.join(".bacchus/hooks");
     let script_path = hooks_dir.join("report-activity.sh");
 
     // Install the shell script
-    let script_installed = if !script_path.exists() {
+    let script_installed = if !script_path.exists() || force {
         fs::create_dir_all(&hooks_dir).map_err(|e| e.to_string())?;
         fs::write(&script_path, ACTIVITY_HOOK_SCRIPT).map_err(|e| e.to_string())?;
         #[cfg(unix)]
@@ -561,6 +561,42 @@ fn ensure_claude_md(workspace_root: &Path) -> Result<(bool, bool), String> {
     }
 }
 
+/// Summary of what `update_assets` wrote.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateAssetsOutput {
+    pub assets_written: Vec<String>,
+}
+
+/// Force-overwrite all embedded project assets.
+///
+/// Writes commands, skill, archetypes, and activity hook unconditionally.
+/// Does NOT touch config.yaml, settings.json hooks, CLAUDE.md, or .gitignore
+/// (those remain additive-only via `bacchus init`).
+pub fn update_assets(workspace_root: &Path) -> Result<UpdateAssetsOutput, String> {
+    let mut written = Vec::new();
+
+    let (installed, _) = ensure_commands(workspace_root, true)?;
+    for cmd in &installed {
+        written.push(format!(".claude/commands/{}", cmd));
+    }
+
+    if ensure_skill(workspace_root, true)?.0 {
+        written.push(".claude/skills/bacchus/SKILL.md".to_string());
+    }
+
+    if ensure_archetypes(workspace_root, true)?.0 {
+        written.push(".bacchus/archetypes.yaml".to_string());
+    }
+
+    if ensure_worker_hooks(workspace_root, true)?.0 {
+        written.push(".bacchus/hooks/report-activity.sh".to_string());
+    }
+
+    Ok(UpdateAssetsOutput {
+        assets_written: written,
+    })
+}
+
 pub fn init_workspace(
     workspace_root: &Path,
     options: InitOptions<'_>,
@@ -580,7 +616,7 @@ pub fn init_workspace(
     // Install project-level Claude Code integration
     let mut claude = InitClaudeStatus::default();
 
-    let (installed, exists) = ensure_skill(workspace_root)?;
+    let (installed, exists) = ensure_skill(workspace_root, false)?;
     claude.skill_installed = installed;
     claude.skill_already_exists = exists;
 
@@ -588,11 +624,11 @@ pub fn init_workspace(
     claude.hook_installed = installed;
     claude.hook_already_exists = exists;
 
-    let (installed, exists) = ensure_archetypes(workspace_root)?;
+    let (installed, exists) = ensure_archetypes(workspace_root, false)?;
     claude.archetypes_installed = installed;
     claude.archetypes_already_exists = exists;
 
-    let (installed, already_exist) = ensure_commands(workspace_root)?;
+    let (installed, already_exist) = ensure_commands(workspace_root, false)?;
     claude.commands_installed = installed;
     claude.commands_already_exist = already_exist;
 
@@ -608,7 +644,7 @@ pub fn init_workspace(
     claude.db_ignore_added = added;
     claude.db_ignore_already_exists = exists;
 
-    let (script_installed, hook_registered) = ensure_worker_hooks(workspace_root)?;
+    let (script_installed, hook_registered) = ensure_worker_hooks(workspace_root, false)?;
     claude.activity_hook_installed = script_installed;
     claude.activity_hook_registered = hook_registered;
 

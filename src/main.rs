@@ -96,19 +96,23 @@ fn main() {
         }
     }
 
-    // Initialize database (check BACCHUS_DB_PATH env var first)
-    let db_path = std::env::var("BACCHUS_DB_PATH").ok();
-    let db_path_buf = if let Some(p) = db_path {
-        PathBuf::from(p)
-    } else {
-        workspace_root.join(".bacchus/bacchus.db")
-    };
+    // Skip database for asset-only updates (no DB needed)
+    let needs_db = !matches!(&cli.command, Commands::Update { assets_only: true });
 
-    let db_path_str = db_path_buf.to_str().unwrap_or(".bacchus/bacchus.db");
+    if needs_db {
+        let db_path = std::env::var("BACCHUS_DB_PATH").ok();
+        let db_path_buf = if let Some(p) = db_path {
+            PathBuf::from(p)
+        } else {
+            workspace_root.join(".bacchus/bacchus.db")
+        };
 
-    if let Err(e) = db::init_db(Some(db_path_str)) {
-        eprintln!("Failed to initialize database: {}", e);
-        std::process::exit(1);
+        let db_path_str = db_path_buf.to_str().unwrap_or(".bacchus/bacchus.db");
+
+        if let Err(e) = db::init_db(Some(db_path_str)) {
+            eprintln!("Failed to initialize database: {}", e);
+            std::process::exit(1);
+        }
     }
 
     let result: Result<Output, BacchusError> = match cli.command {
@@ -201,6 +205,7 @@ fn main() {
             println!("{}", WORKFLOW_DOC);
             Ok(Output::Empty)
         }
+        Commands::Update { assets_only } => dispatch_update(assets_only, &workspace_root),
         Commands::SelfUpdate => updater::self_update()
             .map_err(|e| BacchusError::Task(e.to_string()))
             .and_then(|v| pretty_json(&serde_json::json!({"success": true, "updated_to": v}))),
@@ -304,7 +309,9 @@ fn main() {
         }
     }
 
-    db::close_db();
+    if needs_db {
+        db::close_db();
+    }
 }
 
 /// Index a file or directory (parallelized with rayon)
@@ -607,6 +614,98 @@ fn dispatch_message(command: MessageCommands) -> Result<Output, BacchusError> {
                     "success": true, "requeued": requeued, "failed": failed
                 }))
             }),
+    }
+}
+
+enum BinaryUpdateResult {
+    Updated(String),
+    AlreadyLatest(String),
+    Failed(String),
+}
+
+fn dispatch_update(
+    assets_only: bool,
+    workspace_root: &std::path::Path,
+) -> Result<Output, BacchusError> {
+    let binary_result = if assets_only {
+        None
+    } else {
+        Some(match updater::self_update() {
+            Ok(version) => BinaryUpdateResult::Updated(version),
+            Err(updater::UpdateError::AlreadyLatest(v)) => BinaryUpdateResult::AlreadyLatest(v),
+            Err(e) => BinaryUpdateResult::Failed(e.to_string()),
+        })
+    };
+
+    // If binary was replaced, the running process still has OLD embedded assets.
+    // Spawn the NEW binary with --assets-only so it writes its own assets.
+    if let Some(BinaryUpdateResult::Updated(ref version)) = binary_result {
+        let exe = std::env::current_exe().map_err(|e| BacchusError::Task(e.to_string()))?;
+        let output = std::process::Command::new(&exe)
+            .args(["update", "--assets-only"])
+            .current_dir(workspace_root)
+            .output()
+            .map_err(|e| BacchusError::Task(format!("failed to spawn new binary: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BacchusError::Task(format!(
+                "new binary --assets-only failed: {}",
+                stderr.trim()
+            )));
+        }
+
+        // Forward the new binary's stdout (its JSON summary) and augment with binary info
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+            val["binary_updated"] = serde_json::json!(true);
+            val["binary_version"] = serde_json::json!(version);
+            return pretty_json(&val);
+        }
+
+        return pretty_json(&serde_json::json!({
+            "success": true,
+            "binary_updated": true,
+            "binary_version": version,
+            "assets_note": "spawned new binary for asset refresh"
+        }));
+    }
+
+    // No binary update (already latest, network error, or --assets-only).
+    // Write assets from current binary.
+    let binary_note = match &binary_result {
+        Some(BinaryUpdateResult::AlreadyLatest(v)) => {
+            Some(format!("already on latest: {}", v))
+        }
+        Some(BinaryUpdateResult::Failed(e)) => {
+            Some(format!("binary update failed: {} (continuing with asset refresh)", e))
+        }
+        _ => None,
+    };
+
+    let is_bacchus_project = workspace_root.join(".bacchus").exists();
+
+    if !is_bacchus_project && assets_only {
+        return Err(BacchusError::Task(
+            "not a bacchus project (no .bacchus/ directory); run `bacchus init` first".to_string(),
+        ));
+    }
+
+    if is_bacchus_project {
+        let assets = tools::update_assets(workspace_root).map_err(BacchusError::Task)?;
+        pretty_json(&serde_json::json!({
+            "success": true,
+            "binary_updated": false,
+            "binary_note": binary_note,
+            "assets_written": assets.assets_written,
+        }))
+    } else {
+        pretty_json(&serde_json::json!({
+            "success": true,
+            "binary_updated": false,
+            "binary_note": binary_note,
+            "assets_skipped": "not a bacchus project",
+        }))
     }
 }
 

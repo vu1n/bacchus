@@ -134,6 +134,13 @@ pub enum Commands {
         task_id: Option<String>,
     },
 
+    /// Update binary and refresh project assets
+    Update {
+        /// Only refresh project assets, skip binary download
+        #[arg(long)]
+        assets_only: bool,
+    },
+
     /// Update bacchus to the latest version
     SelfUpdate,
 
