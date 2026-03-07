@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     deleted_at INTEGER,                     -- Soft delete (NULL = active)
     CHECK (status IN ('draft', 'open', 'in_progress', 'ready_for_release', 'releasing', 'needs_resolution', 'blocked', 'closed')),
     CHECK (task_type IN ('bug_fix', 'feature', 'refactor', 'test', 'docs', 'infra', 'generic')),
-    CHECK (archetype IN ('design', 'frontend', 'backend', 'data', 'test', 'infra', 'review', 'security', 'generic'))
+    CHECK (archetype IN ('design', 'frontend', 'backend', 'data', 'test', 'infra', 'review', 'security', 'docs', 'generic'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_epic ON tasks(epic_id);

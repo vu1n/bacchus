@@ -38,7 +38,7 @@ Each task needs:
 - `title` — what to do
 - `description` — detailed instructions for the worker (include v1 paths, patterns to follow, gate criteria)
 - `task_type` — one of: bug_fix, feature, refactor, test, docs, infra, generic
-- `archetype` — agent specialization: design, frontend, backend, data, test, infra, review, security, generic
+- `archetype` — agent specialization: design, frontend, backend, data, test, infra, review, security, docs, generic
 - `depends_on` — list of task IDs that must complete first
 - `footprint.modifies` — existing files/symbols this task will change
 - `footprint.creates` — new files this task will create
@@ -140,40 +140,40 @@ Workers claim tasks, do the work in jj workspaces, and release when done.
 
 ## Phase 5: Monitor & Recover
 
-Run this loop until all tasks are closed:
+Run this loop until all tasks are closed.
+
+**Polling cadence:** Wait ~30s between iterations. If no state changes after 3 consecutive
+cycles, back off to ~60s. Resume 30s polling when a release is processed or a worker completes.
+
+Each iteration:
 
 ```bash
-# Check overall status
+# 1. Check overall status
 bacchus status
 
-# List active claims (see which workers are running)
+# 2. List active claims (see which workers are running)
 bacchus list
 
-# Process completed releases (merge into main, re-index changed symbols)
+# 3. Process completed releases (merge into main, re-index changed symbols)
 bacchus process-releases
 
-# IMPORTANT: After processing releases, run dependency install from repo root.
-# Workers do NOT run install — you do it once after merging their changes.
-# Use the project's package manager (bun/npm/pnpm/yarn/cargo):
-bun install          # or: npm install, pnpm install, cargo build, etc.
+# 4. If process-releases merged changes that add/modify dependencies,
+#    run dependency install from repo root. Workers do NOT run install.
+#    Use the project's package manager (bun/npm/pnpm/yarn/cargo):
+# bun install        # or: npm install, pnpm install, cargo build, etc.
 
-# Find and recover stale claims (workers that died)
+# 5. Find and recover stale claims (workers that died)
 bacchus stale --minutes 15 --cleanup
 
-# Check events for issues
+# 6. Check events for issues
 bacchus events --limit 20
 
-# Check for agent messages
+# 7. Check for agent messages
 bacchus message list --agent orchestrator
-```
 
-After processing releases, check if new tasks became ready (deps satisfied):
-```bash
+# 8. After any state change (release processed, stale recovered, failure),
+#    check for newly ready tasks and spawn workers for them:
 bacchus task list --ready
-```
-
-If ready tasks exist and worker slots are available, spawn more workers:
-```bash
 bacchus session spawn-workers --count 3
 ```
 
@@ -181,11 +181,12 @@ bacchus session spawn-workers --count 3
 
 **Stale worker** — claim timed out, no heartbeat:
 ```bash
-bacchus stale --minutes 15 --cleanup    # resets task to open, next spawn picks it up
+bacchus stale --minutes 15 --cleanup    # resets task to open, step 8 spawns replacement
 ```
 
 **Failed task** — worker released with --status failed:
-- Task is already reset to open, will be picked up by next worker spawn
+- Task is reset to open. Step 8 will spawn a replacement on the next iteration.
+- If the same task fails **3 times**, stop retrying. Flag it for re-planning (see below).
 
 **Merge conflict** — process-releases hit a conflict:
 - Task moves to `needs_resolution`
@@ -197,6 +198,22 @@ bacchus message send --from orchestrator --to <AGENT_ID> --body "resolve conflic
 **Blocked task** — worker needs help:
 - Check messages: `bacchus message list --agent orchestrator`
 - Reassign footprints, split tasks, or unblock manually
+
+### Re-Planning
+
+Re-plan when:
+- A task has failed 3+ times
+- Multiple workers report `blocked` on related tasks
+- A dependency chain is stuck (downstream tasks can't proceed)
+
+To re-plan:
+1. Review failure messages and blocked task descriptions
+2. Determine if the task decomposition is wrong (footprints too narrow, missing dependency, task too large)
+3. Edit `.bacchus/tasks.yaml` with revised tasks — split large tasks, adjust footprints, add missing deps
+4. Re-import: `bacchus task import --epic-id <EPIC_ID>`
+5. Validate and spawn: `bacchus task validate && bacchus session spawn-workers --count 3`
+
+Do NOT keep retrying the same plan if it's structurally broken.
 
 ## Phase 6: Finalize
 

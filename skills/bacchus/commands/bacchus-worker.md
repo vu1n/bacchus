@@ -39,16 +39,18 @@ Read the output carefully. Context includes:
 - Active collisions with other agents
 - Risk hints
 
-### 3. Load Your Archetype
+### 3. Archetype Context
 
-The task's `archetype` field determines your domain expertise. Load it:
+Your archetype prompt was injected at spawn time — it's already part of your system context.
+If you need to re-read it (e.g., after context compaction), run:
 
 ```bash
 bacchus archetype prompt <ARCHETYPE>
 ```
 
-Read the archetype prompt and adopt its approach for the rest of this task.
-The archetype tells you *how* to think about the work (e.g., frontend: check for design system first; backend: match existing error shapes; test: read implementation before writing tests).
+The archetype tells you *how* to think about the work (e.g., frontend: check for design system
+first; backend: match existing error shapes; test: read implementation before writing tests).
+Follow its domain-specific guidance throughout the task.
 
 ### 4. Do the Work
 
@@ -89,7 +91,8 @@ If you need code outside your footprint, release as `blocked` and message the or
 ### 6. Heartbeat During Work
 
 Send heartbeats to avoid being marked stale (timeout: 15 min).
-Run this periodically during long work phases:
+**Trigger:** Send a heartbeat before every `jj` command and after completing each logical step
+(e.g., after writing a file, after running tests). This keeps you alive without guessing intervals.
 
 ```bash
 curl -s --max-time 1 -X POST -H 'Content-Type: application/json' \
@@ -102,7 +105,7 @@ If `$BACCHUS_EVENT_PORT` is not set, fall back to:
 bacchus activity <TASK_ID> <AGENT_ID> "editing"
 ```
 
-### 7. Review Loop (repeat until green)
+### 7. Review Loop (repeat until green, max 5 attempts)
 
 Before releasing, enter this loop:
 
@@ -110,8 +113,12 @@ Before releasing, enter this loop:
 2. Resolve any conflicts: `jj -R .bacchus/workspaces/<TASK_ID>/ resolve`
 3. Run `/simplify` — fix all findings
 4. Run `bacchus review <TASK_ID>`
-5. **If review fails**: fix the failing checks, then go back to step 1
+5. **If review fails with code issues**: fix the failing checks, then go back to step 1
 6. **If review passes**: proceed to Release (step 8)
+
+**Circuit breaker:** If the review loop fails 5 times, release as `blocked` with the error
+details. If every failure is the **same infrastructure error** (not code quality), release as
+`blocked` after 3 attempts — don't wait for 5.
 
 Do NOT release as `done` until the review loop passes.
 Do NOT stop or exit until you have released your task.

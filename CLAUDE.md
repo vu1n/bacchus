@@ -68,7 +68,7 @@ A `feature` task could need `frontend` OR `backend` archetype. Planner assigns a
 
 | Archetype | Focus |
 |-----------|-------|
-| `design` | Visual identity, design system, tokens |
+| `design` | Visual identity, design system, tokens, typography, high-craft UI |
 | `frontend` | UI, components, CSS, a11y |
 | `backend` | APIs, auth, validation |
 | `data` | Pipelines, SQL, schemas |
@@ -76,6 +76,7 @@ A `feature` task could need `frontend` OR `backend` archetype. Planner assigns a
 | `infra` | CI/CD, containers, cloud |
 | `review` | Quality, patterns |
 | `security` | Vulnerabilities, OWASP |
+| `docs` | Documentation, READMEs, API docs, guides |
 | `generic` | Default |
 
 Source of truth: `archetypes.yaml`. Project override: `.bacchus/archetypes.yaml`.
@@ -151,7 +152,7 @@ CREATE TABLE tasks (
     claimed_at INTEGER,
     ready_commit_id TEXT,
     CHECK (task_type IN ('bug_fix','feature','refactor','test','docs','infra','generic')),
-    CHECK (archetype IN ('design','frontend','backend','data','test','infra','review','security','generic'))
+    CHECK (archetype IN ('design','frontend','backend','data','test','infra','review','security','docs','generic'))
 );
 
 -- Token-saving handle system
