@@ -42,6 +42,15 @@ const events: Event[] = [];
 const waiters: Waiter[] = [];
 const startTime = Date.now();
 
+function enqueueEvent(event: Event) {
+  events.push(event);
+  if (events.length > MAX_EVENTS) events.shift();
+  for (const w of waiters.splice(0)) {
+    clearTimeout(w.timer);
+    w.resolve({ events: [event], elapsed_ms: 0 });
+  }
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -61,14 +70,26 @@ async function handleRequest(req: Request): Promise<Response> {
       activity: body.activity as string | undefined,
       ts: Date.now(),
     };
-    events.push(event);
-    if (events.length > MAX_EVENTS) events.shift();
+    enqueueEvent(event);
+    return json({ ok: true });
+  }
 
-    // Wake all poll waiters
-    for (const w of waiters.splice(0)) {
-      clearTimeout(w.timer);
-      w.resolve({ events: [event], elapsed_ms: 0 });
+  if (req.method === "POST" && url.pathname === "/heartbeat") {
+    const body: Record<string, unknown> = await req.json().catch(() => ({}));
+    const task_id = body.task_id as string | undefined;
+    const agent_id = body.agent_id as string | undefined;
+    const activity = (body.activity as string) || "working";
+
+    if (task_id && agent_id) {
+      // Update SQLite heartbeat via CLI (fire-and-forget)
+      Bun.spawn(["bacchus", "activity", task_id, agent_id, activity], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
     }
+
+    // Also queue as event for orchestrator long-poll wake
+    enqueueEvent({ type: "heartbeat", task_id, agent_id, activity, ts: Date.now() });
     return json({ ok: true });
   }
 

@@ -49,14 +49,19 @@ AGENT_ID="${BACCHUS_AGENT_ID:-}"
 bacchus activity "$TASK_ID" "$AGENT_ID" "$ACTIVITY" 2>/dev/null &
 
 # Notify event server (if running) so orchestrator wakes from long-poll
-RUN_ID="${BACCHUS_RUN_ID:-}"
-if [ -n "$RUN_ID" ]; then
-  PORT_FILE="${CLAUDE_PROJECT_DIR:-.}/.bacchus/sessions/server_port_${RUN_ID}"
-  [ -f "$PORT_FILE" ] && PORT=$(cat "$PORT_FILE" 2>/dev/null) && [ -n "$PORT" ] && \
-    curl -s --max-time 1 -X POST -H 'Content-Type: application/json' \
-      -d "{\"type\":\"activity\",\"task_id\":\"$TASK_ID\",\"agent_id\":\"$AGENT_ID\",\"activity\":\"$ACTIVITY\"}" \
-      "http://127.0.0.1:$PORT/event" >/dev/null 2>&1 &
+# Prefer BACCHUS_EVENT_PORT env var (set by worker spawner) over port file discovery
+PORT="${BACCHUS_EVENT_PORT:-}"
+if [ -z "$PORT" ]; then
+  RUN_ID="${BACCHUS_RUN_ID:-}"
+  if [ -n "$RUN_ID" ]; then
+    PORT_FILE="${CLAUDE_PROJECT_DIR:-.}/.bacchus/sessions/server_port_${RUN_ID}"
+    [ -f "$PORT_FILE" ] && PORT=$(cat "$PORT_FILE" 2>/dev/null)
+  fi
 fi
+[ -n "$PORT" ] && \
+  curl -s --max-time 1 -X POST -H 'Content-Type: application/json' \
+    -d "{\"type\":\"activity\",\"task_id\":\"$TASK_ID\",\"agent_id\":\"$AGENT_ID\",\"activity\":\"$ACTIVITY\"}" \
+    "http://127.0.0.1:$PORT/event" >/dev/null 2>&1 &
 "#;
 
 /// The activity hook command reference for settings.json

@@ -86,38 +86,35 @@ Your task declares what you're allowed to touch:
 
 If you need code outside your footprint, release as `blocked` and message the orchestrator.
 
-### 6. Heartbeat During Long Work
+### 6. Heartbeat During Work
+
+Send heartbeats to avoid being marked stale (timeout: 15 min).
+Run this periodically during long work phases:
 
 ```bash
-bacchus heartbeat <TASK_ID> --agent-id <AGENT_ID>
+curl -s --max-time 1 -X POST -H 'Content-Type: application/json' \
+  -d "{\"task_id\":\"$BACCHUS_TASK_ID\",\"agent_id\":\"$BACCHUS_AGENT_ID\",\"activity\":\"editing\"}" \
+  "http://127.0.0.1:${BACCHUS_EVENT_PORT}/heartbeat" >/dev/null 2>&1
 ```
 
-Send periodically to avoid being marked stale (default timeout: 15 min).
-
-### 7. Rebase and Review Before Release
-
-Before releasing, rebase onto current main so the quality gate and /simplify run against up-to-date code:
-
+If `$BACCHUS_EVENT_PORT` is not set, fall back to:
 ```bash
-# a. Rebase your workspace onto main
-jj -R .bacchus/workspaces/<TASK_ID>/ rebase -d main
-
-# b. If conflicts appear, resolve them:
-jj -R .bacchus/workspaces/<TASK_ID>/ resolve
-# Then re-run build/tests to verify resolution
-
-# c. Run /simplify to review your changes for quality
-#    (reuse, efficiency, consistency with codebase patterns)
-#    Fix any findings before proceeding
-
-# d. Run the quality gate
-bacchus review <TASK_ID>
+bacchus activity <TASK_ID> <AGENT_ID> "editing"
 ```
 
-Do NOT release as `done` if:
-- Rebase conflicts remain unresolved
-- `/simplify` found unaddressed issues
-- `bacchus review` fails
+### 7. Review Loop (repeat until green)
+
+Before releasing, enter this loop:
+
+1. Rebase onto main: `jj -R .bacchus/workspaces/<TASK_ID>/ rebase -d main`
+2. Resolve any conflicts: `jj -R .bacchus/workspaces/<TASK_ID>/ resolve`
+3. Run `/simplify` — fix all findings
+4. Run `bacchus review <TASK_ID>`
+5. **If review fails**: fix the failing checks, then go back to step 1
+6. **If review passes**: proceed to Release (step 8)
+
+Do NOT release as `done` until the review loop passes.
+Do NOT stop or exit until you have released your task.
 
 ### 8. Describe and Release
 

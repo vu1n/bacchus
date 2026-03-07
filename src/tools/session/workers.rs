@@ -248,6 +248,11 @@ pub(super) fn spawn_orchestrator_worker(
         )
         .stdin(Stdio::null());
 
+    // Pass event server port so workers can heartbeat via HTTP
+    if let Some(port) = super::server::read_server_port(run_id) {
+        cmd.env("BACCHUS_EVENT_PORT", port.to_string());
+    }
+
     // Redirect stdout/stderr to per-task log file
     let logs_dir = workspace_root.join(".bacchus/logs");
     std::fs::create_dir_all(&logs_dir).ok();
@@ -860,13 +865,20 @@ pub fn run_worker_command(
 
     // Substitute env var placeholders in the command string so the worker
     // receives resolved values regardless of shell quoting (single vs double).
+    // Read event server port for env var expansion and child env
+    let event_port = super::server::read_server_port(run_id);
+
     let expanded = command
         .replace("$BACCHUS_TASK_ID", task_id)
         .replace("$BACCHUS_AGENT_ID", agent_id)
         .replace("$BACCHUS_RUN_ID", run_id)
         .replace("$BACCHUS_WORKER_ID", &worker_id.to_string())
         .replace("$BACCHUS_WORKSPACE_ROOT", &workspace_root.to_string_lossy())
-        .replace("$BACCHUS_WORKSPACE_PATH", &workspace_path.to_string_lossy());
+        .replace("$BACCHUS_WORKSPACE_PATH", &workspace_path.to_string_lossy())
+        .replace(
+            "$BACCHUS_EVENT_PORT",
+            &event_port.map(|p| p.to_string()).unwrap_or_default(),
+        );
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
@@ -896,6 +908,11 @@ pub fn run_worker_command(
             "BACCHUS_WORKSPACE_PATH",
             workspace_path.to_string_lossy().to_string(),
         );
+
+    // Pass event server port so workers can heartbeat via HTTP
+    if let Some(port) = event_port {
+        cmd.env("BACCHUS_EVENT_PORT", port.to_string());
+    }
 
     let output = cmd.output().map_err(|e| e.to_string())?;
     let exit_code = output.status.code();
