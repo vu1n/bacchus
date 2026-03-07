@@ -1,0 +1,606 @@
+[
+  {
+    "id": "basic-backend-feature",
+    "task_id": "AUTH-001",
+    "task_title": "Create auth middleware",
+    "task_type": "feature",
+    "archetype": "backend",
+    "task_description": "Create auth middleware at src/auth/middleware.rs. Follow the pattern in src/api/middleware.rs for error handling. Must validate JWT tokens from the Authorization header. Gate: cargo test passes, middleware rejects invalid tokens.",
+    "footprint": {
+      "creates": ["src/auth/middleware.rs"],
+      "modifies": ["src/main.rs::register_routes"]
+    },
+    "context_output": "Task AUTH-001: feature/backend. Footprint: creates src/auth/middleware.rs, modifies src/main.rs::register_routes. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "basic-frontend-feature",
+    "task_id": "UI-001",
+    "task_title": "Create login form component",
+    "task_type": "feature",
+    "archetype": "frontend",
+    "task_description": "Create a LoginForm component at src/components/LoginForm.tsx. Use existing Button and Input components from src/components/ui/. Follow the pattern in src/components/SignupForm.tsx. Must handle loading state and error display.",
+    "footprint": {
+      "creates": ["src/components/LoginForm.tsx"],
+      "modifies": ["src/pages/auth.tsx::AuthPage"]
+    },
+    "context_output": "Task UI-001: feature/frontend. Footprint: creates src/components/LoginForm.tsx, modifies src/pages/auth.tsx::AuthPage. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "basic-generic-feature",
+    "task_id": "MISC-001",
+    "task_title": "Add CLI help text for new commands",
+    "task_type": "feature",
+    "archetype": "generic",
+    "task_description": "Add help text and usage examples for the new 'bacchus eval' and 'bacchus stale' commands in src/main.rs. Follow existing help text patterns.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/main.rs::build_cli"]
+    },
+    "context_output": "Task MISC-001: feature/generic. Footprint: modifies src/main.rs::build_cli. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "bugfix-backend",
+    "task_id": "BUG-001",
+    "task_title": "Fix race condition in task claiming",
+    "task_type": "bug_fix",
+    "archetype": "backend",
+    "task_description": "Fix race condition where two agents can claim the same task simultaneously. The UPDATE ... WHERE status='open' should be atomic but the current code does a SELECT then UPDATE. Consolidate into a single atomic UPDATE with RETURNING. Write a regression test.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/tasks.rs::claim_task", "src/tasks.rs::test_claim_race"]
+    },
+    "context_output": "Task BUG-001: bug_fix/backend. Footprint: modifies src/tasks.rs::claim_task, src/tasks.rs::test_claim_race. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "bugfix-frontend",
+    "task_id": "BUG-002",
+    "task_title": "Fix button focus ring missing on Safari",
+    "task_type": "bug_fix",
+    "archetype": "frontend",
+    "task_description": "The Button component's focus ring is not visible on Safari due to missing -webkit-focus-ring-color. Add Safari-compatible focus styles. Regression test: visual snapshot if available, otherwise manual check note.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/components/ui/Button.tsx"]
+    },
+    "context_output": "Task BUG-002: bug_fix/frontend. Footprint: modifies src/components/ui/Button.tsx. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "refactor-generic",
+    "task_id": "REF-001",
+    "task_title": "Extract error handling into shared module",
+    "task_type": "refactor",
+    "archetype": "generic",
+    "task_description": "Extract duplicated error handling from src/api/routes.rs and src/api/handlers.rs into a new src/api/errors.rs module. Preserve all existing behavior — just consolidate. All existing tests must pass unchanged.",
+    "footprint": {
+      "creates": ["src/api/errors.rs"],
+      "modifies": ["src/api/routes.rs", "src/api/handlers.rs", "src/api/mod.rs"]
+    },
+    "context_output": "Task REF-001: refactor/generic. Footprint: creates src/api/errors.rs, modifies src/api/routes.rs, src/api/handlers.rs, src/api/mod.rs. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "test-first-task",
+    "task_id": "TEST-001",
+    "task_title": "Add unit tests for handle system",
+    "task_type": "test",
+    "archetype": "test",
+    "task_description": "Add unit tests for the handle system in src/handles.rs. Cover: creation, expansion, filtering, clearing, and session-scoped cleanup. Read the implementation first, then write tests. Target: >80% line coverage of handles.rs.\n\n## Test-First\nWrite tests BEFORE implementing. Steps:\n1. Read existing tests for patterns\n2. Write failing tests that define expected behavior\n3. Implement until all tests pass\n4. Verify: cargo test",
+    "footprint": {
+      "creates": ["src/handles_test.rs"],
+      "modifies": ["src/handles.rs"]
+    },
+    "context_output": "Task TEST-001: test/test. Footprint: creates src/handles_test.rs, modifies src/handles.rs. No collisions.",
+    "special_conditions": "This is a test-first task. The worker must write tests before any implementation changes.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true,
+      "writes_tests_first": true
+    }
+  },
+  {
+    "id": "data-migration",
+    "task_id": "DATA-001",
+    "task_title": "Add priority column to tasks table",
+    "task_type": "feature",
+    "archetype": "data",
+    "task_description": "Add a 'priority' INTEGER column to the tasks table with default 0. Write a reversible migration. Update the task import to read priority from YAML. Update task list to sort by priority descending.",
+    "footprint": {
+      "creates": ["src/db/migrations/003_add_priority.sql"],
+      "modifies": ["src/db/schema.rs", "src/tasks.rs::import_tasks", "src/tasks.rs::list_tasks"]
+    },
+    "context_output": "Task DATA-001: feature/data. Footprint: creates migration, modifies schema.rs and tasks.rs. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "infra-task",
+    "task_id": "INFRA-001",
+    "task_title": "Add release build caching to CI",
+    "task_type": "infra",
+    "archetype": "infra",
+    "task_description": "Add cargo build caching to the GitHub Actions release workflow. Use actions/cache with cargo registry and target directory. Pin cache key to Cargo.lock hash. Verify the workflow YAML is valid.",
+    "footprint": {
+      "creates": [],
+      "modifies": [".github/workflows/release.yml"]
+    },
+    "context_output": "Task INFRA-001: infra/infra. Footprint: modifies .github/workflows/release.yml. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "security-audit",
+    "task_id": "SEC-001",
+    "task_title": "Security audit of task import YAML parsing",
+    "task_type": "feature",
+    "archetype": "security",
+    "task_description": "Audit the YAML task import path (src/tasks.rs::import_tasks) for injection and deserialization vulnerabilities. Check: untrusted YAML input handling, path traversal in footprint paths, SQL injection in task IDs. Output findings with severity.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/tasks.rs::import_tasks"]
+    },
+    "context_output": "Task SEC-001: feature/security. Footprint: modifies src/tasks.rs::import_tasks. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "code-review",
+    "task_id": "REV-001",
+    "task_title": "Review auth middleware implementation",
+    "task_type": "feature",
+    "archetype": "review",
+    "task_description": "Review the completed AUTH-001 task workspace. Check: correctness against task description, footprint compliance, code consistency with existing patterns, security (input validation, error exposure). Output PASS/FAIL verdict.",
+    "footprint": {
+      "creates": [],
+      "modifies": []
+    },
+    "context_output": "Task REV-001: feature/review. Reviewing AUTH-001 workspace. No footprint (read-only review).",
+    "special_conditions": "This is a review task — the agent reads and evaluates another task's changes, it does not write code.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": false,
+      "rebases_before_release": false,
+      "runs_simplify": false,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "no-task-id",
+    "task_id": null,
+    "task_title": null,
+    "task_type": null,
+    "archetype": "generic",
+    "task_description": null,
+    "footprint": null,
+    "context_output": null,
+    "special_conditions": "No TASK_ID was provided in arguments. The worker must use `bacchus next --agent-id <AGENT_ID>` to find and claim the next ready task.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "uses_bacchus_next": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "merge-conflict",
+    "task_id": "CONF-001",
+    "task_title": "Update API error responses",
+    "task_type": "refactor",
+    "archetype": "backend",
+    "task_description": "Standardize error responses in src/api/handlers.rs to use the new ErrorResponse struct. Another agent recently changed this file — expect merge conflicts after rebase.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/api/handlers.rs"]
+    },
+    "context_output": "Task CONF-001: refactor/backend. Footprint: modifies src/api/handlers.rs. WARNING: Collision with CONF-002 on src/api/handlers.rs.",
+    "special_conditions": "After rebase, jj will report merge conflicts. The worker must resolve them using `jj -R ... resolve` before proceeding.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "resolves_conflicts": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "out-of-footprint",
+    "task_id": "OOF-001",
+    "task_title": "Add responsive breakpoints to card component",
+    "task_type": "feature",
+    "archetype": "frontend",
+    "task_description": "Make the Card component responsive at standard breakpoints. You'll find you also need to update the shared breakpoints config in src/styles/breakpoints.ts, but that file is NOT in your footprint.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/components/Card.tsx"]
+    },
+    "context_output": "Task OOF-001: feature/frontend. Footprint: modifies src/components/Card.tsx. No collisions.",
+    "special_conditions": "The task requires changes to src/styles/breakpoints.ts which is outside the footprint. The worker should release as blocked.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "detects_out_of_footprint": true,
+      "releases_blocked": true,
+      "no_package_install": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "review-loop-failure",
+    "task_id": "RLF-001",
+    "task_title": "Add input sanitization to search endpoint",
+    "task_type": "feature",
+    "archetype": "backend",
+    "task_description": "Add input sanitization to the search endpoint in src/api/search.rs. Sanitize query parameters to prevent SQL injection. The first review attempt will likely fail due to missed edge cases — fix and re-run.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/api/search.rs"]
+    },
+    "context_output": "Task RLF-001: feature/backend. Footprint: modifies src/api/search.rs. No collisions.",
+    "special_conditions": "The review loop is expected to fail on the first attempt. The worker must fix issues and re-run the review loop, not release as done immediately.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "handles_review_failure": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "empty-workspace",
+    "task_id": "EMPTY-001",
+    "task_title": "Investigate flaky test in CI",
+    "task_type": "bug_fix",
+    "archetype": "generic",
+    "task_description": "The test test_concurrent_claims in src/tasks.rs is flaky in CI. Investigate root cause. The workspace will be empty (fresh clone state). Read the test, understand timing dependencies, and fix.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/tasks.rs::test_concurrent_claims"]
+    },
+    "context_output": "Task EMPTY-001: bug_fix/generic. Footprint: modifies src/tasks.rs::test_concurrent_claims. No collisions. Note: workspace is fresh — no prior changes.",
+    "special_conditions": "The workspace starts empty (no prior modifications). The worker should handle this gracefully.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "task-with-dependencies",
+    "task_id": "DEP-001",
+    "task_title": "Add pagination to task list endpoint",
+    "task_type": "feature",
+    "archetype": "backend",
+    "task_description": "Add pagination (limit/offset) to the task list endpoint. Depends on DATA-001 (priority column) — priority-based sorting must work with pagination. Check context for collision warnings.",
+    "footprint": {
+      "creates": [],
+      "modifies": ["src/tasks.rs::list_tasks", "src/main.rs::build_cli"]
+    },
+    "context_output": "Task DEP-001: feature/backend. Depends on DATA-001 (completed). Footprint: modifies src/tasks.rs::list_tasks, src/main.rs::build_cli. Collision: src/tasks.rs also modified by BUG-001 (in_progress).",
+    "special_conditions": "Context shows a collision warning with BUG-001 on src/tasks.rs. The worker should acknowledge the collision and be careful about the shared file.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "checks_collisions": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "long-running-task",
+    "task_id": "LONG-001",
+    "task_title": "Migrate legacy data format to new schema",
+    "task_type": "feature",
+    "archetype": "data",
+    "task_description": "Write a data migration script that converts all existing task records from the v1 schema to v2. This involves reading every record, transforming fields, and writing back. The migration may take several minutes of work with many file edits.",
+    "footprint": {
+      "creates": ["src/db/migrations/004_v2_migration.sql", "src/db/migrate_v1_to_v2.rs"],
+      "modifies": ["src/db/schema.rs", "src/db/mod.rs"]
+    },
+    "context_output": "Task LONG-001: feature/data. Footprint: creates migration + migration script, modifies schema.rs and mod.rs. No collisions.",
+    "special_conditions": "This is a long-running task. The worker MUST send frequent heartbeats to avoid being marked stale (15 min timeout).",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true,
+      "frequent_heartbeats": true
+    }
+  },
+  {
+    "id": "multi-file-footprint",
+    "task_id": "MULTI-001",
+    "task_title": "Add dashboard page with widgets",
+    "task_type": "feature",
+    "archetype": "frontend",
+    "task_description": "Create a dashboard page with stat widgets. Create the page component, two widget components, and hook them into the router. Follow existing page patterns in src/pages/.",
+    "footprint": {
+      "creates": [
+        "src/pages/Dashboard.tsx",
+        "src/components/widgets/StatsWidget.tsx",
+        "src/components/widgets/ActivityWidget.tsx"
+      ],
+      "modifies": ["src/router.tsx::routes", "src/components/Sidebar.tsx::navItems"]
+    },
+    "context_output": "Task MULTI-001: feature/frontend. Footprint: creates 3 files, modifies router and sidebar. No collisions.",
+    "special_conditions": null,
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  },
+  {
+    "id": "package-dep-addition",
+    "task_id": "PKG-001",
+    "task_title": "Add rate limiting to API",
+    "task_type": "feature",
+    "archetype": "backend",
+    "task_description": "Add rate limiting to the API using a rate-limit crate. Add the dependency to Cargo.toml, but do NOT run cargo build or cargo install — the orchestrator handles dependency resolution after merge. Implement a middleware that limits requests per IP.",
+    "footprint": {
+      "creates": ["src/api/rate_limit.rs"],
+      "modifies": ["Cargo.toml", "src/api/mod.rs"]
+    },
+    "context_output": "Task PKG-001: feature/backend. Footprint: creates src/api/rate_limit.rs, modifies Cargo.toml and src/api/mod.rs. No collisions.",
+    "special_conditions": "The worker must add a dependency to Cargo.toml but must NOT run cargo build, cargo install, or any package manager install command.",
+    "rubric": {
+      "starts_session": true,
+      "claims_task": true,
+      "loads_archetype": true,
+      "reads_context": true,
+      "uses_jj_R": true,
+      "never_cd_workspace": true,
+      "stays_in_footprint": true,
+      "no_package_install": true,
+      "adds_dep_to_manifest": true,
+      "runs_review_loop": true,
+      "rebases_before_release": true,
+      "runs_simplify": true,
+      "describes_changes": true,
+      "releases_done": true,
+      "sends_heartbeat": true
+    }
+  }
+]

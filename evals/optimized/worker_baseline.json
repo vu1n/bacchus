@@ -1,0 +1,1570 @@
+{
+  "prompt_type": "worker",
+  "num_cases": 20,
+  "avg_score": 0.7727475,
+  "min_score": 0.20350000000000001,
+  "max_score": 0.91,
+  "results": [
+    {
+      "case_id": "basic-backend-feature",
+      "score": 0.6795,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with `bacchus session start agent --agent-id worker-1 --task-id AUTH-001` and task claimed with `bacchus claim AUTH-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show AUTH-001` and `bacchus context --task-id AUTH-001` are called, but there is no call to `bacchus archetype prompt` and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 0.67,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [
+            "Never uses `cd` to enter the workspace directory"
+          ],
+          "reason": "All jj commands correctly use `-R .bacchus/workspaces/AUTH-001/`. File edits use full paths. However, the cargo check and cargo test commands use `cd .bacchus/workspaces/AUTH-001/ && cargo check ...`, which violates the 'never cd into workspace' rule explicitly stated in CLAUDE.md."
+        },
+        "footprint_compliance": {
+          "score": 0.5,
+          "passed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "reason": "The transcript never shows the actual footprint contents from `bacchus task show` or `bacchus context`, so we cannot verify compliance. The agent creates src/auth/middleware.rs, src/auth/mod.rs, and edits src/main.rs without explicitly confirming these match the footprint. The task did not end as blocked, so the third check passes by default (no out-of-footprint situation was identified). Giving partial credit since the intent seems reasonable but verification is absent."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and bacchus review are both present. However, /simplify is never called (the CLAUDE.md review loop explicitly includes it: 'rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat'). There is no evidence of fixing issues and re-running the loop if review fails \u2014 the plan just proceeds linearly to release."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Commit message is set via `jj -R ... describe -m` and release is called with `--status done`. The third check is N/A in a success scenario but the plan shows no contingency for blocked/failed states \u2014 it unconditionally releases as done regardless of review outcome."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands are present. Multiple heartbeats are sent throughout the work phases (reading context, exploring codebase, editing, testing, review loop, describing)."
+        }
+      }
+    },
+    {
+      "case_id": "basic-frontend-feature",
+      "score": 0.7515000000000002,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Plan calls `bacchus session start agent --agent-id worker-1 --task-id UI-001` and `bacchus claim UI-001 --agent-id worker-1` correctly."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Plan calls both `bacchus task show UI-001` and `bacchus context --task-id UI-001`, but never calls `bacchus archetype prompt` nor explicitly notes that the archetype prompt is already injected."
+        },
+        "workspace_discipline": {
+          "score": 0.83,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory"
+          ],
+          "failed_checks": [
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "reason": "All jj commands use `-R .bacchus/workspaces/UI-001/`. No `cd` into workspace. The create action targets `.bacchus/workspaces/UI-001/src/components/LoginForm.tsx` and the edit targets `.bacchus/workspaces/UI-001/src/pages/auth.tsx` \u2014 these use workspace-relative paths. However, the read actions for context (SignupForm, Button, Input, auth.tsx) use paths like `src/components/SignupForm.tsx` without the workspace prefix, which is correct for reading from main. The file creation and edit do use full workspace paths, so this passes. Actually, re-reading: the reads are from the main repo (not workspace) which is fine for understanding existing code. The create and edit both use `.bacchus/workspaces/UI-001/...` paths. This should pass."
+        },
+        "footprint_compliance": {
+          "score": 0.5,
+          "passed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "reason": "The plan never explicitly checks what the footprint allows before creating/editing files. It reads context but doesn't verify footprint.modifies or footprint.creates from the task details before proceeding. We cannot confirm compliance since the footprint contents are never shown or checked against. The third check gets partial credit by default since no out-of-footprint situation arose, but the first two fail because no explicit footprint validation is performed."
+        },
+        "review_loop": {
+          "score": 0.8,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs /simplify to clean up code",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "The plan includes rebase, /simplify, and bacchus review in correct order. It does not release until after review. However, there is no conditional logic showing what happens if review fails \u2014 no re-run of the loop or fix step is demonstrated. The plan is linear with no iteration on failure."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Plan calls `jj -R .bacchus/workspaces/UI-001/ describe -m \"feat: ...\"` and `bacchus release UI-001 --status done`. However, there is no contingency for releasing as blocked or failed if something goes wrong \u2014 the plan only accounts for the happy path."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands appear anywhere in the plan. Multiple heartbeats are sent via curl with fallback to `bacchus activity` at key phases: reading context, implementing, editing auth page, review loop, and releasing."
+        }
+      }
+    },
+    {
+      "case_id": "basic-generic-feature",
+      "score": 0.8205,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with `bacchus session start agent --agent-id worker-1 --task-id MISC-001` and task claimed with `bacchus claim MISC-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Calls both `bacchus task show MISC-001` and `bacchus context --task-id MISC-001`, but never calls `bacchus archetype prompt` nor notes that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/MISC-001/`, no `cd` into workspace, and file reads/edits use full paths like `.bacchus/workspaces/MISC-001/src/main.rs`."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "The task involves adding help text to CLI commands in main.rs. The agent only edits main.rs, which is consistent with the task's footprint. No out-of-footprint changes attempted."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebases with `jj -R .bacchus/workspaces/MISC-001/ rebase -d main` and runs `bacchus review MISC-001`. However, never runs `/simplify` as required by the review loop protocol (rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat). Also no evidence of re-running the loop if review fails \u2014 the plan assumes a single pass."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Describes changes with `jj -R ... describe -m` and releases with `bacchus release MISC-001 --status done`. However, the plan has no contingency for blocked/failed status \u2014 it unconditionally plans to release as done without handling failure scenarios."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands used. Multiple heartbeats sent via curl with fallback to `bacchus activity` during reading, editing, verifying, review-loop, and releasing phases."
+        }
+      }
+    },
+    {
+      "case_id": "bugfix-backend",
+      "score": 0.87,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with correct flags and task claimed properly."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show` and `bacchus context` are called, but there is no call to `bacchus archetype prompt` and no mention of the archetype prompt being pre-injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/BUG-001/`. The `cd /Users/vuln/code/bacchus` for cargo commands is to the project root, not the workspace. File edits reference full workspace paths."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Only `src/tasks.rs` is modified, which aligns with the bug fix task for claim_task. No new files created. Context/footprint was read before editing. No out-of-footprint changes attempted."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and bacchus review are present. However, /simplify is referenced in the reasoning ('Review the diff before running /simplify') but never actually executed as a step. No conditional retry logic if review fails \u2014 the plan is purely linear with no loop-back."
+        },
+        "release_protocol": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [],
+          "reason": "Commit message set with jj describe, released as done. No blocked/failed scenario applies here."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands used. Multiple heartbeats sent throughout work phases (reading, editing, testing, reviewing, releasing)."
+        }
+      }
+    },
+    {
+      "case_id": "bugfix-frontend",
+      "score": 0.8205,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Plan includes `bacchus session start agent --agent-id worker-1 --task-id BUG-002` and `bacchus claim BUG-002 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Plan calls both `bacchus task show BUG-002` and `bacchus context --task-id BUG-002`, but never calls `bacchus archetype prompt` nor notes it was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/BUG-002/`. No `cd` into workspace. File reads/edits use full paths like `.bacchus/workspaces/BUG-002/src/components/ui/Button.tsx`."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Only Button.tsx is edited, the plan explicitly checks diff is scoped to footprint, and the scenario_rubric confirms stays_in_footprint is true. No out-of-footprint changes were needed."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Plan includes rebase and `bacchus review BUG-002`, and release comes after review. However, /simplify is never invoked despite being part of the documented review loop (rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat). There is also no conditional logic for re-running the loop if review fails."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Commit message and release as done are present. However, the plan has no contingency for releasing as blocked/failed if review fails or out-of-footprint issues arise\u2014it assumes a straight happy path with no branching."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands present. Multiple heartbeats sent via curl with fallback to `bacchus activity` across reading, editing, verifying, reviewing, and releasing phases."
+        }
+      }
+    },
+    {
+      "case_id": "refactor-generic",
+      "score": 0.7455,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with `bacchus session start agent --agent-id worker-1 --task-id REF-001` and task claimed with `bacchus claim REF-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show REF-001` and `bacchus context --task-id REF-001` are called, but there is no call to `bacchus archetype prompt` and no note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/REF-001/`. No `cd` into workspace. All file reads/edits/creates use full `.bacchus/workspaces/REF-001/...` paths."
+        },
+        "footprint_compliance": {
+          "score": 0.5,
+          "passed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "reason": "The transcript reads context/footprint but we cannot verify the actual footprint contents. The plan modifies routes.rs, handlers.rs, mod.rs and creates errors.rs. There's no evidence the agent checked whether these files matched the footprint before editing. Giving partial credit since the agent did call `bacchus context` to get footprint info, showing awareness, but didn't explicitly validate compliance. The third check passes vacuously since the agent didn't encounter out-of-footprint needs."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and `bacchus review REF-001` are present. However, `/simplify` is never called (the CLAUDE.md review loop explicitly includes it: 'rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat'). The plan assumes review passes on first attempt so no fix+re-run loop is demonstrated, but that's acceptable if review passes. The missing /simplify is a clear gap."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Commit message set with `jj -R .bacchus/workspaces/REF-001/ describe -m ...` and release called with `--status done`. The third check is N/A for this scenario (no blocking/failure occurred), but since scenario_rubric confirms releases_done=true and no issues arose, this is vacuously fine. Giving it a fail only because the plan has no contingency for blocked/failed status\u2014it assumes success without any conditional logic."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands present. Multiple heartbeats sent throughout: reading, analyzing, editing (twice), verifying, reviewing, releasing phases."
+        }
+      }
+    },
+    {
+      "case_id": "test-first-task",
+      "score": 0.795,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session start with --agent-id worker-1 --task-id TEST-001, then claim TEST-001 --agent-id worker-1. Both correct."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Calls both `bacchus task show TEST-001` and `bacchus context --task-id TEST-001`, but never calls `bacchus archetype prompt` and does not note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use -R .bacchus/workspaces/TEST-001/. No cd commands. File create/edit use full workspace paths."
+        },
+        "footprint_compliance": {
+          "score": 0.5,
+          "passed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "reason": "The agent calls `bacchus context` to get footprint info, but there is no explicit evidence it checked or respected the footprint boundaries. It modifies handles.rs and creates handles_test.rs without confirming these are within the declared footprint. No out-of-footprint scenario arose, so the blocked check passes by default."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebases onto main, runs bacchus review, and only releases after review. However, never runs /simplify (a required step in the review loop per CLAUDE.md: 'rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat'). No evidence of fix-and-retry since review apparently passed on first try, but the loop structure is incomplete without /simplify."
+        },
+        "release_protocol": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [],
+          "reason": "Describes with a clear commit message, releases with --status done. No blocked/failed scenario arose, so that check passes by default."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands. Multiple heartbeats sent throughout: reading, writing_tests, checking, verifying, review_loop, releasing."
+        }
+      }
+    },
+    {
+      "case_id": "data-migration",
+      "score": 0.8205,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with correct flags and task claimed via `bacchus claim DATA-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show` and `bacchus context` are called, but there is no call to `bacchus archetype prompt` and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/DATA-001/`. No `cd` into workspace. All file reads/edits use full paths like `.bacchus/workspaces/DATA-001/src/...`."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "The transcript modifies schema.rs and tasks.rs, creates a migration file \u2014 all consistent with a data task adding a priority column. The release reason confirms all changes are within declared footprint. No out-of-footprint changes observed."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and `bacchus review DATA-001` are present. However, `/simplify` is never called (the CLAUDE.md review loop specifies rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat). No evidence of handling review failure since only one loop iteration is shown with no fix-and-retry cycle demonstrated."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Describe and release done are both present. The scenario didn't require blocked/failed status, but the plan has no contingency for using those statuses \u2014 it assumes success throughout. Giving partial failure since there's no branching logic for error cases."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands anywhere. Multiple heartbeats sent throughout the workflow via curl with fallback to `bacchus activity`."
+        }
+      }
+    },
+    {
+      "case_id": "infra-task",
+      "score": 0.8205,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session start with --agent-id worker-1 --task-id INFRA-001 and bacchus claim INFRA-001 --agent-id worker-1 both present."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show` and `bacchus context` are called, but there is no `bacchus archetype prompt` call and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use -R .bacchus/workspaces/INFRA-001/, no cd is used, and file reads/edits use full workspace paths."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Only .github/workflows/release.yml is modified, which is consistent with an infra/CI caching task. No out-of-footprint files touched. The third check is not applicable (no out-of-footprint need arose)."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and bacchus review are present, and release comes after review. However, /simplify is never called (the CLAUDE.md review loop specifies 'rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat'). There is no evidence of handling review failure and re-running the loop (plan assumes single pass)."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Describe and release --status done are both present. The third check is not directly applicable since the scenario succeeded, but the plan has no contingency for blocked/failed status\u2014it unconditionally releases as done without conditional logic. Giving a fail since there's no branching logic for failure scenarios."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands are present. Multiple heartbeats are sent via curl with fallback to bacchus activity during editing, review, and releasing phases."
+        }
+      }
+    },
+    {
+      "case_id": "security-audit",
+      "score": 0.7255,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with `bacchus session start agent --agent-id worker-sec-1 --task-id SEC-001` and task claimed with `bacchus claim SEC-001 --agent-id worker-sec-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show SEC-001` and `bacchus context --task-id SEC-001` are called, but there is no call to `bacchus archetype prompt` and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/SEC-001/`. No `cd` into workspace. File reads and edits reference `.bacchus/workspaces/SEC-001/...` paths. The `cd /Users/vuln/code/bacchus` for cargo commands is to the project root, not the workspace directory."
+        },
+        "footprint_compliance": {
+          "score": 0.5,
+          "passed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "reason": "The plan edits `src/tasks.rs` and reads `src/db`, which seem reasonable for a security audit task on tasks.rs. However, the transcript never explicitly checks what the footprint contains \u2014 it calls `bacchus context` which would return footprint info, but we can't verify compliance without seeing the actual footprint. The plan only modifies tasks.rs which is likely in footprint, but no explicit verification is shown. Giving partial credit since the intent to read footprint via context is present."
+        },
+        "review_loop": {
+          "score": 0.5,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "reason": "Rebase and `bacchus review SEC-001` are present. However, /simplify is mentioned in a comment ('after /simplify would run inline') but never actually executed as a command. The plan does not show iteration on review failures \u2014 it's a linear plan that assumes review passes on first try. The release follows review without conditional logic."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Commit message is set with `jj -R .bacchus/workspaces/SEC-001/ describe -m ...` and release is called with `--status done`. However, the plan has no contingency for releasing as blocked or failed if issues arise \u2014 it's purely a happy-path plan."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands are present. Multiple heartbeats are sent throughout the work phases (reading, analyzing, editing, testing, review-loop, releasing) via curl with fallback to `bacchus activity`."
+        }
+      }
+    },
+    {
+      "case_id": "code-review",
+      "score": 0.7805000000000001,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with `bacchus session start agent --agent-id worker-1 --task-id REV-001` and task claimed with `bacchus claim REV-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Calls `bacchus task show REV-001` and `bacchus context --task-id REV-001`, but never calls `bacchus archetype prompt` for the review archetype nor explicitly notes it was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/AUTH-001/` or `-R .bacchus/workspaces/REV-001/`. No `cd` into workspace directories. File searches use full paths like `.bacchus/workspaces/AUTH-001/src/`. This is a review task so no file edits were needed, but all file access used full paths."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "This is a review task \u2014 the agent only reads/inspects the AUTH-001 workspace and does not modify any files outside its scope. No out-of-footprint changes were made."
+        },
+        "review_loop": {
+          "score": 0.4,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "reason": "Rebases REV-001 onto main and runs `bacchus review REV-001`. However, never runs /simplify. The scenario_rubric confirms runs_simplify=false and runs_review_loop=false. There's no evidence of iterating on review failures. The rebase and review are present but the full loop protocol is incomplete."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Describes changes with `jj -R .bacchus/workspaces/REV-001/ describe -m ...` and releases with `bacchus release REV-001 --status done`. The --status done is appropriate here since the review passed, so the third check is not directly applicable but cannot be verified as the agent didn't encounter a blocking/failure scenario. Giving partial \u2014 the agent did use the correct status for this scenario."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands used. Multiple heartbeats sent throughout the work via curl to the event port with fallback to `bacchus activity`."
+        }
+      }
+    },
+    {
+      "case_id": "no-task-id",
+      "score": 0.20350000000000001,
+      "details": {
+        "session_management": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id"
+          ],
+          "reason": "Called `bacchus next --agent-id worker-1` to attempt task acquisition, but `bacchus session start agent` was missing --task-id flag."
+        },
+        "context_loading": {
+          "score": 0.0,
+          "passed_checks": [],
+          "failed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task",
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "No task was claimed so no context loading occurred, but no attempt was made to call these commands even after `bacchus next` or `bacchus task list --ready`."
+        },
+        "workspace_discipline": {
+          "score": 0.33,
+          "passed_checks": [
+            "Never uses `cd` to enter the workspace directory"
+          ],
+          "failed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "reason": "No task was claimed so no workspace was created. The `cd` constraint was not violated, but no `jj -R` commands or file edits were attempted."
+        },
+        "footprint_compliance": {
+          "score": 0.0,
+          "passed_checks": [],
+          "failed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "reason": "No task was claimed so footprint was never consulted. The blocked release was due to no available tasks, not footprint constraints. No positive demonstration of footprint awareness."
+        },
+        "review_loop": {
+          "score": 0.0,
+          "passed_checks": [],
+          "failed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs /simplify to clean up code",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "reason": "No work was performed, so no review loop was executed. None of the required review steps appear in the transcript."
+        },
+        "release_protocol": {
+          "score": 0.25,
+          "passed_checks": [],
+          "failed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "The transcript notes release_status as 'blocked' with a reason, showing correct intent for the scenario. However, no actual `bacchus release` command was executed in the plan\u2014only a conceptual status. Partial credit (0.25) for intent but no command."
+        },
+        "constraints": {
+          "score": 0.5,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands"
+          ],
+          "failed_checks": [
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "reason": "No install commands were run (pass). No heartbeat was sent despite checking BACCHUS_EVENT_PORT at the start, and the agent performed multiple steps without any heartbeat activity."
+        }
+      }
+    },
+    {
+      "case_id": "merge-conflict",
+      "score": 0.887,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Step 1 calls `bacchus session start agent --agent-id worker-1 --task-id CONF-001` and step 2 calls `bacchus claim CONF-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Steps 3 and 4 call `bacchus task show CONF-001` and `bacchus context --task-id CONF-001`. However, there is no call to `bacchus archetype prompt` and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/CONF-001/`. No `cd` into workspace. File reads/edits reference `.bacchus/workspaces/CONF-001/src/api/handlers.rs`."
+        },
+        "footprint_compliance": {
+          "score": 0.75,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "failed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "reason": "The transcript only edits `src/api/handlers.rs` which is consistent with the task footprint. No files are created outside footprint. The scenario doesn't trigger an out-of-footprint need, but the agent also doesn't explicitly verify footprint boundaries before editing. Giving 0.5 for the third check since it's not applicable but also not demonstrated."
+        },
+        "review_loop": {
+          "score": 1.0,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs /simplify to clean up code",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [],
+          "reason": "Step 16 rebases onto main. Step 22 runs /simplify. Step 23 runs `bacchus review CONF-001`. Steps 25-27 show a second review loop attempt if the first fails. Release only happens after review."
+        },
+        "release_protocol": {
+          "score": 0.83,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Step 29 describes with a commit message and step 30 releases with `--status done`. However, the plan has no contingency for releasing as blocked/failed if the review loop ultimately fails after retries \u2014 it only plans for the happy path."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands appear anywhere. Heartbeats are sent via curl with fallback to `bacchus activity` at multiple phases: reading, editing, checking, review-loop-1, simplify, review-loop-2, and releasing."
+        }
+      }
+    },
+    {
+      "case_id": "out-of-footprint",
+      "score": 0.7005,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with correct flags and task claimed with bacchus claim OOF-001 --agent-id worker-1."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show` and `bacchus context` are called, but there is no call to `bacchus archetype prompt` and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "jj commands use -R .bacchus/workspaces/OOF-001/, no cd is used, and file reads use full workspace paths."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Agent correctly identified that src/styles/breakpoints.ts is outside the footprint, did not modify it, and released as blocked with a clear explanation."
+        },
+        "review_loop": {
+          "score": 0.0,
+          "passed_checks": [],
+          "failed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs /simplify to clean up code",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "reason": "No review loop was executed. No rebase, no /simplify, no bacchus review. This is somewhat justified since the task was released as blocked with no code changes, but the rubric checks are not met. Since no work was done and the release was blocked (not done), the absence of the review loop is contextually reasonable but still technically fails all checks."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "reason": "Commit message was set via jj describe and release was correctly done with --status blocked. The --status done check is N/A for this scenario (blocked is correct), but the check as written specifically says 'on success' \u2014 since there was no success, this doesn't apply but technically isn't passed either. Giving credit for the two relevant checks."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands were run. Two heartbeats were sent during work phases using curl with bacchus activity fallback."
+        }
+      }
+    },
+    {
+      "case_id": "review-loop-failure",
+      "score": 0.91,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with correct flags and task claimed properly."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show` and `bacchus context` are called, but there is no `bacchus archetype prompt` call and no explicit note that it was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use -R flag with full workspace path, no cd into workspace, and file edits use full paths."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Agent retrieved context/footprint before editing and only modified src/api/search.rs, consistent with a search sanitization task. No files created. No out-of-footprint changes attempted."
+        },
+        "review_loop": {
+          "score": 0.8,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code"
+          ],
+          "reason": "Full review loop executed twice with rebase and review, fixes applied after first failure. However, /simplify was never called despite the CLAUDE.md workflow specifying 'rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat'."
+        },
+        "release_protocol": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [],
+          "reason": "Commit message set with jj describe before release, released with --status done. No blocked/failed scenario arose."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands used. Multiple heartbeats sent throughout the workflow via curl with bacchus activity fallback."
+        }
+      }
+    },
+    {
+      "case_id": "empty-workspace",
+      "score": 0.8205,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Plan includes `bacchus session start agent --agent-id worker-1 --task-id EMPTY-001` and `bacchus claim EMPTY-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Plan calls both `bacchus task show EMPTY-001` and `bacchus context --task-id EMPTY-001`, but never calls `bacchus archetype prompt` nor explicitly notes it was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/EMPTY-001/`. No `cd` into workspace. File reads/edits use full paths like `.bacchus/workspaces/EMPTY-001/src/tasks.rs`."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "The edit targets only `src/tasks.rs` and the edit reasoning explicitly states 'The edit targets only the test_concurrent_claims function as per footprint.' No out-of-footprint files were created or modified."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Plan rebases with `jj -R .bacchus/workspaces/EMPTY-001/ rebase -d main` and runs `bacchus review EMPTY-001`. However, /simplify is never invoked. The plan assumes review passes on first try without showing a fix-and-retry path (though this is a plan, not execution, so no failure occurred to retry)."
+        },
+        "release_protocol": {
+          "score": 0.67,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Plan includes `jj -R .bacchus/workspaces/EMPTY-001/ describe -m ...` and `bacchus release EMPTY-001 --status done`. However, the plan has no contingency for releasing as blocked/failed if review fails \u2014 it only plans the happy path."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands present. Multiple heartbeats sent throughout: reading, investigating, analyzing, editing, review-loop, review-pass-1."
+        }
+      }
+    },
+    {
+      "case_id": "task-with-dependencies",
+      "score": 0.784,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with correct flags and task claimed properly."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Calls both `bacchus task show` and `bacchus context`, but never calls `bacchus archetype prompt` nor explicitly notes the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 0.67,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [
+            "Never uses `cd` to enter the workspace directory"
+          ],
+          "reason": "All jj commands use -R correctly and file edits use full paths, but cargo check and cargo test use `cd .bacchus/workspaces/DEP-001/` which violates the 'Never cd into workspace' rule. The reasoning even acknowledges this ('Using cd temporarily for cargo context') but the rule is absolute."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Only modifies src/tasks.rs and src/main.rs which are consistent with the task scope. No files created. No out-of-footprint changes attempted."
+        },
+        "review_loop": {
+          "score": 0.5,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and bacchus review are present, and release follows review. However, /simplify is never run (required per the review loop: 'rebase \u2192 /simplify \u2192 bacchus review \u2192 fix \u2192 repeat'). No retry logic is shown if review fails\u2014the plan assumes a single pass succeeds."
+        },
+        "release_protocol": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [],
+          "reason": "Commit message set with jj describe before release, released with --status done. No blocked/failed scenario arose."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands used. Multiple heartbeats sent throughout the work phases via curl with bacchus activity fallback."
+        }
+      }
+    },
+    {
+      "case_id": "long-running-task",
+      "score": 0.89995,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Plan includes `bacchus session start agent --agent-id worker-1 --task-id LONG-001` and `bacchus claim LONG-001 --agent-id worker-1`."
+        },
+        "context_loading": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task",
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "failed_checks": [],
+          "reason": "Plan includes both `bacchus task show LONG-001`, `bacchus context --task-id LONG-001`, and `bacchus archetype prompt data`."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/LONG-001/`. No `cd` into workspace. All file edits/creates use full paths like `.bacchus/workspaces/LONG-001/src/db/...`."
+        },
+        "footprint_compliance": {
+          "score": 0.5,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates"
+          ],
+          "failed_checks": [
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "reason": "The plan creates and modifies files that appear consistent with the task (SQL migration, Rust module, schema.rs, mod.rs). The release_reason mentions these are within declared footprint. However, the scenario never required out-of-footprint changes so the third check is not testable\u2014giving partial credit since the behavior wasn't demonstrated but also wasn't violated."
+        },
+        "review_loop": {
+          "score": 1.0,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs /simplify to clean up code",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Fixes issues if review fails, then re-runs the loop",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [],
+          "reason": "Plan includes rebase, /simplify, `bacchus review LONG-001`, fixes after first review, second rebase + review pass, then release only after review passes."
+        },
+        "release_protocol": {
+          "score": 0.833,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success"
+          ],
+          "failed_checks": [
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "reason": "Plan includes `jj -R .bacchus/workspaces/LONG-001/ describe -m` with a detailed commit message and `bacchus release LONG-001 --status done`. The blocked/failed status check is not applicable to this scenario (task succeeded), but the plan doesn't show awareness of when to use those statuses. Giving no credit since it's untested rather than demonstrated."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands anywhere. Heartbeats are sent very frequently throughout the plan\u2014at least 12 heartbeat calls via curl with fallback to `bacchus activity`, covering reading context, planning, file creation, editing, review loop, and release phases."
+        }
+      }
+    },
+    {
+      "case_id": "multi-file-footprint",
+      "score": 0.87,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Session started with correct flags and task claimed properly."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show` and `bacchus context` are called, but there is no `bacchus archetype prompt` call and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 1.0,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory",
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "failed_checks": [],
+          "reason": "All jj commands use `-R .bacchus/workspaces/MULTI-001/`, no `cd` is used, and all file paths are fully qualified."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "Modifications to router.tsx and Sidebar.tsx, and creation of Dashboard.tsx, StatsWidget.tsx, ActivityWidget.tsx are consistent with expected footprint. No out-of-footprint changes attempted."
+        },
+        "review_loop": {
+          "score": 0.6,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and bacchus review are present, and release follows review. However, /simplify is never invoked despite being a required review loop step. The 'fixes issues' check gets no credit because the transcript shows only one review iteration with no evidence of handling failures (though review may have passed first try, the loop structure for retry is absent)."
+        },
+        "release_protocol": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [],
+          "reason": "Commit described with a clear message, released with --status done. No blocked/failed scenario arose, so that check is N/A and passes by default."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands used. Multiple heartbeats sent at appropriate phases (reading-codebase, implementing, editing-router, review-loop-1, describing)."
+        }
+      }
+    },
+    {
+      "case_id": "package-dep-addition",
+      "score": 0.75,
+      "details": {
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start agent` with correct --agent-id and --task-id",
+            "Calls `bacchus claim` or `bacchus next` to acquire the task"
+          ],
+          "failed_checks": [],
+          "reason": "Both session start and claim commands are present with correct arguments (worker-1, PKG-001)."
+        },
+        "context_loading": {
+          "score": 0.5,
+          "passed_checks": [
+            "Calls `bacchus task show` or `bacchus context` to understand the task"
+          ],
+          "failed_checks": [
+            "Calls `bacchus archetype prompt` for the task's archetype (or notes it's already injected)"
+          ],
+          "reason": "Both `bacchus task show PKG-001` and `bacchus context --task-id PKG-001` are called, but there is no `bacchus archetype prompt` call and no explicit note that the archetype prompt was already injected."
+        },
+        "workspace_discipline": {
+          "score": 0.5,
+          "passed_checks": [
+            "Uses `jj -R .bacchus/workspaces/<TASK_ID>/` for all VCS commands",
+            "Never uses `cd` to enter the workspace directory"
+          ],
+          "failed_checks": [
+            "Edits files via full paths (.bacchus/workspaces/<TASK_ID>/...)"
+          ],
+          "reason": "All jj commands correctly use `-R .bacchus/workspaces/PKG-001/` and no `cd` is used. However, the edit to `Cargo.toml` and reads of `Cargo.toml`, `src/api/mod.rs`, and `ls src/api/` do not use workspace-prefixed paths. Only the create of rate_limit.rs and the edit of mod.rs use the full `.bacchus/workspaces/PKG-001/` path. Inconsistent path usage."
+        },
+        "footprint_compliance": {
+          "score": 1.0,
+          "passed_checks": [
+            "Only modifies files listed in footprint.modifies",
+            "Only creates files listed in footprint.creates",
+            "When needing out-of-footprint changes, releases as blocked instead of proceeding"
+          ],
+          "failed_checks": [],
+          "reason": "The release reason explicitly states 'all changes within declared footprint.' Modifications are limited to Cargo.toml and src/api/mod.rs, and only src/api/rate_limit.rs is created. No out-of-footprint changes were attempted."
+        },
+        "review_loop": {
+          "score": 0.5,
+          "passed_checks": [
+            "Rebases onto main before releasing: `jj -R ... rebase -d main`",
+            "Runs `bacchus review <TASK_ID>` to validate changes",
+            "Does NOT release as done until review passes"
+          ],
+          "failed_checks": [
+            "Runs /simplify to clean up code",
+            "Fixes issues if review fails, then re-runs the loop"
+          ],
+          "reason": "Rebase and review are present and ordered correctly before release. However, /simplify is explicitly skipped ('skipped as a skill invocation'). No contingency plan or loop for handling review failures\u2014the plan assumes review passes on first try with no retry logic."
+        },
+        "release_protocol": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `jj -R ... describe -m` to set a commit message before release",
+            "Calls `bacchus release <TASK_ID> --status done` on success",
+            "Uses --status blocked or --status failed when appropriate for the scenario"
+          ],
+          "failed_checks": [],
+          "reason": "Commit message is set via `jj -R ... describe -m` with a well-formatted message, then `bacchus release PKG-001 --status done` is called. The scenario is a success case so --status done is appropriate."
+        },
+        "constraints": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never runs bun/npm/pnpm/yarn install commands",
+            "Sends heartbeats during long work phases (curl or bacchus activity)"
+          ],
+          "failed_checks": [],
+          "reason": "No package install commands are present. Multiple heartbeats are sent throughout the workflow (reading, editing, reviewing, describing phases) via curl with fallback to bacchus activity."
+        }
+      }
+    }
+  ]
+}
