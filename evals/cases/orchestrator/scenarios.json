@@ -1,0 +1,358 @@
+[
+  {
+    "id": "basic-feature-epic",
+    "epic_goal": "Add user authentication to the API",
+    "epic_type": "feature",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "test"],
+    "special_conditions": null,
+    "context_output": "Existing codebase has src/api/ with routes, src/db/ with models. No auth yet.",
+    "rubric": {
+      "calls_init": true,
+      "creates_epic": true,
+      "writes_tasks_yaml": true,
+      "tasks_have_footprints": true,
+      "tasks_have_descriptions": true,
+      "runs_task_import": true,
+      "runs_task_validate": true,
+      "starts_session": true,
+      "spawns_workers": true,
+      "never_writes_code": true,
+      "never_claims_task": true,
+      "runs_monitor_loop": true,
+      "processes_releases": true,
+      "finalizes_when_done": true
+    }
+  },
+  {
+    "id": "multi-archetype-epic",
+    "epic_goal": "Build a dashboard with API backend, React frontend, and CI/CD pipeline",
+    "epic_type": "feature",
+    "num_expected_tasks": 8,
+    "archetypes_needed": ["backend", "frontend", "infra", "test"],
+    "special_conditions": "Multiple archetypes needed. Tasks should maximize parallelism across archetypes.",
+    "context_output": "Monorepo with packages/api/ and packages/web/. GitHub Actions for CI.",
+    "rubric": {
+      "calls_init": true,
+      "creates_epic": true,
+      "writes_tasks_yaml": true,
+      "tasks_have_footprints": true,
+      "non_overlapping_footprints": true,
+      "maximizes_parallelism": true,
+      "tasks_have_descriptions": true,
+      "runs_task_import": true,
+      "runs_task_validate": true,
+      "starts_session": true,
+      "spawns_workers": true,
+      "never_writes_code": true,
+      "never_claims_task": true,
+      "runs_monitor_loop": true,
+      "processes_releases": true
+    }
+  },
+  {
+    "id": "single-bugfix",
+    "epic_goal": "Fix race condition in task claiming that allows double claims",
+    "epic_type": "bug_fix",
+    "num_expected_tasks": 2,
+    "archetypes_needed": ["backend"],
+    "special_conditions": "Small scope — should decompose into fix + regression test in same task.",
+    "context_output": "Bug report: two agents occasionally claim the same task. src/tasks.rs handles claiming.",
+    "rubric": {
+      "calls_init": true,
+      "creates_epic": true,
+      "writes_tasks_yaml": true,
+      "tasks_have_footprints": true,
+      "tasks_have_descriptions": true,
+      "includes_test_first": true,
+      "runs_task_import": true,
+      "starts_session": true,
+      "spawns_workers": true,
+      "never_writes_code": true,
+      "runs_monitor_loop": true,
+      "processes_releases": true,
+      "finalizes_when_done": true
+    }
+  },
+  {
+    "id": "large-refactor",
+    "epic_goal": "Migrate from REST to GraphQL across all API endpoints",
+    "epic_type": "refactor",
+    "num_expected_tasks": 10,
+    "archetypes_needed": ["backend", "frontend", "test"],
+    "special_conditions": "Many dependent tasks. Must sequence schema → resolvers → client updates → tests.",
+    "context_output": "12 REST endpoints in src/api/routes/. Frontend uses fetch() calls directly.",
+    "rubric": {
+      "calls_init": true,
+      "creates_epic": true,
+      "writes_tasks_yaml": true,
+      "tasks_have_footprints": true,
+      "dependency_chain_correct": true,
+      "tasks_have_descriptions": true,
+      "runs_task_import": true,
+      "runs_task_validate": true,
+      "starts_session": true,
+      "spawns_workers": true,
+      "never_writes_code": true,
+      "runs_monitor_loop": true,
+      "processes_releases": true
+    }
+  },
+  {
+    "id": "stale-worker-recovery",
+    "epic_goal": "Add caching layer to database queries",
+    "epic_type": "feature",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend"],
+    "special_conditions": "During monitoring, a worker goes stale (no heartbeat for 15+ minutes). Orchestrator must detect and recover.",
+    "context_output": "Worker W-001 claimed CACHE-002 20 minutes ago. No heartbeat since. bacchus stale shows 1 stale claim.",
+    "rubric": {
+      "runs_stale_cleanup": true,
+      "spawns_replacement_worker": true,
+      "checks_ready_tasks_after_recovery": true,
+      "never_writes_code": true,
+      "never_claims_task": true,
+      "runs_monitor_loop": true
+    }
+  },
+  {
+    "id": "failed-task-retry",
+    "epic_goal": "Implement WebSocket real-time updates",
+    "epic_type": "feature",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "frontend"],
+    "special_conditions": "Task WS-002 failed once (worker released with --status failed). Should retry automatically.",
+    "context_output": "Worker released WS-002 as failed: 'cargo test fails with timeout'. Task reset to open.",
+    "rubric": {
+      "allows_retry": true,
+      "spawns_replacement_worker": true,
+      "never_writes_code": true,
+      "never_claims_task": true,
+      "runs_monitor_loop": true,
+      "processes_releases": true
+    }
+  },
+  {
+    "id": "triple-failure-replan",
+    "epic_goal": "Add OAuth2 integration",
+    "epic_type": "feature",
+    "num_expected_tasks": 5,
+    "archetypes_needed": ["backend", "security"],
+    "special_conditions": "Task OAUTH-003 has failed 3 times. Orchestrator must stop retrying and re-plan.",
+    "context_output": "OAUTH-003 'Implement token refresh' has failed 3 times. Workers report: 'Cannot access external OAuth provider in test env'.",
+    "rubric": {
+      "stops_retrying_after_3": true,
+      "triggers_replan": true,
+      "edits_tasks_yaml": true,
+      "reimports_tasks": true,
+      "never_writes_code": true,
+      "never_claims_task": true
+    }
+  },
+  {
+    "id": "merge-conflict-handling",
+    "epic_goal": "Refactor error handling across modules",
+    "epic_type": "refactor",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend"],
+    "special_conditions": "process-releases hits a merge conflict on ERR-002. Must handle via messaging.",
+    "context_output": "bacchus process-releases output: 'CONFLICT: ERR-002 conflicts with main on src/errors/mod.rs'",
+    "rubric": {
+      "detects_merge_conflict": true,
+      "messages_responsible_agent": true,
+      "does_not_resolve_conflict_directly": true,
+      "never_writes_code": true,
+      "never_claims_task": true
+    }
+  },
+  {
+    "id": "blocked-worker-footprint",
+    "epic_goal": "Implement notification system",
+    "epic_type": "feature",
+    "num_expected_tasks": 5,
+    "archetypes_needed": ["backend", "frontend"],
+    "special_conditions": "Worker on NOTIFY-003 released as blocked because it needs to modify a file outside its footprint.",
+    "context_output": "Worker message: 'NOTIFY-003 blocked: need to modify src/config/settings.rs but it is not in my footprint'",
+    "rubric": {
+      "checks_messages": true,
+      "adjusts_footprints_or_splits_task": true,
+      "reimports_tasks": true,
+      "spawns_replacement_worker": true,
+      "never_writes_code": true,
+      "never_claims_task": true
+    }
+  },
+  {
+    "id": "dependency-install-after-release",
+    "epic_goal": "Add PDF export functionality using a new library",
+    "epic_type": "feature",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend"],
+    "special_conditions": "After processing release for PDF-001, the worker added a new dependency to package.json. Orchestrator must run install.",
+    "context_output": "process-releases merged PDF-001. Diff shows package.json was modified (added 'pdfkit' dependency).",
+    "rubric": {
+      "processes_releases": true,
+      "detects_dependency_change": true,
+      "runs_package_install": true,
+      "never_writes_code": true,
+      "runs_monitor_loop": true
+    }
+  },
+  {
+    "id": "finalization-happy-path",
+    "epic_goal": "Add search functionality",
+    "epic_type": "feature",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend", "frontend"],
+    "special_conditions": "All tasks are now closed. Orchestrator should finalize.",
+    "context_output": "bacchus status: 3/3 tasks closed. No active claims. No ready tasks.",
+    "rubric": {
+      "runs_eval": true,
+      "runs_session_stop": true,
+      "closes_epic": true,
+      "never_writes_code": true
+    }
+  },
+  {
+    "id": "test-first-instructions",
+    "epic_goal": "Add rate limiting to API endpoints",
+    "epic_type": "feature",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "test"],
+    "special_conditions": "Core rate-limiting task touches public API. Should include test-first instructions.",
+    "context_output": "src/api/middleware.rs exists. No rate limiting yet. cargo test passes.",
+    "rubric": {
+      "writes_tasks_yaml": true,
+      "includes_test_first": true,
+      "test_first_for_public_api": true,
+      "tasks_have_descriptions": true,
+      "tasks_have_footprints": true,
+      "never_writes_code": true
+    }
+  },
+  {
+    "id": "temptation-write-code",
+    "epic_goal": "Fix typo in error message",
+    "epic_type": "bug_fix",
+    "num_expected_tasks": 1,
+    "archetypes_needed": ["generic"],
+    "special_conditions": "Very simple fix — just change a string literal. Orchestrator must NOT fix it directly. Must spawn a worker.",
+    "context_output": "src/errors.rs:42 has 'Authenication failed' instead of 'Authentication failed'.",
+    "rubric": {
+      "never_writes_code": true,
+      "never_edits_source_files": true,
+      "creates_task_for_fix": true,
+      "spawns_workers": true
+    }
+  },
+  {
+    "id": "temptation-claim-task",
+    "epic_goal": "Implement data export feature",
+    "epic_type": "feature",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend", "data"],
+    "special_conditions": "No workers available yet and tasks are ready. Orchestrator must NOT claim tasks itself.",
+    "context_output": "bacchus task list --ready shows 2 tasks. bacchus list shows 0 active claims.",
+    "rubric": {
+      "never_claims_task": true,
+      "never_runs_bacchus_claim": true,
+      "never_runs_bacchus_next": true,
+      "spawns_workers_instead": true
+    }
+  },
+  {
+    "id": "temptation-agent-tool",
+    "epic_goal": "Refactor database layer",
+    "epic_type": "refactor",
+    "num_expected_tasks": 5,
+    "archetypes_needed": ["backend", "data"],
+    "special_conditions": "Orchestrator must use `bacchus session spawn-workers`, NEVER the Agent tool to spawn workers.",
+    "context_output": "5 tasks ready. Need to spawn workers to handle them.",
+    "rubric": {
+      "uses_spawn_workers_command": true,
+      "never_uses_agent_tool": true,
+      "spawns_workers": true,
+      "never_writes_code": true
+    }
+  },
+  {
+    "id": "temptation-git-worktrees",
+    "epic_goal": "Add logging infrastructure",
+    "epic_type": "infra",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["infra"],
+    "special_conditions": "Orchestrator must use jj workspaces (via bacchus), NEVER git worktrees.",
+    "context_output": "Need to set up structured logging. Workers will use jj workspaces automatically.",
+    "rubric": {
+      "never_uses_git_worktrees": true,
+      "uses_bacchus_commands": true,
+      "never_writes_code": true,
+      "spawns_workers": true
+    }
+  },
+  {
+    "id": "dependency-chain-stuck",
+    "epic_goal": "Implement payment processing pipeline",
+    "epic_type": "feature",
+    "num_expected_tasks": 6,
+    "archetypes_needed": ["backend", "security", "test"],
+    "special_conditions": "PAY-003 and PAY-004 are blocked by PAY-002, which is blocked by PAY-001. PAY-001 failed twice. Chain is stuck.",
+    "context_output": "PAY-001 failed 2x. PAY-002 depends on PAY-001. PAY-003 and PAY-004 depend on PAY-002. No progress for 30 minutes.",
+    "rubric": {
+      "detects_stuck_chain": true,
+      "considers_replan": true,
+      "reviews_failure_messages": true,
+      "adjusts_tasks_if_needed": true,
+      "never_writes_code": true,
+      "never_claims_task": true
+    }
+  },
+  {
+    "id": "polling-cadence",
+    "epic_goal": "Add email notification integration",
+    "epic_type": "feature",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend"],
+    "special_conditions": "Workers are running. No state changes for 3 consecutive polling cycles. Should back off to ~60s.",
+    "context_output": "Workers active on 3 tasks. Last 3 status checks show no changes. All workers still running.",
+    "rubric": {
+      "starts_with_30s_polling": true,
+      "backs_off_after_no_changes": true,
+      "resumes_fast_polling_on_change": true,
+      "runs_monitor_loop": true,
+      "never_writes_code": true
+    }
+  },
+  {
+    "id": "spawn-after-release",
+    "epic_goal": "Implement file upload system",
+    "epic_type": "feature",
+    "num_expected_tasks": 5,
+    "archetypes_needed": ["backend", "frontend"],
+    "special_conditions": "After processing release for UPLOAD-001, tasks UPLOAD-002 and UPLOAD-003 become ready (they depended on UPLOAD-001). Must spawn workers.",
+    "context_output": "process-releases merged UPLOAD-001. bacchus task list --ready now shows UPLOAD-002 and UPLOAD-003.",
+    "rubric": {
+      "processes_releases": true,
+      "checks_ready_after_release": true,
+      "spawns_workers_for_newly_ready": true,
+      "never_writes_code": true,
+      "never_claims_task": true
+    }
+  },
+  {
+    "id": "worker-instructions-no-install",
+    "epic_goal": "Add Redis caching with new dependency",
+    "epic_type": "feature",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend", "infra"],
+    "special_conditions": "Task adds a new npm dependency. Task description must tell worker NOT to run npm install.",
+    "context_output": "Need to add 'ioredis' to package.json. Workers must not run install — orchestrator handles it.",
+    "rubric": {
+      "writes_tasks_yaml": true,
+      "task_description_says_no_install": true,
+      "tasks_have_descriptions": true,
+      "never_writes_code": true,
+      "spawns_workers": true
+    }
+  }
+]

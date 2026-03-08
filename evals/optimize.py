@@ -29,12 +29,15 @@ from gepa.api import optimize
 
 from evaluators.proxy import (
     _claude_prompt,
+    build_orchestrator_simulation_prompt,
     build_simulation_prompt,
+    evaluate_orchestrator,
     evaluate_worker,
+    run_orchestrator_simulation,
     run_simulation,
     score_transcript,
 )
-from evaluators.rubrics import WORKER_RUBRIC
+from evaluators.rubrics import ORCHESTRATOR_RUBRIC, WORKER_RUBRIC
 
 PROMPT_PATHS: dict[str, str] = {
     "worker": "skills/bacchus/commands/bacchus-worker.md",
@@ -73,8 +76,24 @@ type Trajectory = dict[str, Any]
 type RolloutOutput = tuple[float, dict]
 
 
+EVALUATORS = {
+    "worker": evaluate_worker,
+    "orchestrator": evaluate_orchestrator,
+}
+
+SIMULATION_BUILDERS = {
+    "worker": (build_simulation_prompt, run_simulation),
+    "orchestrator": (build_orchestrator_simulation_prompt, run_orchestrator_simulation),
+}
+
+
 class BacchusPromptAdapter:
     """GEPA adapter that evaluates bacchus prompts via claude -p simulation."""
+
+    def __init__(self, prompt_type: str = "worker"):
+        self.prompt_type = prompt_type
+        self._evaluator = EVALUATORS[prompt_type]
+        self._build_sim, self._run_sim = SIMULATION_BUILDERS[prompt_type]
 
     def evaluate(
         self,
@@ -89,7 +108,7 @@ class BacchusPromptAdapter:
 
         for scenario in batch:
             try:
-                score, details = evaluate_worker(prompt_text, scenario)
+                score, details = self._evaluator(prompt_text, scenario)
             except Exception as e:
                 print(f"  [ERROR] {scenario.get('id', '?')}: {e}", file=sys.stderr)
                 score, details = 0.0, {"error": str(e)}
@@ -98,9 +117,8 @@ class BacchusPromptAdapter:
             outputs.append((score, details))
 
             if capture_traces:
-                # Build trace: the simulation prompt + scoring details
-                sim_prompt = build_simulation_prompt(prompt_text, scenario)
-                transcript = run_simulation(sim_prompt)
+                sim_prompt = self._build_sim(prompt_text, scenario)
+                transcript = self._run_sim(sim_prompt)
                 trajectories.append({
                     "scenario_id": scenario.get("id", "unknown"),
                     "scenario": scenario,
@@ -274,7 +292,8 @@ def run_eval_only(prompt_type: str, max_cases: int | None = None):
     if max_cases:
         cases = cases[:max_cases]
 
-    summary = run_evaluation(prompt, evaluate_worker, cases)
+    evaluator = EVALUATORS[prompt_type]
+    summary = run_evaluation(prompt, evaluator, cases)
 
     OPTIMIZED_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -294,7 +313,7 @@ def run_optimization(
         cases = cases[:max_cases]
 
     train, val = split_cases(cases)
-    adapter = BacchusPromptAdapter()
+    adapter = BacchusPromptAdapter(prompt_type)
 
     seed_candidate = {"prompt": seed}
 

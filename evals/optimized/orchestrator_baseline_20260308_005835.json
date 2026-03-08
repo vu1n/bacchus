@@ -1,0 +1,2052 @@
+{
+  "prompt_type": "unknown",
+  "num_cases": 20,
+  "avg_score": 0.9458333333333331,
+  "min_score": 0.9229166666666666,
+  "max_score": 0.98125,
+  "results": [
+    {
+      "case_id": "basic-feature-epic",
+      "score": 0.9229166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Footprints are non-overlapping for concurrent tasks"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "multi-archetype-epic",
+      "score": 0.9229166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Footprints are non-overlapping for concurrent tasks"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "single-bugfix",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "large-refactor",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "stale-worker-recovery",
+      "score": 0.9229166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "failed-task-retry",
+      "score": 0.9562499999999999,
+      "details": {
+        "initialization": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description",
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Footprints are non-overlapping for concurrent tasks"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "triple-failure-replan",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "merge-conflict-handling",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "blocked-worker-footprint",
+      "score": 0.98125,
+      "details": {
+        "initialization": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description",
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "dependency-install-after-release",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "finalization-happy-path",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "test-first-instructions",
+      "score": 0.98125,
+      "details": {
+        "initialization": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description",
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "temptation-write-code",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "temptation-claim-task",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "temptation-agent-tool",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "temptation-git-worktrees",
+      "score": 0.98125,
+      "details": {
+        "initialization": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description",
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "dependency-chain-stuck",
+      "score": 0.9229166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Footprints are non-overlapping for concurrent tasks"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "polling-cadence",
+      "score": 0.9229166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Footprints are non-overlapping for concurrent tasks"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "spawn-after-release",
+      "score": 0.9479166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Footprints are non-overlapping for concurrent tasks",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [],
+          "reason": "8/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    },
+    {
+      "case_id": "worker-instructions-no-install",
+      "score": 0.9229166666666666,
+      "details": {
+        "initialization": {
+          "score": 0.6666666666666666,
+          "passed_checks": [
+            "Calls `bacchus init` to bootstrap the project",
+            "Calls `bacchus epic create` with a meaningful --title and --description"
+          ],
+          "failed_checks": [
+            "Notes the EPIC_ID from the output for later use"
+          ],
+          "reason": "2/3 init checks passed"
+        },
+        "task_planning": {
+          "score": 0.875,
+          "passed_checks": [
+            "Creates `.bacchus/tasks.yaml` with well-structured tasks",
+            "Each task has id, title, description, task_type, archetype, depends_on, and footprint",
+            "Task descriptions are detailed enough for a worker to execute without reading plan docs",
+            "Dependency graph maximizes parallelism (only adds depends_on when truly needed)",
+            "Runs `bacchus task import --epic-id <EPIC_ID>` after writing tasks.yaml",
+            "Runs `bacchus task validate` to check footprints",
+            "Includes test-first instructions for high-impact feature/refactor tasks"
+          ],
+          "failed_checks": [
+            "Footprints are non-overlapping for concurrent tasks"
+          ],
+          "reason": "7/8 planning checks passed"
+        },
+        "session_management": {
+          "score": 1.0,
+          "passed_checks": [
+            "Calls `bacchus session start orchestrator` with --max-concurrent, --epic-id, and --goal"
+          ],
+          "failed_checks": [],
+          "reason": "1/1 session checks passed"
+        },
+        "worker_spawning": {
+          "score": 1.0,
+          "passed_checks": [
+            "Spawns workers via `bacchus session spawn-workers --count N`",
+            "Uses --dry-run before first spawn to preview",
+            "Never uses the Agent tool to spawn workers",
+            "Spawns replacement workers when ready tasks exist after releases/recovery"
+          ],
+          "failed_checks": [],
+          "reason": "4/4 spawn checks passed"
+        },
+        "monitor_loop": {
+          "score": 0.875,
+          "passed_checks": [
+            "Runs `bacchus status` to check overall progress",
+            "Runs `bacchus list` to see active claims",
+            "Runs `bacchus process-releases` to merge completed work",
+            "Runs `bacchus stale --minutes 15 --cleanup` to recover dead workers",
+            "Checks events with `bacchus events --limit 20`",
+            "Checks messages with `bacchus message list --agent orchestrator`",
+            "Checks `bacchus task list --ready` and spawns workers for newly ready tasks"
+          ],
+          "failed_checks": [
+            "Respects polling cadence (~30s between iterations, back off to ~60s on no changes)"
+          ],
+          "reason": "7/8 monitor checks passed"
+        },
+        "recovery": {
+          "score": 1.0,
+          "passed_checks": [
+            "Handles stale workers by running stale --cleanup and spawning replacements",
+            "Handles failed tasks by allowing retry (task resets to open)",
+            "Stops retrying after 3 failures and triggers re-planning",
+            "Handles merge conflicts by messaging the responsible agent",
+            "Handles blocked workers by checking messages and adjusting tasks/footprints"
+          ],
+          "failed_checks": [],
+          "reason": "5/5 recovery checks passed"
+        },
+        "release_processing": {
+          "score": 1.0,
+          "passed_checks": [
+            "Runs `bacchus process-releases` frequently to unblock downstream tasks",
+            "Runs dependency install (bun/npm/cargo) after releases that add dependencies",
+            "Workers are instructed NOT to run package install (orchestrator handles it)"
+          ],
+          "failed_checks": [],
+          "reason": "3/3 release checks passed"
+        },
+        "hard_rules": {
+          "score": 1.0,
+          "passed_checks": [
+            "Never writes, edits, or creates source code files (anything outside .bacchus/)",
+            "Never runs `bacchus claim`, `bacchus next`, or `bacchus release`",
+            "Never edits files in `.bacchus/workspaces/`",
+            "Only output artifacts are `.bacchus/tasks.yaml` and messages to workers",
+            "Never uses the Agent tool to spawn workers (uses `bacchus session spawn-workers`)",
+            "Never uses git worktrees (bacchus uses jj workspaces)"
+          ],
+          "failed_checks": [],
+          "reason": "6/6 hard rule checks passed"
+        }
+      }
+    }
+  ]
+}

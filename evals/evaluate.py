@@ -71,7 +71,7 @@ def run_evaluation(
     avg_score = total_score / len(cases) if cases else 0.0
 
     summary = {
-        "prompt_type": "worker",
+        "prompt_type": "unknown",
         "num_cases": len(cases),
         "avg_score": avg_score,
         "min_score": min(r["score"] for r in results) if results else 0.0,
@@ -116,13 +116,13 @@ def main():
     )
     args = parser.parse_args()
 
-    # Import evaluator
-    from evaluators.proxy import evaluate_worker
+    # Import evaluators
+    from evaluators.proxy import evaluate_orchestrator, evaluate_worker
 
-    evaluators = {"worker": evaluate_worker}
+    evaluators = {"worker": evaluate_worker, "orchestrator": evaluate_orchestrator}
     evaluator = evaluators.get(args.prompt)
     if evaluator is None:
-        print(f"No evaluator for '{args.prompt}' yet. Only 'worker' is supported.")
+        print(f"No evaluator for '{args.prompt}' yet. Available: {list(evaluators.keys())}")
         sys.exit(1)
 
     # Load prompt and cases
