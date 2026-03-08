@@ -1,0 +1,700 @@
+[
+  {
+    "id": "bacchus-add-cli-command",
+    "epic_goal": "Add a `bacchus metrics` CLI command that shows task throughput stats per agent",
+    "input_format": "goal-only",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "bacchus",
+      "language": "Rust",
+      "file_tree": [
+        "src/main.rs",
+        "src/cli/mod.rs",
+        "src/db/connection.rs",
+        "src/db/schema.rs",
+        "src/tasks/crud.rs",
+        "src/tasks/types.rs",
+        "src/tools/eval.rs",
+        "src/tools/mod.rs",
+        "src/tools/symbols.rs",
+        "src/workers.rs"
+      ],
+      "symbols": [
+        "src/cli/mod.rs::Commands (enum) — CLI command routing",
+        "src/tools/eval.rs::generate_eval_report(epic_id, days) -> EvalOutput",
+        "src/tools/eval.rs::WorkerReliabilityMetrics (struct)",
+        "src/tools/eval.rs::AgentStat (struct)",
+        "src/workers.rs::WorkerRunStats (struct)",
+        "src/workers.rs::get_run_worker_stats(run_id) -> WorkerRunStats",
+        "src/db/connection.rs::with_db(f) -> Result<T>"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 3,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true
+    }
+  },
+  {
+    "id": "aeon-fullstack-feature",
+    "epic_goal": "Add a travel itinerary planner: shared schema, server service + workflow, and web UI page",
+    "input_format": "goal-prd",
+    "prd": "## Travel Itinerary Planner\n\n### Requirements\n- New Zod schema in `packages/shared` for itineraries (title, destinations[], dates, notes)\n- Server service that creates/lists/updates itineraries using Drizzle ORM\n- Server workflow for AI-powered itinerary suggestions\n- SvelteKit page at `/itineraries` with create form and list view\n- Shared types used by both server and web\n\n### Acceptance Criteria\n- POST /itineraries creates a new itinerary\n- GET /itineraries returns user's itineraries\n- AI suggestion workflow generates 3 destination recommendations\n- Web page renders itinerary list and create form",
+    "num_expected_tasks": 5,
+    "archetypes_needed": ["backend", "frontend", "data"],
+    "codebase_context": {
+      "project": "aeon-v2",
+      "language": "TypeScript",
+      "file_tree": [
+        "packages/shared/src/index.ts",
+        "packages/shared/src/domains.ts",
+        "packages/shared/src/schemas/travel.ts",
+        "packages/shared/src/schemas/projects.ts",
+        "apps/server/src/main.ts",
+        "apps/server/src/registry.ts",
+        "apps/server/src/services/projects.ts",
+        "apps/server/src/services/research.ts",
+        "apps/server/src/storage/db.ts",
+        "apps/server/src/storage/schema.ts",
+        "apps/server/src/workflows/discovery.ts",
+        "apps/server/src/workflows/deep-research.ts",
+        "apps/web/src/routes/+page.svelte",
+        "apps/web/svelte.config.js",
+        "apps/web/tailwind.config.ts"
+      ],
+      "symbols": [
+        "packages/shared/src/schemas/projects.ts::ProjectSchema (Zod schema)",
+        "packages/shared/src/schemas/projects.ts::CreateProjectRequestSchema (Zod schema)",
+        "packages/shared/src/domains.ts::DomainSchema (enum)",
+        "apps/server/src/registry.ts — service registry (Hono app)",
+        "apps/server/src/services/projects.ts — CRUD service pattern",
+        "apps/server/src/storage/schema.ts — Drizzle schema definitions",
+        "apps/server/src/workflows/discovery.ts — workflow pattern with AI calls"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 5,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_multi_archetype": true
+    }
+  },
+  {
+    "id": "canopy-refactor-indexer",
+    "epic_goal": "Refactor the core indexer to separate file discovery from symbol extraction, making each independently testable",
+    "input_format": "goal-only",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "canopy",
+      "language": "Rust",
+      "file_tree": [
+        "Cargo.toml",
+        "canopy-core/Cargo.toml",
+        "canopy-core/src/lib.rs",
+        "canopy-core/src/index/mod.rs",
+        "canopy-core/src/index/file_discovery.rs",
+        "canopy-core/src/index/pipeline.rs",
+        "canopy-core/src/index/search.rs",
+        "canopy-core/src/index/symbol_cache.rs",
+        "canopy-core/src/index/expand.rs",
+        "canopy-core/src/index/test_helpers.rs",
+        "canopy-core/src/parse/tree_sitter_parse.rs",
+        "canopy-core/src/parse/mod.rs",
+        "canopy-service/src/evidence/symbol_extraction.rs",
+        "canopy-service/src/routes/query.rs"
+      ],
+      "symbols": [
+        "canopy-core/src/index/mod.rs — re-exports for index module",
+        "canopy-core/src/index/pipeline.rs — main indexing pipeline",
+        "canopy-core/src/index/file_discovery.rs — file discovery logic",
+        "canopy-core/src/index/symbol_cache.rs — symbol caching",
+        "canopy-core/src/index/search.rs — search implementation",
+        "canopy-service/src/evidence/symbol_extraction.rs::extract_symbol_candidates_from_handles",
+        "canopy-core/src/parse/tree_sitter_parse.rs — tree-sitter parsing"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 4,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": false
+    }
+  },
+  {
+    "id": "bacchus-fix-race-condition",
+    "epic_goal": "Fix race condition in claim logic where two agents can claim the same task simultaneously",
+    "input_format": "goal-only",
+    "num_expected_tasks": 2,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "bacchus",
+      "language": "Rust",
+      "file_tree": [
+        "src/tasks/readiness.rs",
+        "src/tasks/crud.rs",
+        "src/tasks/lease.rs",
+        "src/tasks/types.rs",
+        "src/db/connection.rs",
+        "src/tools/claim.rs",
+        "src/tools/next.rs",
+        "src/testutil.rs"
+      ],
+      "symbols": [
+        "src/tasks/readiness.rs::claim_sqlite_task(task_id, agent_id) -> Result<SqliteTask>",
+        "src/tasks/readiness.rs::claim_next_sqlite_task(agent_id) -> Result<Option<SqliteTask>>",
+        "src/tasks/lease.rs::try_acquire_orchestrator_lease(holder_id, ttl_ms) -> Result<bool>",
+        "src/db/connection.rs::with_db(f) -> Result<T>",
+        "src/db/connection.rs::with_savepoint(conn, name, f) -> Result<T>",
+        "src/tools/claim.rs::claim_task(...) -> ClaimOutput"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 2,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": false,
+      "expects_test_first": true
+    }
+  },
+  {
+    "id": "flowloop-add-mcp-tool",
+    "epic_goal": "Add a new MCP tool 'getSessionHistory' that returns past session events with filtering",
+    "input_format": "goal-prd",
+    "prd": "## Session History MCP Tool\n\n### Requirements\n- New schema in `packages/contracts` for SessionHistoryInput and SessionHistoryOutput\n- New tool in `packages/mcp-adapter/src/tools/` implementing the MCP tool\n- Engine API route for session history queries\n- Database query for event history with optional filters (sessionId, eventType, timeRange)\n\n### Acceptance Criteria\n- MCP tool registered and callable\n- Returns events filtered by sessionId, optionally by type and time range\n- Contract types shared between engine and mcp-adapter\n- Vitest tests for the new tool and route",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "flowloop",
+      "language": "TypeScript",
+      "file_tree": [
+        "packages/contracts/src/index.ts",
+        "packages/contracts/src/schemas.ts",
+        "packages/contracts/src/types.ts",
+        "packages/engine/src/api/routes.ts",
+        "packages/engine/src/events/bus.ts",
+        "packages/engine/src/events/types.ts",
+        "packages/engine/src/events/handlers.ts",
+        "packages/engine/src/db/client.ts",
+        "packages/engine/src/db/schema.ts",
+        "packages/mcp-adapter/src/index.ts",
+        "packages/mcp-adapter/src/mcpServer.ts",
+        "packages/mcp-adapter/src/tools/startSession.ts",
+        "packages/mcp-adapter/src/tools/vibeCommand.ts",
+        "packages/mcp-adapter/src/tools/logFeedback.ts"
+      ],
+      "symbols": [
+        "packages/contracts/src/schemas.ts::StartSessionInputSchema (Zod)",
+        "packages/contracts/src/schemas.ts::StartSessionOutputSchema (Zod)",
+        "packages/contracts/src/types.ts — inferred types from schemas",
+        "packages/mcp-adapter/src/mcpServer.ts — MCP server setup, tool registration",
+        "packages/mcp-adapter/src/tools/startSession.ts — tool implementation pattern",
+        "packages/engine/src/api/routes.ts — Hono route registration",
+        "packages/engine/src/events/types.ts::MusicEvent (interface)",
+        "packages/engine/src/db/schema.ts — Drizzle schema"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 4,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_contracts_first": true
+    }
+  },
+  {
+    "id": "bacchus-security-audit",
+    "epic_goal": "Security audit of all SQLite database queries for injection vulnerabilities",
+    "input_format": "goal-only",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["security", "test"],
+    "codebase_context": {
+      "project": "bacchus",
+      "language": "Rust",
+      "file_tree": [
+        "src/db/connection.rs",
+        "src/db/schema.rs",
+        "src/tasks/crud.rs",
+        "src/tasks/queries.rs",
+        "src/tasks/readiness.rs",
+        "src/tasks/validation.rs",
+        "src/tasks/yaml.rs",
+        "src/workers.rs",
+        "src/events.rs",
+        "src/messages.rs",
+        "src/handles.rs"
+      ],
+      "symbols": [
+        "src/db/connection.rs::with_db(f) -> Result<T> — DB access wrapper",
+        "src/tasks/crud.rs::create_sqlite_task(input) — task creation",
+        "src/tasks/queries.rs::get_blocking_deps(task_id) — dependency query",
+        "src/tasks/queries.rs::get_footprint_conflicts(task_id) — conflict detection",
+        "src/messages.rs::send_message(input) — message insertion",
+        "src/handles.rs::create_handle(...) — handle creation",
+        "src/workers.rs::create_worker_attempt(...) — worker tracking"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 3,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_security_archetype": true
+    }
+  },
+  {
+    "id": "aeon-db-migration",
+    "epic_goal": "Add a 'tags' system: new DB table, migration, service layer updates, and API endpoints",
+    "input_format": "goal-prd",
+    "prd": "## Tags System\n\n### Requirements\n- New `tags` table in Drizzle schema (id, name, color, created_at)\n- New `memory_tags` junction table for many-to-many relationship\n- Drizzle migration generated and applied\n- Tag CRUD service (create, list, delete, assign to memory, remove from memory)\n- API routes for tag management\n- Update memory queries to include tags in responses\n\n### Constraints\n- Migration must be backward-compatible\n- Tag names must be unique per user\n- Deleting a tag removes all associations",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["data", "backend"],
+    "codebase_context": {
+      "project": "aeon-v2",
+      "language": "TypeScript",
+      "file_tree": [
+        "apps/server/drizzle.config.ts",
+        "apps/server/src/storage/db.ts",
+        "apps/server/src/storage/schema.ts",
+        "apps/server/src/services/memory.ts",
+        "apps/server/src/services/knowledge.ts",
+        "apps/server/src/main.ts",
+        "apps/server/src/registry.ts",
+        "packages/shared/src/schemas/memories.ts",
+        "packages/shared/src/schemas/knowledge.ts",
+        "packages/shared/src/domains.ts"
+      ],
+      "symbols": [
+        "apps/server/src/storage/schema.ts — Drizzle table definitions",
+        "apps/server/src/storage/db.ts — database client setup",
+        "apps/server/src/services/memory.ts — memory CRUD service",
+        "apps/server/src/registry.ts — Hono app, route registration",
+        "packages/shared/src/schemas/memories.ts — memory Zod schemas",
+        "packages/shared/src/domains.ts::MemoryTypeSchema, MemoryStatusSchema"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 4,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": false,
+      "expects_strict_ordering": true
+    }
+  },
+  {
+    "id": "flowloop-learning-module",
+    "epic_goal": "Add a learning preference module that tracks user feedback and adjusts music generation",
+    "input_format": "goal-file-pointer",
+    "file_pointer": "docs/learning-module-spec.md",
+    "prd": "See docs/learning-module-spec.md for full specification. Key points: preference model stored in DB, feedback events from MCP tool, vector embeddings for similarity, preference-weighted planner adjustments.",
+    "num_expected_tasks": 5,
+    "archetypes_needed": ["backend", "data", "test"],
+    "codebase_context": {
+      "project": "flowloop",
+      "language": "TypeScript",
+      "file_tree": [
+        "packages/contracts/src/schemas.ts",
+        "packages/contracts/src/types.ts",
+        "packages/engine/src/learning/embeddings.ts",
+        "packages/engine/src/learning/preferences.ts",
+        "packages/engine/src/db/client.ts",
+        "packages/engine/src/db/schema.ts",
+        "packages/engine/src/db/vector.ts",
+        "packages/engine/src/events/bus.ts",
+        "packages/engine/src/events/types.ts",
+        "packages/engine/src/music/planner.ts",
+        "packages/engine/src/music/types.ts",
+        "packages/mcp-adapter/src/tools/logFeedback.ts"
+      ],
+      "symbols": [
+        "packages/engine/src/learning/preferences.ts — preference tracking (exists but minimal)",
+        "packages/engine/src/learning/embeddings.ts — vector embedding utilities",
+        "packages/engine/src/db/vector.ts — vector storage layer",
+        "packages/engine/src/music/planner.ts::planMusic(input) -> MusicPlan",
+        "packages/engine/src/music/planner.ts::PlannerInput (interface)",
+        "packages/engine/src/events/types.ts::MusicEvent (interface)",
+        "packages/mcp-adapter/src/tools/logFeedback.ts — feedback tool pattern"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 5,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_monorepo_isolation": true
+    }
+  },
+  {
+    "id": "canopy-optimize-token-counting",
+    "epic_goal": "Optimize token counting performance — profiling shows BPE tokenizer is 40% of query latency",
+    "input_format": "goal-only",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "canopy",
+      "language": "Rust",
+      "file_tree": [
+        "canopy-core/src/parse/bpe.rs",
+        "canopy-core/src/parse/mod.rs",
+        "canopy-core/src/parse/markdown.rs",
+        "canopy-core/src/capped_map.rs",
+        "canopy-core/src/scoring.rs",
+        "canopy-core/src/query/executor.rs",
+        "canopy-core/src/query/params.rs",
+        "canopy-service/src/metrics.rs",
+        "benchmark/run-ab-test.sh"
+      ],
+      "symbols": [
+        "canopy-core/src/parse/bpe.rs — BPE tokenizer implementation",
+        "canopy-core/src/capped_map.rs::CappedMap<K,V> — LRU-style cache",
+        "canopy-core/src/scoring.rs — scoring with token counts",
+        "canopy-core/src/query/executor.rs::execute_query_with_options",
+        "canopy-service/src/metrics.rs::PerformanceMetrics (struct)"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 3,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": false,
+      "expects_profiling_step": true
+    }
+  },
+  {
+    "id": "bacchus-add-http-dependency",
+    "epic_goal": "Add reqwest HTTP client dependency and implement a version check API call in the updater module",
+    "input_format": "goal-only",
+    "num_expected_tasks": 2,
+    "archetypes_needed": ["backend"],
+    "codebase_context": {
+      "project": "bacchus",
+      "language": "Rust",
+      "file_tree": [
+        "Cargo.toml",
+        "src/updater.rs",
+        "src/config.rs",
+        "src/main.rs"
+      ],
+      "symbols": [
+        "src/updater.rs::check_for_updates() -> UpdateResult<UpdateInfo>",
+        "src/updater.rs::self_update() -> UpdateResult<String>",
+        "src/updater.rs::UpdateError (enum)",
+        "src/updater.rs::UpdateInfo (struct)",
+        "src/config.rs::find_workspace_root() -> Option<PathBuf>"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 2,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": true,
+      "expects_high_parallelism": false
+    }
+  },
+  {
+    "id": "kizuna-temporal-workflow",
+    "epic_goal": "Add a new Temporal workflow for processing Helius transaction data with GCS upload",
+    "input_format": "goal-prd",
+    "prd": "## Transaction Processing Workflow\n\n### Requirements\n- New Temporal workflow: FetchAndStoreTransactions\n- Orchestrates: HeliusActivity.FetchSolanaBlockRange → process/transform → GCSActivities.UploadToGCS\n- New activity for transaction parsing/filtering\n- Configuration via shared Config struct\n- Trigger CLI command to start the workflow\n\n### Acceptance Criteria\n- Workflow fetches block range, processes transactions, uploads results to GCS\n- Activity retries are configured with exponential backoff\n- Trigger command accepts block range as arguments",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "infra"],
+    "codebase_context": {
+      "project": "kizuna",
+      "language": "Go",
+      "file_tree": [
+        "activities/helius.go",
+        "temporal/activities/gcs.go",
+        "temporal/workflows/gcs.go",
+        "temporal/shared/client.go",
+        "temporal/shared/config.go",
+        "temporal/cmd/worker/main.go",
+        "temporal/cmd/trigger/main.go",
+        "infra/pulumi/__main__.py",
+        "infra/pulumi/Pulumi.yaml"
+      ],
+      "symbols": [
+        "activities/helius.go::HeliusActivity (struct)",
+        "activities/helius.go::FetchSolanaBlockRange(ctx, input) -> (*Result, error)",
+        "activities/helius.go::FetchSolanaBlockRangeInput (struct)",
+        "temporal/activities/gcs.go::GCSActivities (struct)",
+        "temporal/activities/gcs.go::UploadToGCS(ctx, input) -> (*Result, error)",
+        "temporal/workflows/gcs.go::GCSUploadWorkflow(ctx, message) -> (*Result, error)",
+        "temporal/shared/config.go::Config (struct)",
+        "temporal/shared/config.go::LoadConfig() Config",
+        "temporal/shared/client.go::NewTemporalClient(cfg, logger) client.Client"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 4,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": false,
+      "expects_cross_language": true
+    }
+  },
+  {
+    "id": "flowloop-design-tokens",
+    "epic_goal": "Create a design system with color tokens, typography scale, and spacing primitives for the web UI",
+    "input_format": "goal-file-pointer",
+    "file_pointer": "docs/design-system-spec.md",
+    "prd": "See docs/design-system-spec.md. Key: CSS custom properties for colors (light/dark), type scale (fluid clamp), spacing (4px grid), component tokens derived from primitives. Must work with existing Tailwind config.",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["design", "frontend"],
+    "codebase_context": {
+      "project": "flowloop",
+      "language": "TypeScript/CSS",
+      "file_tree": [
+        "packages/engine/src/web/index.html",
+        "packages/engine/src/web/home.html",
+        "packages/contracts/src/schemas.ts",
+        "packages/contracts/src/types.ts",
+        "pnpm-workspace.yaml",
+        "tsconfig.base.json"
+      ],
+      "symbols": [
+        "packages/engine/src/web/index.html — main web UI entry point",
+        "packages/engine/src/web/home.html — home page template",
+        "pnpm-workspace.yaml — workspace package list"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 3,
+      "expects_symbol_refs": false,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_design_archetype": true
+    }
+  },
+  {
+    "id": "bacchus-enrich-task-context",
+    "epic_goal": "Enrich task context output with symbol lookup — when showing a task, resolve footprint symbols to their signatures and doc comments",
+    "input_format": "goal-only",
+    "num_expected_tasks": 3,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "bacchus",
+      "language": "Rust",
+      "file_tree": [
+        "src/tools/context/mod.rs",
+        "src/tools/context/task.rs",
+        "src/tools/context/global.rs",
+        "src/tools/symbols.rs",
+        "src/tasks/queries.rs",
+        "src/tasks/types.rs",
+        "src/indexer/types.rs",
+        "src/indexer/extractor.rs"
+      ],
+      "symbols": [
+        "src/tools/context/task.rs::generate_task_context(task_id, workspace_root) -> Result<String>",
+        "src/tools/context/task.rs::get_task_context(task_id) -> Result<TaskContext>",
+        "src/tools/context/task.rs::TaskContext (struct)",
+        "src/tools/symbols.rs::find_symbols(input) -> Result<FindSymbolsOutput>",
+        "src/tools/symbols.rs::SymbolInfo (struct)",
+        "src/tasks/queries.rs::get_task_footprint(task_id) -> Result<TaskFootprint>",
+        "src/indexer/types.rs::ExtractedSymbol (struct)",
+        "src/indexer/types.rs::SymbolKind (enum)"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 3,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": false,
+      "expects_rich_context": true
+    }
+  },
+  {
+    "id": "aeon-vague-optimization",
+    "epic_goal": "Make the server faster",
+    "input_format": "goal-only",
+    "num_expected_tasks": 4,
+    "archetypes_needed": ["backend", "test"],
+    "codebase_context": {
+      "project": "aeon-v2",
+      "language": "TypeScript",
+      "file_tree": [
+        "apps/server/src/main.ts",
+        "apps/server/src/registry.ts",
+        "apps/server/src/services/chat.ts",
+        "apps/server/src/services/retrieval.ts",
+        "apps/server/src/services/memory.ts",
+        "apps/server/src/storage/db.ts",
+        "apps/server/src/storage/embeddings.ts",
+        "apps/server/src/storage/qdrant.ts",
+        "apps/server/src/ai/factory.ts",
+        "apps/server/src/workflows/ingestion.ts",
+        "apps/server/src/workflows/digest.ts"
+      ],
+      "symbols": [
+        "apps/server/src/main.ts — Hono server entry, middleware chain",
+        "apps/server/src/services/retrieval.ts — vector search + reranking",
+        "apps/server/src/services/memory.ts — memory CRUD with embeddings",
+        "apps/server/src/storage/db.ts — Drizzle client + connection pool",
+        "apps/server/src/storage/embeddings.ts — embedding generation",
+        "apps/server/src/storage/qdrant.ts — Qdrant vector DB client",
+        "apps/server/src/ai/factory.ts — AI model provider factory"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 4,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_vague_decomposition": true
+    }
+  },
+  {
+    "id": "canopy-major-feature",
+    "epic_goal": "Add a feedback-driven relevance learning system that uses user signals to improve search quality across all crates",
+    "input_format": "goal-prd",
+    "prd": "## Feedback-Driven Relevance Learning\n\n### Overview\nUse implicit and explicit user feedback to train per-repo relevance models.\n\n### Components\n1. **canopy-core**: New `feedback/` module — FeedbackEvent type, FeedbackStore trait, SQLite impl\n2. **canopy-core**: Update scoring.rs to accept feedback weights\n3. **canopy-service**: New route POST /feedback for recording events\n4. **canopy-service**: Update query route to pass feedback weights to executor\n5. **canopy-client**: New feedback recording methods on ServiceClient\n6. **canopy-client**: Update predict.rs to use feedback history\n7. **canopy-cli**: New `feedback` subcommand for manual feedback entry\n8. **canopy-mcp**: Expose feedback tool for MCP clients\n9. **Integration tests** across service boundaries\n10. **Benchmarks** comparing search quality with/without feedback\n\n### Constraints\n- Must not regress query latency by more than 10%\n- Feedback storage must be per-repo\n- All new public APIs need documentation",
+    "num_expected_tasks": 10,
+    "archetypes_needed": ["backend", "test", "docs"],
+    "codebase_context": {
+      "project": "canopy",
+      "language": "Rust",
+      "file_tree": [
+        "Cargo.toml",
+        "canopy-core/Cargo.toml",
+        "canopy-core/src/lib.rs",
+        "canopy-core/src/scoring.rs",
+        "canopy-core/src/feedback/mod.rs",
+        "canopy-core/src/feedback/store.rs",
+        "canopy-core/src/feedback/tests.rs",
+        "canopy-core/src/query/executor.rs",
+        "canopy-core/src/query/params.rs",
+        "canopy-service/Cargo.toml",
+        "canopy-service/src/main.rs",
+        "canopy-service/src/routes/mod.rs",
+        "canopy-service/src/routes/query.rs",
+        "canopy-service/src/feedback_recording.rs",
+        "canopy-service/tests/integration.rs",
+        "canopy-client/Cargo.toml",
+        "canopy-client/src/lib.rs",
+        "canopy-client/src/service_client.rs",
+        "canopy-client/src/predict.rs",
+        "canopy-client/tests/service_integration.rs",
+        "canopy-cli/Cargo.toml",
+        "canopy-cli/src/commands.rs",
+        "canopy-cli/src/main.rs",
+        "canopy-mcp/Cargo.toml",
+        "canopy-mcp/src/tools.rs",
+        "canopy-mcp/src/schema.rs",
+        "benchmark/run-ab-test.sh"
+      ],
+      "symbols": [
+        "canopy-core/src/scoring.rs — relevance scoring logic",
+        "canopy-core/src/feedback/mod.rs — feedback module (exists, partially implemented)",
+        "canopy-core/src/feedback/store.rs — FeedbackStore trait + SQLite impl",
+        "canopy-core/src/query/executor.rs::execute_query_with_options",
+        "canopy-core/src/query/params.rs — QueryParams struct",
+        "canopy-service/src/routes/query.rs — query route handler",
+        "canopy-service/src/feedback_recording.rs::try_record_feedback_query",
+        "canopy-client/src/service_client.rs::ServiceClient — HTTP client",
+        "canopy-client/src/predict.rs::predict_globs_with_feedback",
+        "canopy-cli/src/commands.rs — CLI subcommand definitions",
+        "canopy-mcp/src/tools.rs — MCP tool handlers"
+      ]
+    },
+    "rubric": {
+      "uses_index": true,
+      "uses_symbol_search": true,
+      "reads_files": true,
+      "task_count_target": 10,
+      "expects_symbol_refs": true,
+      "expects_file_paths": true,
+      "expects_no_line_numbers": true,
+      "expects_gate_criteria": true,
+      "expects_no_install_note": false,
+      "expects_high_parallelism": true,
+      "expects_large_plan": true,
+      "expects_batch_chunking": true
+    }
+  }
+]

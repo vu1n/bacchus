@@ -30,14 +30,17 @@ from gepa.api import optimize
 from evaluators.proxy import (
     _claude_prompt,
     build_orchestrator_simulation_prompt,
+    build_planner_simulation_prompt,
     build_simulation_prompt,
     evaluate_orchestrator,
+    evaluate_planner,
     evaluate_worker,
     run_orchestrator_simulation,
+    run_planner_simulation,
     run_simulation,
     score_transcript,
 )
-from evaluators.rubrics import ORCHESTRATOR_RUBRIC, WORKER_RUBRIC
+from evaluators.rubrics import ORCHESTRATOR_RUBRIC, PLANNER_RUBRIC, WORKER_RUBRIC
 
 PROMPT_PATHS: dict[str, str] = {
     "worker": "skills/bacchus/commands/bacchus-worker.md",
@@ -79,11 +82,13 @@ type RolloutOutput = tuple[float, dict]
 EVALUATORS = {
     "worker": evaluate_worker,
     "orchestrator": evaluate_orchestrator,
+    "planner": evaluate_planner,
 }
 
 SIMULATION_BUILDERS = {
     "worker": (build_simulation_prompt, run_simulation),
     "orchestrator": (build_orchestrator_simulation_prompt, run_orchestrator_simulation),
+    "planner": (build_planner_simulation_prompt, run_planner_simulation),
 }
 
 

@@ -146,10 +146,74 @@ ORCHESTRATOR_RUBRIC: dict = {
 }
 
 
+PLANNER_RUBRIC: dict = {
+    "codebase_exploration": {
+        "weight": 0.10,
+        "checks": [
+            "Runs `bacchus index` to index the codebase",
+            "Runs `bacchus symbols --search` to find relevant symbols",
+            "Reads key files to understand architecture before planning",
+        ],
+    },
+    "task_decomposition": {
+        "weight": 0.15,
+        "checks": [
+            "Task count is within ±50% of expected count for the scenario",
+            "Every task has all required fields (id, title, task_type, archetype, depends_on, footprint)",
+            "Task descriptions are right-sized (50-500 words each)",
+        ],
+    },
+    "footprint_quality": {
+        "weight": 0.20,
+        "checks": [
+            "Footprints prefer symbol-level references (file::Symbol) over bare file-level",
+            "No footprint overlap between concurrent (non-dependent) tasks",
+            "All tasks have non-empty footprints (at least one modifies or creates entry)",
+        ],
+    },
+    "description_quality": {
+        "weight": 0.25,
+        "checks": [
+            "Descriptions reference file paths (src/, .rs, .ts, etc.)",
+            "Descriptions reference symbol names (function/struct/class names) — stable identifiers",
+            "Descriptions do NOT include line numbers (line numbers go stale)",
+            "Descriptions include gate criteria (done when, gate:, verify:, must pass)",
+            "Descriptions include pattern refs (follow pattern in, see example in) or are self-contained",
+            "Descriptions include no-install notes when scenario requires it",
+        ],
+    },
+    "dependency_graph": {
+        "weight": 0.15,
+        "checks": [
+            "All depends_on references point to valid task IDs within the plan",
+            "Dependency graph has no cycles",
+            "Parallelism ratio is high (>50% of tasks immediately runnable)",
+            "Dependencies are minimal (only added when truly needed)",
+        ],
+    },
+    "validation": {
+        "weight": 0.10,
+        "checks": [
+            "Runs `bacchus task import` to load tasks into the system",
+            "Runs `bacchus task validate` to check footprint validity",
+            "Runs `bacchus task list --ready` to verify ready tasks",
+        ],
+    },
+    "constraints": {
+        "weight": 0.05,
+        "checks": [
+            "Only writes .bacchus/tasks.yaml (no source code files)",
+            "Produces a summary with total tasks, parallelism, and critical path",
+        ],
+    },
+}
+
+
 # Maps prompt type -> rubric. Extend as we add planner evals.
 RUBRICS: dict[str, dict] = {
     "worker": WORKER_RUBRIC,
     "orchestrator": ORCHESTRATOR_RUBRIC,
+    "planner": PLANNER_RUBRIC,
 }
 
 

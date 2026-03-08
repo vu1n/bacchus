@@ -117,9 +117,13 @@ def main():
     args = parser.parse_args()
 
     # Import evaluators
-    from evaluators.proxy import evaluate_orchestrator, evaluate_worker
+    from evaluators.proxy import evaluate_orchestrator, evaluate_planner, evaluate_worker
 
-    evaluators = {"worker": evaluate_worker, "orchestrator": evaluate_orchestrator}
+    evaluators = {
+        "worker": evaluate_worker,
+        "orchestrator": evaluate_orchestrator,
+        "planner": evaluate_planner,
+    }
     evaluator = evaluators.get(args.prompt)
     if evaluator is None:
         print(f"No evaluator for '{args.prompt}' yet. Available: {list(evaluators.keys())}")

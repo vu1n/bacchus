@@ -15,10 +15,31 @@ import re
 import subprocess
 import sys
 
-from .rubrics import ORCHESTRATOR_RUBRIC, WORKER_RUBRIC
+import yaml
+
+from .rubrics import ORCHESTRATOR_RUBRIC, PLANNER_RUBRIC, WORKER_RUBRIC
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 DEFAULT_MODEL = os.environ.get("BACCHUS_MODEL", "sonnet")
+
+# Pre-compiled regex patterns for planner description scoring
+_RE_FILE_PATHS = [re.compile(p) for p in [r"src/", r"\.\w{1,4}", r"packages/", r"apps/"]]
+_RE_SYMBOLS = [re.compile(p) for p in [
+    r"[A-Z][a-z]+[A-Z]", r"[a-z]+_[a-z]+", r"`[a-zA-Z_]\w*`", r"::[A-Za-z]",
+]]
+_RE_LINE_NUMBERS = [re.compile(p, re.IGNORECASE) for p in [r"line \d+", r"L\d+", r":\d{2,}"]]
+_RE_GATES = [re.compile(p, re.IGNORECASE) for p in [
+    r"done when", r"gate:", r"verify:", r"must pass", r"acceptance",
+    r"ensure that", r"should (pass|succeed|compile|build)", r"tests? (pass|green|succeed)",
+]]
+_RE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
+    r"follow.{0,20}pattern", r"see.{0,20}example", r"similar to",
+    r"same approach as", r"modeled after", r"consistent with",
+]]
+_RE_NO_INSTALL = [re.compile(p, re.IGNORECASE) for p in [
+    r"do not.{0,20}install", r"don't.{0,20}install", r"no.{0,20}install",
+    r"must not.{0,20}install", r"never.{0,20}install", r"orchestrator.{0,30}install",
+]]
 
 
 def _claude_prompt(prompt: str, system: str | None = None, model: str | None = None) -> str:
@@ -356,7 +377,6 @@ def score_orchestrator_deterministic(
     Returns (weighted_score, category_details).
     """
     commands = _get_commands(transcript)
-    all_text = " ".join(commands)
     files = _files_written(transcript)
     rubric_checks = scenario.get("rubric", {})
     # Full transcript as text for fuzzy keyword matching
@@ -687,5 +707,513 @@ def evaluate_orchestrator(candidate_prompt: str, example: dict) -> tuple[float, 
 
     # Step 2: Score deterministically (0 LLM calls)
     score, details = score_orchestrator_deterministic(transcript, example)
+
+    return score, details
+
+
+# ---------------------------------------------------------------------------
+# Planner simulation + evaluation
+# ---------------------------------------------------------------------------
+
+_PLANNER_SIMULATION_SYSTEM = """\
+You are simulating a Claude Code agent that has been given a planner prompt and a goal.
+The planner decomposes a goal into a .bacchus/tasks.yaml file for parallel agent execution.
+
+Produce a JSON object with:
+{
+  "commands": ["bacchus index src/", "bacchus symbols --search auth", ...],
+  "tasks_yaml": "<valid YAML string for the tasks file>",
+  "summary": {
+    "total_tasks": 5,
+    "parallel_initial": 3,
+    "critical_path_length": 2
+  }
+}
+
+Rules:
+- commands: list EXACT shell commands the agent would run (bacchus index, bacchus symbols, cat/read files, bacchus task import, validate, list --ready)
+- tasks_yaml: produce VALID YAML content for the tasks file. Each task MUST have: id, title, task_type, archetype, description, depends_on, footprint (with modifies/creates).
+- Descriptions should be detailed (50-500 words) with file paths, symbol names, gate criteria. Do NOT include line numbers.
+- Footprints should use symbol-level refs where possible (file::Symbol) and not overlap between concurrent tasks.
+- summary: include total_tasks, parallel_initial (tasks with no dependencies), critical_path_length
+- Output ONLY the JSON object, no other text."""
+
+
+def build_planner_simulation_prompt(candidate_prompt: str, scenario: dict) -> str:
+    """Build the user message for planner simulation."""
+    parts = [
+        "## Planner Prompt (the agent's instructions)\n",
+        candidate_prompt,
+        "\n\n## Planning Scenario\n",
+        f"**Goal:** {scenario['epic_goal']}\n",
+        f"**Input format:** {scenario['input_format']}\n",
+        f"**Expected tasks:** ~{scenario['num_expected_tasks']}\n",
+        f"**Archetypes needed:** {json.dumps(scenario['archetypes_needed'])}\n",
+    ]
+
+    if scenario.get("prd"):
+        parts.append(f"\n**PRD/Requirements:**\n{scenario['prd']}\n")
+
+    if scenario.get("file_pointer"):
+        parts.append(f"\n**File pointer:** {scenario['file_pointer']}\n")
+
+    ctx = scenario.get("codebase_context", {})
+    if ctx:
+        parts.append(f"\n**Project:** {ctx.get('project', 'unknown')} ({ctx.get('language', 'unknown')})\n")
+        if ctx.get("file_tree"):
+            parts.append("\n**File tree:**\n```\n")
+            for f in ctx["file_tree"]:
+                parts.append(f"{f}\n")
+            parts.append("```\n")
+        if ctx.get("symbols"):
+            parts.append("\n**Key symbols:**\n")
+            for s in ctx["symbols"]:
+                parts.append(f"- {s}\n")
+
+    parts.append(
+        "\n---\n"
+        "Simulate this planner agent decomposing the goal into tasks. "
+        "Produce the full output as JSON including commands, tasks_yaml, and summary."
+    )
+    return "".join(parts)
+
+
+def run_planner_simulation(prompt: str, model: str | None = None) -> dict:
+    """Run planner simulation via claude -p and parse the JSON transcript."""
+    try:
+        text = _claude_prompt(prompt, system=_PLANNER_SIMULATION_SYSTEM, model=model)
+    except subprocess.TimeoutExpired:
+        print("  [TIMEOUT] Planner simulation timed out", file=sys.stderr)
+        return {"commands": [], "tasks_yaml": "", "summary": {}, "error": "Simulation timed out"}
+    result = _parse_json(text)
+    if not result:
+        return {"commands": [], "tasks_yaml": "", "summary": {}, "error": "Failed to parse simulation"}
+    return result
+
+
+def _parse_tasks_yaml(yaml_str: str) -> list[dict]:
+    """Parse a tasks_yaml string into a list of task dicts."""
+    if not yaml_str or not yaml_str.strip():
+        return []
+
+    try:
+        data = yaml.safe_load(yaml_str)
+    except yaml.YAMLError:
+        return []
+
+    if isinstance(data, dict) and "tasks" in data:
+        tasks = data["tasks"]
+    elif isinstance(data, list):
+        tasks = data
+    else:
+        return []
+
+    return [t for t in tasks if isinstance(t, dict)]
+
+
+def _count_words(text: str) -> int:
+    """Count words in a text string."""
+    return len(text.split()) if text else 0
+
+
+def _has_cycle(tasks: list[dict]) -> bool:
+    """Check if the dependency graph has a cycle (DFS)."""
+    task_ids = {t.get("id", "") for t in tasks}
+    deps: dict[str, list[str]] = {}
+    for t in tasks:
+        tid = t.get("id", "")
+        deps[tid] = [d for d in (t.get("depends_on") or []) if d in task_ids]
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {tid: WHITE for tid in task_ids}
+
+    def dfs(node: str) -> bool:
+        color[node] = GRAY
+        for dep in deps.get(node, []):
+            if color.get(dep) == GRAY:
+                return True
+            if color.get(dep) == WHITE and dfs(dep):
+                return True
+        color[node] = BLACK
+        return False
+
+    return any(color[tid] == WHITE and dfs(tid) for tid in task_ids)
+
+
+def _get_concurrent_pairs(tasks: list[dict]) -> list[tuple[dict, dict]]:
+    """Get all pairs of tasks that could run concurrently (no dependency relationship)."""
+    task_map = {t.get("id", ""): t for t in tasks}
+
+    # Build full reachability (transitive closure of depends_on)
+    all_deps: dict[str, set[str]] = {}
+    for t in tasks:
+        tid = t.get("id", "")
+        all_deps[tid] = set(t.get("depends_on") or [])
+
+    # Transitive closure
+    changed = True
+    while changed:
+        changed = False
+        for tid, deps in all_deps.items():
+            new_deps = set()
+            for d in deps:
+                new_deps |= all_deps.get(d, set())
+            before = len(deps)
+            deps |= new_deps
+            if len(deps) > before:
+                changed = True
+
+    pairs = []
+    task_list = list(task_map.keys())
+    for i in range(len(task_list)):
+        for j in range(i + 1, len(task_list)):
+            a, b = task_list[i], task_list[j]
+            # Concurrent if neither depends on the other (transitively)
+            if a not in all_deps.get(b, set()) and b not in all_deps.get(a, set()):
+                pairs.append((task_map[a], task_map[b]))
+
+    return pairs
+
+
+def _get_footprint_entries(task: dict) -> set[str]:
+    """Extract all footprint entries (modifies + creates) from a task."""
+    fp = task.get("footprint") or {}
+    entries = set()
+    for entry in (fp.get("modifies") or []):
+        entries.add(entry)
+    for entry in (fp.get("creates") or []):
+        entries.add(entry)
+    return entries
+
+
+def _footprints_overlap(fp_a: set[str], fp_b: set[str]) -> bool:
+    """Check if two footprint entry sets overlap (file-level comparison)."""
+    # Normalize to file level for overlap check (strip ::Symbol suffix)
+    def file_of(entry: str) -> str:
+        return entry.split("::")[0] if "::" in entry else entry
+
+    files_a = {file_of(e) for e in fp_a}
+    files_b = {file_of(e) for e in fp_b}
+    return bool(files_a & files_b)
+
+
+def score_planner_deterministic(
+    transcript: dict,
+    scenario: dict,
+) -> tuple[float, dict]:
+    """Score a planner transcript deterministically via YAML parsing + pattern matching.
+
+    Returns (weighted_score, category_details).
+    """
+    commands = _get_commands(transcript)
+    tasks_yaml_str = transcript.get("tasks_yaml", "")
+    tasks = _parse_tasks_yaml(tasks_yaml_str)
+    summary = transcript.get("summary", {})
+    rubric_checks = scenario.get("rubric", {})
+
+    details: dict[str, dict] = {}
+
+    # --- codebase_exploration ---
+    checks_exp = PLANNER_RUBRIC["codebase_exploration"]["checks"]
+    passed, failed = [], []
+    if _commands_contain(commands, "bacchus", "index"):
+        passed.append(checks_exp[0])
+    else:
+        failed.append(checks_exp[0])
+    if _commands_contain(commands, "bacchus", "symbols", "--search"):
+        passed.append(checks_exp[1])
+    else:
+        failed.append(checks_exp[1])
+    # Reads files — check for cat, read, or file read commands
+    if _commands_contain_any(commands, "cat ", "read ", "bacchus handle expand", "bacchus symbols"):
+        passed.append(checks_exp[2])
+    else:
+        failed.append(checks_exp[2])
+    cat_score = len(passed) / max(len(checks_exp), 1)
+    details["codebase_exploration"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_exp)} exploration checks passed",
+    }
+
+    # --- task_decomposition ---
+    checks_decomp = PLANNER_RUBRIC["task_decomposition"]["checks"]
+    passed, failed = [], []
+    target = rubric_checks.get("task_count_target", scenario.get("num_expected_tasks", 3))
+    actual = len(tasks)
+    # Within ±50%
+    low = max(1, int(target * 0.5))
+    high = int(target * 1.5)
+    if low <= actual <= high:
+        passed.append(checks_decomp[0])
+    else:
+        failed.append(checks_decomp[0])
+    # Required fields
+    required_fields = ["id", "title", "task_type", "archetype", "depends_on", "footprint"]
+    if tasks:
+        all_have_fields = all(
+            all(f in t for f in required_fields)
+            for t in tasks
+        )
+        if all_have_fields:
+            passed.append(checks_decomp[1])
+        else:
+            failed.append(checks_decomp[1])
+    else:
+        failed.append(checks_decomp[1])
+    # Description word count 50-500
+    if tasks:
+        desc_sizes = [_count_words(t.get("description", "")) for t in tasks]
+        good_sizes = sum(1 for w in desc_sizes if 50 <= w <= 500)
+        if good_sizes >= len(tasks) * 0.7:  # 70% threshold
+            passed.append(checks_decomp[2])
+        else:
+            failed.append(checks_decomp[2])
+    else:
+        failed.append(checks_decomp[2])
+    cat_score = len(passed) / max(len(checks_decomp), 1)
+    details["task_decomposition"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_decomp)} decomposition checks passed (actual={actual}, target={target})",
+    }
+
+    # --- footprint_quality ---
+    checks_fp = PLANNER_RUBRIC["footprint_quality"]["checks"]
+    passed, failed = [], []
+    if tasks:
+        # Symbol-level preference: count entries with :: vs total
+        all_entries = []
+        for t in tasks:
+            all_entries.extend(_get_footprint_entries(t))
+        symbol_level = sum(1 for e in all_entries if "::" in e)
+        total_entries = len(all_entries)
+        if total_entries > 0 and symbol_level / total_entries >= 0.3:
+            passed.append(checks_fp[0])
+        else:
+            failed.append(checks_fp[0])
+
+        # No overlap between concurrent tasks
+        concurrent_pairs = _get_concurrent_pairs(tasks)
+        has_overlap = False
+        fp_cache = {t.get("id", ""): _get_footprint_entries(t) for t in tasks}
+        for ta, tb in concurrent_pairs:
+            if _footprints_overlap(fp_cache[ta.get("id", "")], fp_cache[tb.get("id", "")]):
+                has_overlap = True
+                break
+        if not has_overlap:
+            passed.append(checks_fp[1])
+        else:
+            failed.append(checks_fp[1])
+
+        # Non-empty footprints
+        all_have_fp = all(len(_get_footprint_entries(t)) > 0 for t in tasks)
+        if all_have_fp:
+            passed.append(checks_fp[2])
+        else:
+            failed.append(checks_fp[2])
+    else:
+        failed.extend(checks_fp)
+    cat_score = len(passed) / max(len(checks_fp), 1)
+    details["footprint_quality"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_fp)} footprint checks passed",
+    }
+
+    # --- description_quality ---
+    checks_desc = PLANNER_RUBRIC["description_quality"]["checks"]
+    passed, failed = [], []
+    if tasks:
+        descriptions = [t.get("description", "") for t in tasks]
+        all_descs = " ".join(descriptions)
+
+        # File path references
+        has_file_paths = any(p.search(all_descs) for p in _RE_FILE_PATHS)
+        if has_file_paths:
+            passed.append(checks_desc[0])
+        else:
+            failed.append(checks_desc[0])
+
+        # Symbol name references (CamelCase or snake_case identifiers that look like code)
+        has_symbols = rubric_checks.get("expects_symbol_refs", True) is False or any(
+            p.search(all_descs) for p in _RE_SYMBOLS
+        )
+        if has_symbols:
+            passed.append(checks_desc[1])
+        else:
+            failed.append(checks_desc[1])
+
+        # NO line numbers (penalize)
+        has_line_numbers = any(p.search(all_descs) for p in _RE_LINE_NUMBERS)
+        if not has_line_numbers:
+            passed.append(checks_desc[2])
+        else:
+            failed.append(checks_desc[2])
+
+        # Gate criteria
+        has_gates = any(p.search(all_descs) for p in _RE_GATES)
+        if has_gates:
+            passed.append(checks_desc[3])
+        else:
+            failed.append(checks_desc[3])
+
+        # Pattern refs or self-contained
+        has_pattern_refs = any(p.search(all_descs) for p in _RE_PATTERNS)
+        # Self-contained = descriptions are long enough to stand alone
+        avg_words = sum(_count_words(d) for d in descriptions) / max(len(descriptions), 1)
+        if has_pattern_refs or avg_words >= 80:
+            passed.append(checks_desc[4])
+        else:
+            failed.append(checks_desc[4])
+
+        # No-install notes (only when scenario requires it)
+        if rubric_checks.get("expects_no_install_note"):
+            has_no_install = any(p.search(all_descs) for p in _RE_NO_INSTALL)
+            if has_no_install:
+                passed.append(checks_desc[5])
+            else:
+                failed.append(checks_desc[5])
+        else:
+            passed.append(checks_desc[5])  # N/A
+    else:
+        failed.extend(checks_desc)
+    cat_score = len(passed) / max(len(checks_desc), 1)
+    details["description_quality"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_desc)} description checks passed",
+    }
+
+    # --- dependency_graph ---
+    checks_dep = PLANNER_RUBRIC["dependency_graph"]["checks"]
+    passed, failed = [], []
+    if tasks:
+        task_ids = {t.get("id", "") for t in tasks}
+
+        # Valid refs
+        all_deps_valid = True
+        for t in tasks:
+            for dep in (t.get("depends_on") or []):
+                if dep not in task_ids:
+                    all_deps_valid = False
+                    break
+        if all_deps_valid:
+            passed.append(checks_dep[0])
+        else:
+            failed.append(checks_dep[0])
+
+        # No cycles
+        if not _has_cycle(tasks):
+            passed.append(checks_dep[1])
+        else:
+            failed.append(checks_dep[1])
+
+        # Parallelism ratio > 50%
+        no_deps = sum(1 for t in tasks if not (t.get("depends_on") or []))
+        parallelism_ratio = no_deps / len(tasks) if tasks else 0
+        if parallelism_ratio > 0.5 or not rubric_checks.get("expects_high_parallelism", True):
+            passed.append(checks_dep[2])
+        else:
+            failed.append(checks_dep[2])
+
+        # Minimal deps — average deps per task should be low
+        total_deps = sum(len(t.get("depends_on") or []) for t in tasks)
+        avg_deps = total_deps / len(tasks) if tasks else 0
+        if avg_deps <= 1.5:
+            passed.append(checks_dep[3])
+        else:
+            failed.append(checks_dep[3])
+    else:
+        failed.extend(checks_dep)
+    cat_score = len(passed) / max(len(checks_dep), 1)
+    details["dependency_graph"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_dep)} dependency checks passed",
+    }
+
+    # --- validation ---
+    checks_val = PLANNER_RUBRIC["validation"]["checks"]
+    passed, failed = [], []
+    if _commands_contain(commands, "bacchus", "task", "import"):
+        passed.append(checks_val[0])
+    else:
+        failed.append(checks_val[0])
+    if _commands_contain(commands, "bacchus", "task", "validate"):
+        passed.append(checks_val[1])
+    else:
+        failed.append(checks_val[1])
+    if _commands_contain(commands, "bacchus", "task", "list", "--ready"):
+        passed.append(checks_val[2])
+    else:
+        failed.append(checks_val[2])
+    cat_score = len(passed) / max(len(checks_val), 1)
+    details["validation"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_val)} validation checks passed",
+    }
+
+    # --- constraints ---
+    checks_con = PLANNER_RUBRIC["constraints"]["checks"]
+    passed, failed = [], []
+    # Only writes tasks.yaml
+    files = _files_written(transcript)
+    source_files = [f for f in files if f and "tasks.yaml" not in f and ".bacchus/" not in f]
+    if not source_files:
+        passed.append(checks_con[0])
+    else:
+        failed.append(checks_con[0])
+    # Produces summary
+    has_summary = bool(summary) or "summary" in transcript
+    if has_summary:
+        passed.append(checks_con[1])
+    else:
+        failed.append(checks_con[1])
+    cat_score = len(passed) / max(len(checks_con), 1)
+    details["constraints"] = {
+        "score": cat_score,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "reason": f"{len(passed)}/{len(checks_con)} constraint checks passed",
+    }
+
+    # --- compute weighted total ---
+    total = 0.0
+    for category, config in PLANNER_RUBRIC.items():
+        cat_score = details.get(category, {}).get("score", 0.0)
+        total += cat_score * config["weight"]
+
+    return total, details
+
+
+def evaluate_planner(candidate_prompt: str, example: dict) -> tuple[float, dict]:
+    """Proxy evaluator for planner prompt optimization.
+
+    1. Simulate planner behavior via claude -p (1 LLM call)
+    2. Score the transcript deterministically via YAML parsing + pattern matching (0 LLM calls)
+
+    Args:
+        candidate_prompt: The planner prompt text being evaluated.
+        example: A scenario dict from cases/planner/scenarios.json.
+
+    Returns:
+        (score, details) where score is 0.0-1.0 and details is per-category.
+    """
+    sim_model = os.environ.get("BACCHUS_SIM_MODEL", None)
+
+    # Step 1: Simulate (1 LLM call)
+    sim_prompt = build_planner_simulation_prompt(candidate_prompt, example)
+    transcript = run_planner_simulation(sim_prompt, model=sim_model)
+
+    # Step 2: Score deterministically (0 LLM calls)
+    score, details = score_planner_deterministic(transcript, example)
 
     return score, details
