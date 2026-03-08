@@ -1924,7 +1924,10 @@ tasks:
                     .unwrap_or(false)
         });
 
-        assert!(has_run_id, "Expected run_id on release reconciliation event");
+        assert!(
+            has_run_id,
+            "Expected run_id on release reconciliation event"
+        );
     }
 
     #[test]

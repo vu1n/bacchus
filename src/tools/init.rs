@@ -301,7 +301,10 @@ fn ensure_archetypes(workspace_root: &Path, force: bool) -> Result<(bool, bool),
 }
 
 /// Install slash commands to .claude/commands/
-fn ensure_commands(workspace_root: &Path, force: bool) -> Result<(Vec<String>, Vec<String>), String> {
+fn ensure_commands(
+    workspace_root: &Path,
+    force: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let commands_dir = workspace_root.join(".claude/commands");
     fs::create_dir_all(&commands_dir).map_err(|e| e.to_string())?;
 

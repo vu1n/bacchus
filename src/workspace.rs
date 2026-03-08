@@ -295,7 +295,10 @@ pub fn get_conflict_files(
 // ============================================================================
 
 /// Check if a workspace is registered in jj (regardless of whether its directory exists)
-pub fn is_workspace_registered(workspace_root: &Path, task_id: &str) -> Result<bool, WorkspaceError> {
+pub fn is_workspace_registered(
+    workspace_root: &Path,
+    task_id: &str,
+) -> Result<bool, WorkspaceError> {
     validate_task_id(task_id)?;
 
     let workspace_list = run_jj(
@@ -326,10 +329,7 @@ pub fn get_changed_files_by_commit(
     workspace_root: &Path,
     commit_id: &str,
 ) -> Result<Vec<String>, WorkspaceError> {
-    let output = run_jj(
-        workspace_root,
-        &["diff", "--stat", "-r", commit_id],
-    )?;
+    let output = run_jj(workspace_root, &["diff", "--stat", "-r", commit_id])?;
 
     let files: Vec<String> = output
         .lines()
@@ -394,10 +394,7 @@ pub fn rebase_commit_onto_main(
     commit_id: &str,
 ) -> Result<String, WorkspaceError> {
     // Rebase the commit onto main
-    run_jj(
-        workspace_root,
-        &["rebase", "-r", commit_id, "-d", "main"],
-    )?;
+    run_jj(workspace_root, &["rebase", "-r", commit_id, "-d", "main"])?;
 
     // Get the new commit ID (rebase changes it)
     // After rebase, the commit is a child of main — find it

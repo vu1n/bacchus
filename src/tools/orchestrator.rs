@@ -86,10 +86,7 @@ pub enum MergeCompletionResult {
 ///
 /// Inspects DB + jj state, performs only the remaining steps needed.
 /// Both reconciliation and main loop call this.
-fn attempt_merge_completion(
-    workspace_root: &Path,
-    task: &SqliteTask,
-) -> MergeCompletionResult {
+fn attempt_merge_completion(workspace_root: &Path, task: &SqliteTask) -> MergeCompletionResult {
     // Branch 1: We have a release_commit_id already set
     if let Some(ref commit_id) = task.release_commit_id {
         return complete_from_commit_id(workspace_root, task, commit_id);
@@ -97,8 +94,8 @@ fn attempt_merge_completion(
 
     // Branch 2: No commit_id — try to get one via rebase
     // Check if workspace is registered in jj
-    let ws_registered = workspace::is_workspace_registered(workspace_root, &task.id)
-        .unwrap_or(false);
+    let ws_registered =
+        workspace::is_workspace_registered(workspace_root, &task.id).unwrap_or(false);
 
     if ws_registered {
         return rebase_and_complete(workspace_root, task);
@@ -152,10 +149,7 @@ fn complete_from_commit_id(
 }
 
 /// Rebase workspace onto main, set commit_id, advance, close.
-fn rebase_and_complete(
-    workspace_root: &Path,
-    task: &SqliteTask,
-) -> MergeCompletionResult {
+fn rebase_and_complete(workspace_root: &Path, task: &SqliteTask) -> MergeCompletionResult {
     match workspace::rebase_workspace_onto_main(workspace_root, &task.id) {
         Ok(ReleaseResult::Conflicts { files }) => {
             let _ = tasks::mark_task_needs_resolution(&task.id, &files);
@@ -427,9 +421,8 @@ fn phase_reconcile(
     run_id: Option<&str>,
     output: &mut ProcessReleasesOutput,
 ) -> Result<(), String> {
-    let releasing_tasks =
-        tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Releasing), false)
-            .map_err(|e| e.to_string())?;
+    let releasing_tasks = tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Releasing), false)
+        .map_err(|e| e.to_string())?;
 
     for task in releasing_tasks {
         renew_orchestrator_lease(run_id)?;
@@ -610,9 +603,8 @@ pub fn verify_release_invariants() -> Result<VerifyOutput, String> {
     let mut violations = Vec::new();
 
     // Check all releasing tasks
-    let releasing =
-        tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Releasing), false)
-            .map_err(|e| e.to_string())?;
+    let releasing = tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Releasing), false)
+        .map_err(|e| e.to_string())?;
 
     for task in &releasing {
         // Releasing without release_started_at
@@ -633,9 +625,8 @@ pub fn verify_release_invariants() -> Result<VerifyOutput, String> {
     }
 
     // Check closed tasks with leftover workspaces
-    let closed =
-        tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Closed), false)
-            .map_err(|e| e.to_string())?;
+    let closed = tasks::list_sqlite_tasks(None, Some(SqliteTaskStatus::Closed), false)
+        .map_err(|e| e.to_string())?;
 
     for task in &closed {
         if task.release_commit_id.is_some() && task.claimed_by.is_some() {
@@ -1001,8 +992,8 @@ mod tests {
             claimed_by: None,
             claimed_at: None,
             claimed_heartbeat_at: None,
-            ready_commit_id: None,       // No ready commit
-            release_commit_id: None,     // No release commit
+            ready_commit_id: None,   // No ready commit
+            release_commit_id: None, // No release commit
             release_started_at: Some(chrono::Utc::now().timestamp_millis()),
             release_attempt_count: 0,
             completed_at: None,

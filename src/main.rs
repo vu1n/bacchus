@@ -675,12 +675,11 @@ fn dispatch_update(
     // No binary update (already latest, network error, or --assets-only).
     // Write assets from current binary.
     let binary_note = match &binary_result {
-        Some(BinaryUpdateResult::AlreadyLatest(v)) => {
-            Some(format!("already on latest: {}", v))
-        }
-        Some(BinaryUpdateResult::Failed(e)) => {
-            Some(format!("binary update failed: {} (continuing with asset refresh)", e))
-        }
+        Some(BinaryUpdateResult::AlreadyLatest(v)) => Some(format!("already on latest: {}", v)),
+        Some(BinaryUpdateResult::Failed(e)) => Some(format!(
+            "binary update failed: {} (continuing with asset refresh)",
+            e
+        )),
         _ => None,
     };
 
