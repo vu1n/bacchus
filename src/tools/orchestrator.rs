@@ -763,9 +763,9 @@ mod tests {
 
         #[derive(Debug)]
         struct Case {
-            has_commit: bool,
-            ws_registered: bool,
-            has_ready_commit: bool,
+            _has_commit: bool,
+            _ws_registered: bool,
+            _has_ready_commit: bool,
             // Expected: set of allowable result variants
             allowed: &'static [&'static str],
         }
@@ -773,51 +773,51 @@ mod tests {
         let cases = vec![
             // (true, true, true) — commit already on main
             Case {
-                has_commit: true,
-                ws_registered: true,
-                has_ready_commit: true,
+                _has_commit: true,
+                _ws_registered: true,
+                _has_ready_commit: true,
                 allowed: &["Closed", "RetryLater"],
             },
             // (true, true, false) — commit exists, not on main yet
             Case {
-                has_commit: true,
-                ws_registered: true,
-                has_ready_commit: true,
+                _has_commit: true,
+                _ws_registered: true,
+                _has_ready_commit: true,
                 allowed: &["Closed", "RetryLater"],
             },
             // (true, false, true) — commit on main, no workspace
             Case {
-                has_commit: true,
-                ws_registered: false,
-                has_ready_commit: true,
+                _has_commit: true,
+                _ws_registered: false,
+                _has_ready_commit: true,
                 allowed: &["Closed", "RetryLater"],
             },
             // (true, false, false) — commit not on main, no workspace
             Case {
-                has_commit: true,
-                ws_registered: false,
-                has_ready_commit: false,
+                _has_commit: true,
+                _ws_registered: false,
+                _has_ready_commit: false,
                 allowed: &["Closed", "RetryLater"],
             },
             // (false, true, _) — no commit, workspace registered
             Case {
-                has_commit: false,
-                ws_registered: true,
-                has_ready_commit: false,
+                _has_commit: false,
+                _ws_registered: true,
+                _has_ready_commit: false,
                 allowed: &["Closed", "Conflicts", "RetryLater", "NeedsResolution"],
             },
             // (false, false, true) — no commit, no ws, has ready_commit
             Case {
-                has_commit: false,
-                ws_registered: false,
-                has_ready_commit: true,
+                _has_commit: false,
+                _ws_registered: false,
+                _has_ready_commit: true,
                 allowed: &["Closed", "NeedsResolution", "RetryLater"],
             },
             // (false, false, false) — completely unrecoverable
             Case {
-                has_commit: false,
-                ws_registered: false,
-                has_ready_commit: false,
+                _has_commit: false,
+                _ws_registered: false,
+                _has_ready_commit: false,
                 allowed: &["NeedsResolution"],
             },
         ];
