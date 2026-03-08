@@ -209,6 +209,7 @@ fn main() {
         Commands::SelfUpdate => updater::self_update()
             .map_err(|e| BacchusError::Task(e.to_string()))
             .and_then(|v| pretty_json(&serde_json::json!({"success": true, "updated_to": v}))),
+        Commands::Verify => to_json(tools::verify_release_invariants()),
         Commands::Context { task_id } => tools::generate_context(task_id, &workspace_root)
             .map(Output::Raw)
             .map_err(BacchusError::Task),

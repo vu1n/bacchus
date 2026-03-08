@@ -177,6 +177,9 @@ pub enum Commands {
         command: MessageCommands,
     },
 
+    /// Verify release state machine invariants
+    Verify,
+
     /// Manage agent archetypes
     Archetype {
         #[command(subcommand)]

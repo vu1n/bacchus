@@ -1910,18 +1910,21 @@ tasks:
         assert!(events_output.status.success());
         let events: Value = serde_json::from_slice(&events_output.stdout).unwrap();
         let entries = events.as_array().unwrap();
+        // The new state machine escalates unrecoverable releasing tasks (no commit, no ws)
+        // instead of resetting them to ready_for_release.
         let has_run_id = entries.iter().any(|e| {
-            e.get("event_type")
-                .and_then(|v| v.as_str())
-                .map(|t| t == "release_reset_timeout")
-                .unwrap_or(false)
+            let event_type = e.get("event_type").and_then(|v| v.as_str()).unwrap_or("");
+            let is_release_event = event_type == "release_unrecoverable"
+                || event_type == "release_escalated"
+                || event_type == "release_retry";
+            is_release_event
                 && e.get("run_id")
                     .and_then(|v| v.as_str())
                     .map(|id| id.starts_with("manual-orchestrator-"))
                     .unwrap_or(false)
         });
 
-        assert!(has_run_id, "Expected run_id on release_reset_timeout event");
+        assert!(has_run_id, "Expected run_id on release reconciliation event");
     }
 
     #[test]

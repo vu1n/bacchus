@@ -18,6 +18,7 @@ fn migrate_add_columns(conn: &Connection) {
     let migrations = [
         "ALTER TABLE tasks ADD COLUMN last_activity TEXT",
         "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER",
+        "ALTER TABLE tasks ADD COLUMN release_attempt_count INTEGER NOT NULL DEFAULT 0",
     ];
     for sql in &migrations {
         let _ = conn.execute_batch(sql); // Ignore "duplicate column" errors

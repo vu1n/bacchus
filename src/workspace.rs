@@ -291,6 +291,63 @@ pub fn get_conflict_files(
 }
 
 // ============================================================================
+// Workspace Introspection
+// ============================================================================
+
+/// Check if a workspace is registered in jj (regardless of whether its directory exists)
+pub fn is_workspace_registered(workspace_root: &Path, task_id: &str) -> Result<bool, WorkspaceError> {
+    validate_task_id(task_id)?;
+
+    let workspace_list = run_jj(
+        workspace_root,
+        &["workspace", "list", "--template", "name ++ \"\\n\""],
+    )?;
+
+    Ok(workspace_list.lines().any(|name| name.trim() == task_id))
+}
+
+/// List all registered non-default workspace names
+pub fn list_registered_workspaces(workspace_root: &Path) -> Result<Vec<String>, WorkspaceError> {
+    let workspace_list = run_jj(
+        workspace_root,
+        &["workspace", "list", "--template", "name ++ \"\\n\""],
+    )?;
+
+    Ok(workspace_list
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|name| !name.is_empty() && name != "default")
+        .collect())
+}
+
+/// Get changed files by commit ID using `jj diff --stat -r {commit_id}`.
+/// Works without a workspace directory — diffs the commit against its parent.
+pub fn get_changed_files_by_commit(
+    workspace_root: &Path,
+    commit_id: &str,
+) -> Result<Vec<String>, WorkspaceError> {
+    let output = run_jj(
+        workspace_root,
+        &["diff", "--stat", "-r", commit_id],
+    )?;
+
+    let files: Vec<String> = output
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.contains('|') {
+                Some(trimmed.split('|').next().unwrap_or("").trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|f| !f.is_empty())
+        .collect();
+
+    Ok(files)
+}
+
+// ============================================================================
 // Release Operations (Orchestrator Only)
 // ============================================================================
 
@@ -330,6 +387,44 @@ pub fn rebase_workspace_onto_main(
     })
 }
 
+/// Rebase a specific commit (by ID) onto main. Works without a workspace directory.
+/// Returns the new commit ID after rebase.
+pub fn rebase_commit_onto_main(
+    workspace_root: &Path,
+    commit_id: &str,
+) -> Result<String, WorkspaceError> {
+    // Rebase the commit onto main
+    run_jj(
+        workspace_root,
+        &["rebase", "-r", commit_id, "-d", "main"],
+    )?;
+
+    // Get the new commit ID (rebase changes it)
+    // After rebase, the commit is a child of main — find it
+    let output = run_jj(
+        workspace_root,
+        &[
+            "log",
+            "--no-graph",
+            "-r",
+            &format!("children(main) & descendants({})", commit_id),
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+        ],
+    )?;
+
+    let new_id = output.trim().to_string();
+    if new_id.is_empty() {
+        // Rebase was a no-op (commit already on main). Returning the original
+        // commit_id is safe — the caller will verify it via is_commit_in_main.
+        Ok(commit_id.to_string())
+    } else {
+        Ok(new_id)
+    }
+}
+
 /// Advance main bookmark to a commit
 pub fn advance_main_bookmark(workspace_root: &Path, commit_id: &str) -> Result<(), WorkspaceError> {
     run_jj(
@@ -339,21 +434,27 @@ pub fn advance_main_bookmark(workspace_root: &Path, commit_id: &str) -> Result<(
     Ok(())
 }
 
-/// Complete release: forget workspace, clean up directory, sync to git
+/// Complete release: clean up directory, forget workspace, sync to git.
+///
+/// Order matters for recovery:
+/// 1. Delete dir first — if this fails, workspace is still registered → sweep catches it
+/// 2. Forget workspace — if this fails after dir is gone, forget is no-op next time
+/// 3. Git export — if this fails, export retried by sweep → non-blocking
 pub fn complete_release(workspace_root: &Path, task_id: &str) -> Result<(), WorkspaceError> {
     validate_task_id(task_id)?;
 
-    // Forget the workspace (preserves commits in repo)
-    let _ = run_jj(workspace_root, &["workspace", "forget", task_id]);
-
-    // Clean up workspace directory
+    // 1. Clean up workspace directory first
     let workspace_path = get_workspaces_dir(workspace_root).join(task_id);
     if workspace_path.exists() {
         std::fs::remove_dir_all(&workspace_path)?;
     }
 
-    // Export jj state to git refs (keeps git in sync after each completed task)
-    let _ = run_jj(workspace_root, &["git", "export"]);
+    // 2. Forget the workspace (preserves commits in repo)
+    let _ = run_jj(workspace_root, &["workspace", "forget", task_id]);
+
+    // 3. Export jj state to git refs (keeps git in sync after each completed task)
+    run_jj(workspace_root, &["git", "export"])
+        .map_err(|e| WorkspaceError::JjError(format!("git export failed: {}", e)))?;
 
     Ok(())
 }

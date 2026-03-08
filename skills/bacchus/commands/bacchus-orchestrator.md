@@ -116,6 +116,13 @@ When NOT to use:
 - Tasks run in parallel unless `depends_on` forces ordering
 - Maximize parallelism: only add dependencies when output is truly needed
 
+**Archive before overwriting:** If `.bacchus/tasks.yaml` already exists from a previous phase,
+archive it before writing new tasks:
+```bash
+mv .bacchus/tasks.yaml .bacchus/tasks-<previous-phase>-archive.yaml
+```
+Determine the label from the existing task IDs or epic context (e.g., `tasks-p4-archive.yaml`).
+
 After writing tasks.yaml:
 ```bash
 bacchus task import --epic-id <EPIC_ID>

@@ -394,6 +394,9 @@ pub struct SqliteTask {
     /// When orchestrator started release attempt
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_started_at: Option<i64>,
+    /// Number of release attempts (for retry budget)
+    #[serde(default)]
+    pub release_attempt_count: i32,
     /// When task was closed (completed_at timestamp)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<i64>,

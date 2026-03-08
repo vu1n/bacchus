@@ -77,7 +77,7 @@ pub use eval::generate_eval_report;
 pub use init::{init_workspace, update_assets, InitOptions};
 pub use list::list_claims;
 pub use next::next_task;
-pub use orchestrator::process_ready_releases;
+pub use orchestrator::{process_ready_releases, verify_release_invariants};
 pub use release::{release_task, ReleaseStatus};
 pub use resolve::resolve_merge;
 pub use review::review_task;

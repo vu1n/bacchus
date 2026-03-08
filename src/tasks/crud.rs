@@ -28,7 +28,7 @@ pub(super) fn require_affected(
 // ============================================================================
 
 pub(crate) const TASK_SELECT_COLUMNS: &str =
-    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, completed_at, last_activity, last_activity_at, created_at, updated_at, deleted_at";
+    "id, epic_id, title, description, priority, status, task_type, archetype, claimed_by, claimed_at, claimed_heartbeat_at, ready_commit_id, release_commit_id, release_started_at, release_attempt_count, completed_at, last_activity, last_activity_at, created_at, updated_at, deleted_at";
 
 pub(crate) fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SqliteTask> {
     let status_str: String = row.get(5)?;
@@ -48,12 +48,13 @@ pub(crate) fn map_sqlite_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<S
         ready_commit_id: row.get(11)?,
         release_commit_id: row.get(12)?,
         release_started_at: row.get(13)?,
-        completed_at: row.get(14)?,
-        last_activity: row.get(15)?,
-        last_activity_at: row.get(16)?,
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
-        deleted_at: row.get(19)?,
+        release_attempt_count: row.get::<_, Option<i32>>(14)?.unwrap_or(0),
+        completed_at: row.get(15)?,
+        last_activity: row.get(16)?,
+        last_activity_at: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
+        deleted_at: row.get(20)?,
     })
 }
 
@@ -141,6 +142,7 @@ pub fn create_sqlite_task(input: CreateSqliteTaskInput) -> Result<SqliteTask, Ta
                 ready_commit_id: None,
                 release_commit_id: None,
                 release_started_at: None,
+                release_attempt_count: 0,
                 completed_at: None,
                 last_activity: None,
                 last_activity_at: None,
@@ -355,6 +357,7 @@ pub fn start_task_release(task_id: &str) -> Result<(), TasksError> {
              SET status = 'releasing',
                  release_commit_id = NULL,
                  release_started_at = ?1,
+                 release_attempt_count = 0,
                  updated_at = ?1
              WHERE id = ?2
                AND status = 'ready_for_release'
@@ -385,6 +388,8 @@ pub fn set_task_release_commit(task_id: &str, release_commit_id: &str) -> Result
 }
 
 /// Reset a release attempt back to `ready_for_release` so orchestrator can retry.
+/// Kept for manual recovery; the state machine now uses escalation instead.
+#[allow(dead_code)]
 pub fn reset_task_release_to_ready(task_id: &str) -> Result<(), TasksError> {
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -474,6 +479,47 @@ pub fn get_tasks_ready_for_release() -> Result<Vec<SqliteTask>, TasksError> {
         Ok(tasks)
     })
     .map_err(|e| TasksError::DbError(e.to_string()))
+}
+
+/// Increment the release attempt counter for a task in `releasing` status.
+pub fn increment_release_attempt_count(task_id: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db_typed(|conn| {
+        require_affected(
+            conn,
+            "UPDATE tasks
+             SET release_attempt_count = release_attempt_count + 1,
+                 updated_at = ?1
+             WHERE id = ?2
+               AND status = 'releasing'
+               AND deleted_at IS NULL",
+            &[&now as &dyn rusqlite::ToSql, &task_id],
+            TasksError::InvalidStatus(format!("Task {} not in releasing status", task_id)),
+        )
+    })
+}
+
+/// Escalate a releasing task to needs_resolution with a reason.
+pub fn escalate_releasing_task(task_id: &str, reason: &str) -> Result<(), TasksError> {
+    let now = chrono::Utc::now().timestamp_millis();
+
+    with_db_typed(|conn| {
+        require_affected(
+            conn,
+            "UPDATE tasks
+             SET status = 'needs_resolution',
+                 updated_at = ?1
+             WHERE id = ?2
+               AND status = 'releasing'
+               AND deleted_at IS NULL",
+            &[&now as &dyn rusqlite::ToSql, &task_id],
+            TasksError::InvalidStatus(format!(
+                "Task {} not in releasing status (escalation: {})",
+                task_id, reason
+            )),
+        )
+    })
 }
 
 /// Reset task from needs_resolution back to in_progress (after resolving conflicts)
