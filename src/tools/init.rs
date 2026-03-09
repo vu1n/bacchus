@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Embedded content (version-matched to binary)
-const SKILL_MD: &str = include_str!("../../skills/bacchus/SKILL.md");
-const ARCHETYPES_YAML: &str = include_str!("../../skills/bacchus/archetypes.yaml");
-const CMD_WORKER: &str = include_str!("../../skills/bacchus/commands/bacchus-worker.md");
-const CMD_ORCHESTRATOR: &str =
+pub const SKILL_MD: &str = include_str!("../../skills/bacchus/SKILL.md");
+pub const ARCHETYPES_YAML: &str = include_str!("../../skills/bacchus/archetypes.yaml");
+pub const CMD_WORKER: &str = include_str!("../../skills/bacchus/commands/bacchus-worker.md");
+pub const CMD_ORCHESTRATOR: &str =
     include_str!("../../skills/bacchus/commands/bacchus-orchestrator.md");
-const CMD_PLAN: &str = include_str!("../../skills/bacchus/commands/bacchus-plan.md");
+pub const CMD_PLAN: &str = include_str!("../../skills/bacchus/commands/bacchus-plan.md");
 
 /// The stop hook command (fail-open design)
-const HOOK_CMD: &str = r#"bacchus session check 2>/dev/null || echo '{"decision":"approve"}'"#;
+pub const HOOK_CMD: &str = r#"bacchus session check 2>/dev/null || echo '{"decision":"approve"}'"#;
 
 /// The activity reporter hook script (generated into .bacchus/hooks/)
 const ACTIVITY_HOOK_SCRIPT: &str = r#"#!/bin/bash
@@ -65,7 +65,7 @@ fi
 "#;
 
 /// The activity hook command reference for settings.json
-const ACTIVITY_HOOK_CMD: &str = ".bacchus/hooks/report-activity.sh";
+pub const ACTIVITY_HOOK_CMD: &str = ".bacchus/hooks/report-activity.sh";
 
 #[derive(Debug, Clone, Copy)]
 pub struct InitOptions<'a> {
