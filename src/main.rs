@@ -266,6 +266,37 @@ fn main() {
             }
         }
 
+        Commands::Clean { remove_all, force } => {
+            if !force {
+                // Show what will be removed
+                let preview = match tools::clean_workspace(remove_all, true) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                println!("{}", preview);
+                println!("\nProceed? [y/N]");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap_or_else(|e| {
+                    eprintln!("Error reading input: {}", e);
+                    std::process::exit(1);
+                });
+                if !input.trim().to_lowercase().starts_with('y') {
+                    Ok(Output::Raw("Cancelled".to_string()))
+                } else {
+                    tools::clean_workspace(remove_all, false)
+                        .map(Output::Raw)
+                        .map_err(BacchusError::Task)
+                }
+            } else {
+                tools::clean_workspace(remove_all, false)
+                    .map(Output::Raw)
+                    .map_err(BacchusError::Task)
+            }
+        }
+
         Commands::Handle { command } => match command {
             HandleCommands::Expand {
                 handle,

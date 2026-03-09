@@ -5,6 +5,7 @@
 pub mod abort;
 pub mod archetypes;
 pub mod claim;
+pub mod clean;
 pub mod context;
 pub mod eval;
 pub mod init;
@@ -72,6 +73,7 @@ pub use archetypes::{
     cmd_archetype_prompt, cmd_list_archetypes, cmd_select_archetype, cmd_show_archetype,
 };
 pub use claim::claim_task;
+pub use clean::clean_workspace;
 pub use context::generate_context;
 pub use eval::generate_eval_report;
 pub use init::{init_workspace, update_assets, InitOptions};

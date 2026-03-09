@@ -201,6 +201,14 @@ pub enum Commands {
         #[command(subcommand)]
         command: HandleCommands,
     },
+
+    /// Remove bacchus hooks and configuration from this repository
+    Clean {
+        #[arg(long, help = "Remove .bacchus/ directory (including DB)")]
+        remove_all: bool,
+        #[arg(long, help = "Skip confirmation prompt")]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
