@@ -914,6 +914,19 @@ pub fn run_worker_command(
         cmd.env("BACCHUS_EVENT_PORT", port.to_string());
     }
 
+    // Scope kypp shared memory to this project when enabled, so the worker's
+    // `kypp briefing/recall/remember` calls bind the right store. Fail-open: if
+    // kypp is not installed the worker prompt's memory steps simply no-op.
+    if let Some(config) = crate::quality::load_config(&workspace_root) {
+        if let Some((project, repo_root)) =
+            crate::quality::resolve_memory_env(&config, &workspace_root)
+        {
+            cmd.env("KYPP_PROJECT", project)
+                .env("KYPP_REPO_ROOT", repo_root)
+                .env("BACCHUS_MEMORY", "1");
+        }
+    }
+
     let output = cmd.output().map_err(|e| e.to_string())?;
     let exit_code = output.status.code();
 

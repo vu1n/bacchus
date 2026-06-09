@@ -40,9 +40,10 @@ WORKER_RUBRIC: dict = {
         "weight": 0.20,
         "checks": [
             "Rebases onto main before releasing: `jj -R ... rebase -d main`",
-            "Runs /simplify to clean up code",
+            "Runs /tighten each review-loop iteration to clean up code",
             "Runs `bacchus review <TASK_ID>` to validate changes",
             "Fixes issues if review fails, then re-runs the loop",
+            "Runs /ship-review as a final gate before releasing as done",
             "Does NOT release as done until review passes",
         ],
     },

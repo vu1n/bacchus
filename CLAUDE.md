@@ -11,8 +11,9 @@ Workspace-based coordination CLI for multi-agent work. Uses jj workspaces + SQLi
 2. bacchus claim <task-id> --agent-id <agent-id>
 3. Work in .bacchus/workspaces/<task-id>/ (use jj -R, NEVER cd)
 4. jj -R .bacchus/workspaces/<task-id>/ rebase -d main
-5. Review loop until green (rebase → /simplify → bacchus review → fix → repeat)
-6. bacchus release <task-id> --status done
+5. Review loop until green (rebase → /tighten → bacchus review → fix → repeat)
+6. /ship-review (final pre-release gate)
+7. bacchus release <task-id> --status done
 ```
 
 ### Key Commands
@@ -190,7 +191,21 @@ worker:
   # stale_grace_ms: 60000
   # max_runtime_ms: null
   # kill_stale: false
+
+memory:                  # Shared memory via kypp (opt-in; requires `kypp` on PATH)
+  # enabled: true
+  # project: "my-project"  # KYPP_PROJECT; defaults to the project directory name
 ```
+
+### Shared Memory (kypp)
+
+When `memory.enabled`, bacchus scopes each worker's environment
+(`KYPP_PROJECT`, `KYPP_REPO_ROOT`, `BACCHUS_MEMORY=1`) so the worker prompt's
+`kypp briefing` / `recall` / `remember` steps bind the right store. Integration
+is **agent-driven and fail-open**: if `kypp` is not installed the steps no-op.
+Code grounding (`KYPP_REPO_ROOT`) points at the canonical project tree, not the
+ephemeral per-task workspace. (Auto-capture/distill of session logs is Phase 2 —
+it depends on `§0` session logs that arrive with the pillbox sandbox.)
 
 ## Environment
 
@@ -201,6 +216,9 @@ Env vars override `.bacchus/config.yaml` values for CI/scripting.
 | `CLAUDE_PROJECT_DIR` | Workspace root (set by Claude Code) |
 | `BACCHUS_DB_PATH` | Override DB location |
 | `BACCHUS_WORKER_CMD` | Override `worker.cmd` from config.yaml |
+| `BACCHUS_MEMORY` | Set to `1` by bacchus when `memory.enabled` — signals workers to use kypp |
+| `KYPP_PROJECT` | kypp project binding, set per-worker from `memory.project` |
+| `KYPP_REPO_ROOT` | Repo root kypp grounds code refs against (the project tree) |
 
 ## Error Handling
 

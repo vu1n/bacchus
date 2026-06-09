@@ -17,6 +17,19 @@ pub struct BacchusConfig {
     pub quality: QualitySection,
     #[serde(default)]
     pub worker: WorkerSection,
+    #[serde(default)]
+    pub memory: MemorySection,
+}
+
+/// kypp shared-memory integration (briefing/recall/remember for workers).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemorySection {
+    /// Enable kypp integration: scope worker env to a kypp project so
+    /// `kypp briefing/recall/remember` bind the right store.
+    #[serde(default)]
+    pub enabled: bool,
+    /// kypp project key (KYPP_PROJECT). Defaults to the project directory name.
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +103,28 @@ pub fn load_config(workspace_root: &Path) -> Option<BacchusConfig> {
     let path = workspace_root.join(".bacchus").join(CONFIG_FILENAME);
     let content = std::fs::read_to_string(&path).ok()?;
     serde_yaml::from_str(&content).ok()
+}
+
+/// Resolve kypp env for a worker: `(KYPP_PROJECT, KYPP_REPO_ROOT)`.
+///
+/// Returns `None` when memory is disabled. The project key is the explicit
+/// `memory.project`, else the workspace directory name (used verbatim as the
+/// kypp binding key). Code grounding (`KYPP_REPO_ROOT`) points at the canonical
+/// project tree, not the ephemeral per-task workspace.
+pub fn resolve_memory_env(
+    config: &BacchusConfig,
+    workspace_root: &Path,
+) -> Option<(String, String)> {
+    if !config.memory.enabled {
+        return None;
+    }
+    let project = config.memory.project.clone().unwrap_or_else(|| {
+        workspace_root
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "default".to_string())
+    });
+    Some((project, workspace_root.to_string_lossy().to_string()))
 }
 
 /// Run all configured quality gate commands against the workspace path.
@@ -276,6 +311,10 @@ pub fn generate_config(workspace_root: &Path) -> String {
     }
     yaml.push_str("\nworker:\n");
     yaml.push_str("  cmd: \"claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'\"\n");
+    yaml.push_str("\n# Shared memory via kypp (briefing/recall/remember). Requires `kypp` on PATH.\n");
+    yaml.push_str("# memory:\n");
+    yaml.push_str("#   enabled: true\n");
+    yaml.push_str("#   project: \"my-project\"   # KYPP_PROJECT; defaults to this directory's name\n");
     yaml
 }
 
@@ -523,6 +562,7 @@ mod tests {
                 lint: None,
             },
             worker: WorkerSection::default(),
+            memory: MemorySection::default(),
         };
         let result = run_quality_gate(&config, dir.path()).unwrap();
         assert!(result.passed);
@@ -539,6 +579,7 @@ mod tests {
                 lint: Some("true".to_string()),
             },
             worker: WorkerSection::default(),
+            memory: MemorySection::default(),
         };
         let result = run_quality_gate(&config, dir.path()).unwrap();
         assert!(!result.passed);
@@ -546,6 +587,46 @@ mod tests {
         assert_eq!(result.checks.len(), 2);
         assert!(result.checks[0].passed);
         assert!(!result.checks[1].passed);
+    }
+
+    #[test]
+    fn test_resolve_memory_env_disabled_by_default() {
+        let config = BacchusConfig {
+            quality: QualitySection::default(),
+            worker: WorkerSection::default(),
+            memory: MemorySection::default(),
+        };
+        assert!(resolve_memory_env(&config, Path::new("/tmp/my-proj")).is_none());
+    }
+
+    #[test]
+    fn test_resolve_memory_env_derives_project_from_dir() {
+        let config = BacchusConfig {
+            quality: QualitySection::default(),
+            worker: WorkerSection::default(),
+            memory: MemorySection {
+                enabled: true,
+                project: None,
+            },
+        };
+        let (project, repo_root) =
+            resolve_memory_env(&config, Path::new("/tmp/my-proj")).unwrap();
+        assert_eq!(project, "my-proj");
+        assert_eq!(repo_root, "/tmp/my-proj");
+    }
+
+    #[test]
+    fn test_resolve_memory_env_explicit_project_wins() {
+        let config = BacchusConfig {
+            quality: QualitySection::default(),
+            worker: WorkerSection::default(),
+            memory: MemorySection {
+                enabled: true,
+                project: Some("custom-key".to_string()),
+            },
+        };
+        let (project, _) = resolve_memory_env(&config, Path::new("/tmp/my-proj")).unwrap();
+        assert_eq!(project, "custom-key");
     }
 
     #[test]

@@ -305,10 +305,8 @@ pub fn generate_eval_report(epic_id: Option<&str>, days: i64) -> Result<EvalOutp
                     "worker_exit_ignored" => {
                         metrics.worker_exit_ignored += 1;
                     }
-                    "worker_exited" => {
-                        if payload["fenced"].as_bool().unwrap_or(false) {
-                            metrics.fenced_worker_exits += 1;
-                        }
+                    "worker_exited" if payload["fenced"].as_bool().unwrap_or(false) => {
+                        metrics.fenced_worker_exits += 1;
                     }
                     _ => {}
                 }

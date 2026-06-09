@@ -26,6 +26,15 @@ bacchus claim <TASK_ID> --agent-id <AGENT_ID>
 bacchus next --agent-id <AGENT_ID>
 ```
 
+**Load shared memory (if `$BACCHUS_MEMORY` is set):** the swarm has a shared
+memory store. Before working, pull the team's accumulated lore — pitfalls first:
+
+```bash
+kypp briefing 2>/dev/null || true   # known traps + decisions for this project
+```
+
+If `kypp` is not on PATH this is a no-op — proceed normally.
+
 ### 2. Understand the Task
 
 Run ALL three commands — do not skip any:
@@ -43,6 +52,18 @@ From the context output, **extract and record**:
 - **Footprint**: the exact `modifies` and `creates` lists — these are your boundaries
 - Active collisions with other agents
 - Risk hints
+
+**Recall relevant memory (if `$BACCHUS_MEMORY` is set):** before touching code in
+your footprint, search the shared store for prior lessons about it:
+
+```bash
+kypp recall "<task title or a footprint file/symbol>" 2>/dev/null || true
+```
+
+Each result is one line: `handle [type ✓conf] subject — content → path:line`. Read
+the lines; `kypp show <handle>` expands one you intend to act on. Trust `👤`
+(human-corrected) and `☑` (verified) claims over your own inference. The line is
+usually enough — only expand what you act on.
 
 ### 3. Validate Footprint Before Starting
 
@@ -125,12 +146,12 @@ Before releasing, you MUST complete this loop. Every step is required — do not
    ```bash
    jj -R .bacchus/workspaces/<TASK_ID>/ resolve
    ```
-3. **Run `/simplify`** — THIS IS MANDATORY. Review all changed code for reuse, quality, and efficiency. Fix every finding before proceeding.
+3. **Run `/tighten`** — THIS IS MANDATORY. Review all changed code for reuse, quality, and efficiency, and apply the fixes. Fix every finding before proceeding.
 4. **Run `bacchus review <TASK_ID>`** — read the full output.
 5. **If review fails with code issues:** fix every failing check, then **go back to step 1**.
-6. **If review passes:** proceed to Release (step 7).
+6. **If review passes:** proceed to the final ship review (step 7).
 
-**You MUST run `/simplify` on every iteration.** Skipping it is a protocol violation.
+**You MUST run `/tighten` on every iteration.** Skipping it is a protocol violation.
 
 **Circuit breaker:**
 - If the loop fails **5 times**, release as `blocked` with error details.
@@ -139,12 +160,36 @@ Before releasing, you MUST complete this loop. Every step is required — do not
 **Do NOT release as `done` until the review loop passes.**
 **Do NOT stop or exit until you have released your task.**
 
-### 7. Describe and Release
+### 7. Final Ship Review (MANDATORY before `done`)
+
+Once the review loop is green, run a final pre-release pass:
+
+1. **Run `/ship-review`** — THIS IS MANDATORY. It is the final gate before this work is merged, equivalent to a pre-PR review. Read the full output.
+2. **If it surfaces blocking issues:** fix them, then **go back to the review loop (step 6)** and re-run `/tighten` + `bacchus review` before returning here.
+3. **If it is clean:** proceed to Release (step 8).
+
+**You MUST run `/ship-review` once before releasing as `done`.** Skipping it is a protocol violation.
+
+### 8. Describe and Release
 
 ```bash
 # Describe your changes
 jj -R .bacchus/workspaces/<TASK_ID>/ describe -m "concise summary of changes"
 ```
+
+**Record durable lessons (if `$BACCHUS_MEMORY` is set):** if you hit a non-obvious
+pitfall, discovered a fact the next agent will need, or made a decision worth
+keeping, write it to shared memory before releasing — including when you release
+as `blocked`/`failed` (a trap you hit is exactly what saves the next agent):
+
+```bash
+kypp remember "<subject — short noun phrase>" "<the distilled lesson>" 2>/dev/null || true
+```
+
+Rules: `subject` is the claim's identity — reuse an existing subject to correct it,
+a new subject creates a new memory. Keep it model-agnostic (write "X fails when…",
+not "I couldn't X"). Distill a reusable lesson, not a transcript. Skip this if you
+learned nothing durable — don't log routine work.
 
 Choose the appropriate release status:
 
@@ -168,7 +213,7 @@ bacchus message send --from <AGENT_ID> --to orchestrator --body "<explain what h
 
 **Never release as `done` if:** review hasn't passed, tests fail, or you touched files outside footprint.
 
-### 8. Handle Merge Conflicts (if notified)
+### 9. Handle Merge Conflicts (if notified)
 
 ```bash
 bacchus resolve <TASK_ID>    # after fixing conflicts
@@ -192,6 +237,23 @@ bacchus handle filter $sym1 --kind fn        # → $sym2
 bacchus handle clear                         # cleanup
 ```
 
+## Memory (kypp) — only when `$BACCHUS_MEMORY` is set
+
+Shared, code-grounded memory across the swarm. All calls fail-open (`|| true`) —
+if `kypp` is not on PATH, skip them. The project is pre-scoped via env (`KYPP_PROJECT`),
+so no `--project` flag is needed.
+
+```bash
+kypp briefing                          # session start: pitfalls + decisions, no query
+kypp recall "<what you're about to touch>"   # before work: one line per claim, with handles
+kypp show <handle>                     # dereference one claim you intend to act on
+kypp remember "<subject>" "<lesson>"   # after work: store a distilled, durable lesson
+```
+
+Protocol: **briefing** once at start → **recall** before non-trivial work →
+**remember** durable lessons (incl. pitfalls) before release. Trust `👤`/`☑`
+claims over your own inference. Write model-agnostic lessons, not transcripts.
+
 ## Rules
 
 1. **Never cd** into a workspace directory
@@ -199,10 +261,11 @@ bacchus handle clear                         # cleanup
 3. **Stay within your declared footprint** — verify before releasing
 4. Send **heartbeats** during long work
 5. **Always call `bacchus archetype prompt`** during context loading
-6. **Always run `/simplify`** in the review loop — every iteration
+6. **Always run `/tighten`** in the review loop (every iteration) and `/ship-review` once before releasing as `done`
 7. **Describe changes** before releasing
 8. **Don't mark `done`** if review hasn't passed or tests fail
 9. Check context for **collision warnings** before starting
 10. **Never run `bun install` / `npm install` / `pnpm install`** — orchestrator handles this
 11. **Release as `blocked`** when you need out-of-footprint changes — don't proceed anyway
 12. **Message the orchestrator** when releasing as blocked or failed with details
+13. **When `$BACCHUS_MEMORY` is set:** `kypp briefing` at start, `kypp recall` before work, `kypp remember` durable lessons before release — all fail-open
