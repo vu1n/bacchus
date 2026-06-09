@@ -76,7 +76,7 @@ pub use claim::claim_task;
 pub use clean::clean_workspace;
 pub use context::generate_context;
 pub use eval::generate_eval_report;
-pub use init::{init_workspace, update_assets, InitOptions};
+pub use init::{init_workspace, render_worker_prompt, update_assets, InitOptions};
 pub use list::list_claims;
 pub use next::next_task;
 pub use orchestrator::{process_ready_releases, verify_release_invariants};

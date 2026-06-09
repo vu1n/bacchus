@@ -184,7 +184,10 @@ quality:
   lint: "cargo clippy --quiet -- -D warnings"
 
 worker:
+  runner: "claude"       # "claude" (default) or "codex"; selects the default cmd
   cmd: "claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'"
+  # cmd overrides runner. Codex runner default (set via `bacchus init --runner codex`):
+  #   cmd: "codex exec --dangerously-bypass-approvals-and-sandbox \"$(bacchus worker-prompt $BACCHUS_AGENT_ID $BACCHUS_TASK_ID)\""
   # auto_spawn: true     # Enable auto-spawn (default: true)
   # retry_backoff_ms: 60000
   # max_retries: 3

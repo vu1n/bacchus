@@ -1,5 +1,5 @@
 use crate::tools::{ReleaseStatus, SessionMode};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -10,6 +10,23 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+}
+
+/// Agent runtime that executes worker tasks. Closed set so `--runner` rejects typos.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Runner {
+    Claude,
+    Codex,
+}
+
+impl Runner {
+    /// Config token written to `worker.runner` and matched by `default_cmd_for_runner`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Runner::Claude => "claude",
+            Runner::Codex => "codex",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -93,6 +110,20 @@ pub enum Commands {
         epic_id: Option<String>,
         #[arg(long, requires = "epic_id")]
         epic_title: Option<String>,
+        /// Worker runner to configure (claude or codex)
+        #[arg(long, value_enum, default_value = "claude")]
+        runner: Runner,
+    },
+
+    /// Print the worker-agent protocol prompt as plain text.
+    ///
+    /// For non-Claude runners (e.g. `codex exec`) that take a prompt string
+    /// instead of resolving the `/bacchus-worker` slash command.
+    WorkerPrompt {
+        /// Agent ID
+        agent_id: String,
+        /// Task ID (optional; omit to auto-pick the next ready task)
+        task_id: Option<String>,
     },
 
     /// Search indexed symbols

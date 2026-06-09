@@ -415,6 +415,35 @@ bacchus session spawn-workers --count 3
 # Then run `bacchus session check` in your stop-hook loop
 ```
 
+### Worker Runners (Claude or Codex)
+
+The worker is just a shell command (`worker.cmd`) that bacchus runs per task with
+env vars injected (`$BACCHUS_AGENT_ID`, `$BACCHUS_TASK_ID`, …) — it is not tied to
+Claude. The `worker.runner` config field selects the default command:
+
+| Runner | Default `worker.cmd` |
+|--------|----------------------|
+| `claude` (default) | `claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'` |
+| `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox "$(bacchus worker-prompt $BACCHUS_AGENT_ID $BACCHUS_TASK_ID)"` |
+
+Pick one at init time:
+
+```bash
+bacchus init --runner codex     # writes a codex worker.cmd into .bacchus/config.yaml
+```
+
+Claude resolves the `/bacchus-worker` slash command from the installed skill. Codex
+has no slash command, so `codex exec` is fed the protocol as plain text via
+`bacchus worker-prompt <AGENT_ID> [TASK_ID]` (the same protocol, runner-agnostic).
+Set `worker.runner: codex` (and leave `cmd` unset) to derive the codex command, or
+set `cmd` explicitly to override. Liveness is bacchus-owned (the heartbeat loop),
+not a Claude hook, so codex workers stay alive the same way.
+
+The review loop calls the `/tighten` and `/ship-review` skills — install these for
+your runner (both ship as Claude **and** Codex skills; bacchus bundles copies under
+`skills/`). `codex exec` requires the [Codex CLI](https://grok-wiki.com/public/docs/openai-codex-c82680b15ec1)
+on `PATH`.
+
 ## Commands
 
 ### Task Management
@@ -688,7 +717,7 @@ Only one orchestrator can hold the leader lease at a time; secondary orchestrato
 
 Autonomous worker spawning controls:
 - `BACCHUS_ORCHESTRATOR_AUTO_SPAWN=1` (default) enables auto-spawn attempts during `session check`.
-- `BACCHUS_WORKER_CMD` sets the worker shell command (required for auto-spawn).
+- `BACCHUS_WORKER_CMD` sets the worker shell command (required for auto-spawn); overrides `worker.runner`/`worker.cmd`. See Worker Runners for the Claude vs Codex defaults.
 - `BACCHUS_WORKER_MAX_RETRIES` limits retries per task (default: `3`).
 - `BACCHUS_WORKER_RETRY_BACKOFF_MS` sets retry backoff (default: `60000`).
 - `BACCHUS_WORKER_STALE_GRACE_MS` extends stale-worker recovery grace beyond claim timeout (default: `60000`).

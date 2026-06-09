@@ -106,7 +106,17 @@ pub(super) fn resolve_worker_config(
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
-            .or_else(|| yaml_worker.as_ref().and_then(|w| w.cmd.clone())),
+            .or_else(|| yaml_worker.as_ref().and_then(|w| w.cmd.clone()))
+            // No explicit cmd: derive a default only when `runner` is explicitly
+            // set. With neither configured, leave cmd None so the
+            // "worker.cmd is not configured" gate still fires (rather than
+            // silently defaulting to claude).
+            .or_else(|| {
+                yaml_worker
+                    .as_ref()
+                    .and_then(|w| w.runner.as_deref())
+                    .map(|r| crate::quality::default_cmd_for_runner(Some(r)))
+            }),
 
         auto_spawn: if std::env::var("BACCHUS_ORCHESTRATOR_AUTO_SPAWN").is_ok() {
             env_bool("BACCHUS_ORCHESTRATOR_AUTO_SPAWN", true)
@@ -137,5 +147,52 @@ pub(super) fn resolve_worker_config(
                 .map(|w| w.kill_stale)
                 .unwrap_or(DEFAULT_WORKER_KILL_STALE)
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn write_config(dir: &Path, body: &str) {
+        let bacchus = dir.join(".bacchus");
+        std::fs::create_dir_all(&bacchus).unwrap();
+        std::fs::write(bacchus.join("config.yaml"), body).unwrap();
+    }
+
+    #[test]
+    fn cmd_stays_none_when_neither_cmd_nor_runner_set() {
+        std::env::remove_var("BACCHUS_WORKER_CMD");
+        let dir = tempfile::tempdir().unwrap();
+        // A worker section without cmd or runner must NOT silently default to
+        // claude — the "worker.cmd is not configured" gate has to keep firing.
+        write_config(dir.path(), "worker:\n  max_retries: 5\n");
+        let wcfg = resolve_worker_config(Some(dir.path()));
+        assert!(wcfg.cmd.is_none());
+    }
+
+    #[test]
+    fn cmd_derived_from_runner_when_explicitly_set() {
+        std::env::remove_var("BACCHUS_WORKER_CMD");
+        let dir = tempfile::tempdir().unwrap();
+        write_config(dir.path(), "worker:\n  runner: \"codex\"\n");
+        let wcfg = resolve_worker_config(Some(dir.path()));
+        assert_eq!(
+            wcfg.cmd.as_deref(),
+            Some(crate::quality::default_cmd_for_runner(Some("codex")).as_str())
+        );
+    }
+
+    #[test]
+    fn explicit_cmd_overrides_runner() {
+        std::env::remove_var("BACCHUS_WORKER_CMD");
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            "worker:\n  runner: \"codex\"\n  cmd: \"my-runner\"\n",
+        );
+        let wcfg = resolve_worker_config(Some(dir.path()));
+        assert_eq!(wcfg.cmd.as_deref(), Some("my-runner"));
     }
 }

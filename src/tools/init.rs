@@ -73,6 +73,21 @@ pub struct InitOptions<'a> {
     pub force_tasks: bool,
     pub epic_id: Option<&'a str>,
     pub epic_title: Option<&'a str>,
+    /// Worker runner family to write into config.yaml ("claude" or "codex").
+    pub runner: &'a str,
+}
+
+/// Render the worker-agent protocol prompt with concrete IDs substituted.
+///
+/// Claude resolves the `/bacchus-worker` slash command from the installed skill;
+/// other runners (e.g. `codex exec`) take a prompt string, which this emits by
+/// filling the protocol's `$ARGUMENTS` placeholder.
+pub fn render_worker_prompt(agent_id: &str, task_id: Option<&str>) -> String {
+    let arguments = match task_id {
+        Some(t) => format!("{} {}", agent_id, t),
+        None => agent_id.to_string(),
+    };
+    CMD_WORKER.replace("$ARGUMENTS", &arguments)
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -450,14 +465,14 @@ fn ensure_worker_hooks(workspace_root: &Path, force: bool) -> Result<(bool, bool
 }
 
 /// Install project config to .bacchus/config.yaml with project-detected defaults (quality + worker)
-fn ensure_config(workspace_root: &Path) -> Result<(bool, bool), String> {
+fn ensure_config(workspace_root: &Path, runner: &str) -> Result<(bool, bool), String> {
     let path = workspace_root.join(".bacchus/config.yaml");
 
     if path.exists() {
         return Ok((false, true)); // (created, already_exists)
     }
 
-    let content = crate::quality::generate_config(workspace_root);
+    let content = crate::quality::generate_config(workspace_root, runner);
     fs::write(&path, content).map_err(|e| e.to_string())?;
     Ok((true, false))
 }
@@ -639,7 +654,7 @@ pub fn init_workspace(
     claude.claude_md_updated = updated;
     claude.claude_md_already_has_pointer = already_has;
 
-    let (created, exists) = ensure_config(workspace_root)?;
+    let (created, exists) = ensure_config(workspace_root, options.runner)?;
     claude.config_created = created;
     claude.config_already_exists = exists;
 
@@ -691,6 +706,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -704,6 +720,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -731,6 +748,7 @@ mod tests {
                 force_tasks: true,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -754,6 +772,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -783,6 +802,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -797,6 +817,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -828,6 +849,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: None,
                 epic_title: None,
+                runner: "claude",
             },
         )
         .unwrap();
@@ -859,6 +881,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: Some("INIT-EPIC"),
                 epic_title: Some("Init Epic"),
+                runner: "claude",
             },
         )
         .unwrap();
@@ -871,6 +894,7 @@ mod tests {
                 force_tasks: false,
                 epic_id: Some("INIT-EPIC"),
                 epic_title: Some("Init Epic"),
+                runner: "claude",
             },
         )
         .unwrap();
