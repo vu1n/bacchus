@@ -158,6 +158,7 @@ fn main() {
             force_tasks,
             epic_id,
             epic_title,
+            runner,
         } => to_json(tools::init_workspace(
             &workspace_root,
             tools::InitOptions {
@@ -165,7 +166,11 @@ fn main() {
                 force_tasks,
                 epic_id: epic_id.as_deref(),
                 epic_title: epic_title.as_deref(),
+                runner: runner.as_str(),
             },
+        )),
+        Commands::WorkerPrompt { agent_id, task_id } => Ok(Output::Raw(
+            tools::render_worker_prompt(&agent_id, task_id.as_deref()),
         )),
         Commands::Symbols {
             pattern,

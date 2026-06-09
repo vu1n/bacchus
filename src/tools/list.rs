@@ -73,7 +73,7 @@ pub fn list_claims() -> Result<ListOutput> {
 
         // Sort by age (most recent first)
         let mut sorted_claims = claims;
-        sorted_claims.sort_by(|a, b| a.age_minutes.cmp(&b.age_minutes));
+        sorted_claims.sort_by_key(|c| c.age_minutes);
 
         let (claims, stale_claims): (Vec<_>, Vec<_>) = sorted_claims
             .into_iter()

@@ -17,12 +17,28 @@ pub struct BacchusConfig {
     pub quality: QualitySection,
     #[serde(default)]
     pub worker: WorkerSection,
+    #[serde(default)]
+    pub memory: MemorySection,
+}
+
+/// kypp shared-memory integration (briefing/recall/remember for workers).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemorySection {
+    /// Enable kypp integration: scope worker env to a kypp project so
+    /// `kypp briefing/recall/remember` bind the right store.
+    #[serde(default)]
+    pub enabled: bool,
+    /// kypp project key (KYPP_PROJECT). Defaults to the project directory name.
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerSection {
-    /// Worker command (e.g., "claude")
+    /// Worker command (e.g., "claude"). Overrides the runner default when set.
     pub cmd: Option<String>,
+    /// Runner family: "claude" (default) or "codex". Selects the default worker
+    /// command when `cmd` is unset. See `default_cmd_for_runner`.
+    pub runner: Option<String>,
     /// Whether auto-spawn is enabled (overrides env var)
     #[serde(default = "default_true")]
     pub auto_spawn: bool,
@@ -47,6 +63,7 @@ impl Default for WorkerSection {
     fn default() -> Self {
         Self {
             cmd: None,
+            runner: None,
             auto_spawn: true,
             retry_backoff_ms: None,
             max_retries: None,
@@ -90,6 +107,28 @@ pub fn load_config(workspace_root: &Path) -> Option<BacchusConfig> {
     let path = workspace_root.join(".bacchus").join(CONFIG_FILENAME);
     let content = std::fs::read_to_string(&path).ok()?;
     serde_yaml::from_str(&content).ok()
+}
+
+/// Resolve kypp env for a worker: `(KYPP_PROJECT, KYPP_REPO_ROOT)`.
+///
+/// Returns `None` when memory is disabled. The project key is the explicit
+/// `memory.project`, else the workspace directory name (used verbatim as the
+/// kypp binding key). Code grounding (`KYPP_REPO_ROOT`) points at the canonical
+/// project tree, not the ephemeral per-task workspace.
+pub fn resolve_memory_env(
+    config: &BacchusConfig,
+    workspace_root: &Path,
+) -> Option<(String, String)> {
+    if !config.memory.enabled {
+        return None;
+    }
+    let project = config.memory.project.clone().unwrap_or_else(|| {
+        workspace_root
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "default".to_string())
+    });
+    Some((project, workspace_root.to_string_lossy().to_string()))
 }
 
 /// Run all configured quality gate commands against the workspace path.
@@ -261,8 +300,28 @@ pub fn format_gate_failures(gate: &QualityGateResult) -> String {
 // Config Generation (for bacchus init)
 // ============================================================================
 
+/// Default worker command for a runner family. A `cmd` set in config overrides this.
+///
+/// - `codex` runs headless via `codex exec`, fed the protocol prompt that
+///   `bacchus worker-prompt` emits (codex has no `/bacchus-worker` slash command).
+/// - anything else (incl. `None`) defaults to the Claude Code slash-command worker.
+pub fn default_cmd_for_runner(runner: Option<&str>) -> String {
+    match runner {
+        // `run_worker_command` substitutes $BACCHUS_AGENT_ID/$BACCHUS_TASK_ID before
+        // `sh -c`, so the command substitution runs with concrete IDs. The double
+        // quotes keep the prompt (which itself contains $BACCHUS_* and backticks) as
+        // one un-re-expanded argument to `codex exec`.
+        Some("codex") => "codex exec --dangerously-bypass-approvals-and-sandbox \
+             \"$(bacchus worker-prompt $BACCHUS_AGENT_ID $BACCHUS_TASK_ID)\""
+            .to_string(),
+        _ => "claude --dangerously-skip-permissions -p \
+             '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'"
+            .to_string(),
+    }
+}
+
 /// Detect project type and generate default config YAML content (quality + worker sections).
-pub fn generate_config(workspace_root: &Path) -> String {
+pub fn generate_config(workspace_root: &Path, runner: &str) -> String {
     let (check, test, lint) = detect_project_commands(workspace_root);
     let mut yaml = String::from("quality:\n");
     if let Some(c) = check {
@@ -275,7 +334,18 @@ pub fn generate_config(workspace_root: &Path) -> String {
         yaml.push_str(&format!("  lint: \"{}\"\n", l));
     }
     yaml.push_str("\nworker:\n");
-    yaml.push_str("  cmd: \"claude --dangerously-skip-permissions -p '/bacchus-worker $BACCHUS_AGENT_ID $BACCHUS_TASK_ID'\"\n");
+    yaml.push_str(&format!("  runner: \"{}\"\n", runner));
+    // YAML double-quoted scalar: escape embedded quotes (the codex cmd uses them).
+    let cmd = default_cmd_for_runner(Some(runner)).replace('"', "\\\"");
+    yaml.push_str(&format!("  cmd: \"{}\"\n", cmd));
+    yaml.push_str(
+        "\n# Shared memory via kypp (briefing/recall/remember). Requires `kypp` on PATH.\n",
+    );
+    yaml.push_str("# memory:\n");
+    yaml.push_str("#   enabled: true\n");
+    yaml.push_str(
+        "#   project: \"my-project\"   # KYPP_PROJECT; defaults to this directory's name\n",
+    );
     yaml
 }
 
@@ -462,19 +532,52 @@ mod tests {
             "[package]\nname = \"test\"\n",
         )
         .unwrap();
-        let yaml = generate_config(dir.path());
+        let yaml = generate_config(dir.path(), "claude");
         assert!(yaml.contains("cargo check"));
         assert!(yaml.contains("cargo test"));
         assert!(yaml.contains("cargo clippy"));
         assert!(yaml.contains("worker:"));
+        assert!(yaml.contains("runner: \"claude\""));
         assert!(yaml.contains("cmd: \"claude --dangerously-skip-permissions -p"));
+    }
+
+    #[test]
+    fn test_generate_config_codex_runner() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
+        let yaml = generate_config(dir.path(), "codex");
+        assert!(yaml.contains("runner: \"codex\""));
+        // The emitted scalar must escape the inner double quotes (the codex cmd
+        // wraps the prompt in `"$(...)"`), or YAML parsing truncates the value.
+        assert!(
+            yaml.contains(r#"cmd: "codex exec --dangerously-bypass-approvals-and-sandbox \"$("#)
+        );
+
+        // Round-trip: the YAML-escaped cmd must parse back to the EXACT command,
+        // inner `"$(bacchus worker-prompt ...)"` quotes intact. This pins the
+        // `.replace('"', "\\\"")` escaping in generate_config.
+        let bacchus_dir = dir.path().join(".bacchus");
+        std::fs::create_dir_all(&bacchus_dir).unwrap();
+        std::fs::write(bacchus_dir.join("config.yaml"), &yaml).unwrap();
+        let cfg = load_config(dir.path()).unwrap();
+        assert_eq!(cfg.worker.runner.as_deref(), Some("codex"));
+        assert_eq!(
+            cfg.worker.cmd.as_deref(),
+            Some(default_cmd_for_runner(Some("codex")).as_str())
+        );
+        let cmd = cfg.worker.cmd.unwrap();
+        assert!(cmd.contains(r#""$(bacchus worker-prompt $BACCHUS_AGENT_ID $BACCHUS_TASK_ID)""#));
     }
 
     #[test]
     fn test_generate_config_node() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
-        let yaml = generate_config(dir.path());
+        let yaml = generate_config(dir.path(), "claude");
         assert!(yaml.contains("tsc --noEmit"));
         assert!(yaml.contains("vitest"));
         assert!(yaml.contains("cmd: \"claude --dangerously-skip-permissions -p"));
@@ -484,7 +587,7 @@ mod tests {
     fn test_generate_config_go() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("go.mod"), "module test\n").unwrap();
-        let yaml = generate_config(dir.path());
+        let yaml = generate_config(dir.path(), "claude");
         assert!(yaml.contains("go build"));
         assert!(yaml.contains("go test"));
         assert!(yaml.contains("cmd: \"claude --dangerously-skip-permissions -p"));
@@ -523,6 +626,7 @@ mod tests {
                 lint: None,
             },
             worker: WorkerSection::default(),
+            memory: MemorySection::default(),
         };
         let result = run_quality_gate(&config, dir.path()).unwrap();
         assert!(result.passed);
@@ -539,6 +643,7 @@ mod tests {
                 lint: Some("true".to_string()),
             },
             worker: WorkerSection::default(),
+            memory: MemorySection::default(),
         };
         let result = run_quality_gate(&config, dir.path()).unwrap();
         assert!(!result.passed);
@@ -546,6 +651,45 @@ mod tests {
         assert_eq!(result.checks.len(), 2);
         assert!(result.checks[0].passed);
         assert!(!result.checks[1].passed);
+    }
+
+    #[test]
+    fn test_resolve_memory_env_disabled_by_default() {
+        let config = BacchusConfig {
+            quality: QualitySection::default(),
+            worker: WorkerSection::default(),
+            memory: MemorySection::default(),
+        };
+        assert!(resolve_memory_env(&config, Path::new("/tmp/my-proj")).is_none());
+    }
+
+    #[test]
+    fn test_resolve_memory_env_derives_project_from_dir() {
+        let config = BacchusConfig {
+            quality: QualitySection::default(),
+            worker: WorkerSection::default(),
+            memory: MemorySection {
+                enabled: true,
+                project: None,
+            },
+        };
+        let (project, repo_root) = resolve_memory_env(&config, Path::new("/tmp/my-proj")).unwrap();
+        assert_eq!(project, "my-proj");
+        assert_eq!(repo_root, "/tmp/my-proj");
+    }
+
+    #[test]
+    fn test_resolve_memory_env_explicit_project_wins() {
+        let config = BacchusConfig {
+            quality: QualitySection::default(),
+            worker: WorkerSection::default(),
+            memory: MemorySection {
+                enabled: true,
+                project: Some("custom-key".to_string()),
+            },
+        };
+        let (project, _) = resolve_memory_env(&config, Path::new("/tmp/my-proj")).unwrap();
+        assert_eq!(project, "custom-key");
     }
 
     #[test]
