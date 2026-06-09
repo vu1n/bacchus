@@ -25,6 +25,8 @@ Workspace-based coordination CLI for multi-agent work. Uses jj workspaces + SQLi
 | `bacchus next --agent-id <agent>` | Auto-claim next ready task |
 | `bacchus release <id> --status done` | Mark ready for merge |
 | `bacchus session start agent --task-id <id>` | Enable stop hook |
+| `bacchus init --runner <claude\|codex>` | Bootstrap; pick the worker runner |
+| `bacchus worker-prompt <agent> <id>` | Emit worker protocol as text (codex runner) |
 | `jj -R .bacchus/workspaces/<id> status` | Check workspace |
 | `jj -R .bacchus/workspaces/<id> describe -m "msg"` | Commit message |
 

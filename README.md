@@ -27,9 +27,12 @@ bacchus init
 ```
 
 This sets up everything project-local:
-- `.bacchus/` - task database, workspaces, archetypes
+- `.bacchus/` - task database, workspaces, archetypes, and `config.yaml` (quality gates + worker runner)
 - `.claude/settings.json` - project-level stop hook
 - `.claude/skills/bacchus/SKILL.md` - Claude Code skill (teaches Claude how to use bacchus)
+
+Workers default to Claude. To run workers on Codex instead, `bacchus init --runner codex`
+(see [Worker Runners](#worker-runners-claude-or-codex)).
 
 ### Prerequisites
 
@@ -120,7 +123,7 @@ Use bacchus to parallelize this work across multiple agents."
 ```
 
 With the bacchus skill workflow, Claude can plan tasks, import them, and orchestrate agents with archetype prompts.
-Autonomous worker spawning requires `BACCHUS_WORKER_CMD` (see Session Management).
+Autonomous worker spawning requires a configured worker command — set `worker.runner`/`worker.cmd` in `.bacchus/config.yaml` (via `bacchus init --runner`) or `BACCHUS_WORKER_CMD` (see [Worker Runners](#worker-runners-claude-or-codex)).
 
 | What you want | What to say |
 |---------------|-------------|
@@ -435,8 +438,10 @@ bacchus init --runner codex     # writes a codex worker.cmd into .bacchus/config
 Claude resolves the `/bacchus-worker` slash command from the installed skill. Codex
 has no slash command, so `codex exec` is fed the protocol as plain text via
 `bacchus worker-prompt <AGENT_ID> [TASK_ID]` (the same protocol, runner-agnostic).
-Set `worker.runner: codex` (and leave `cmd` unset) to derive the codex command, or
-set `cmd` explicitly to override. Liveness is bacchus-owned (the heartbeat loop),
+Resolution order for the worker command: `BACCHUS_WORKER_CMD` env → `worker.cmd` →
+the default for `worker.runner`. The runner default only kicks in when `runner` is
+explicitly set; with neither `cmd` nor `runner` configured, auto-spawn errors rather
+than silently defaulting to claude. Liveness is bacchus-owned (the heartbeat loop),
 not a Claude hook, so codex workers stay alive the same way.
 
 The review loop calls the `/tighten` and `/ship-review` skills — install these for
@@ -460,7 +465,7 @@ on `PATH`.
 
 | Command | Description |
 |---------|-------------|
-| `init [--skip-jj] [--force-tasks] [--epic-id X --epic-title Y]` | Bootstrap bacchus in the current repo (jj + tasks template + optional epic) |
+| `init [--skip-jj] [--force-tasks] [--epic-id X --epic-title Y] [--runner claude\|codex]` | Bootstrap bacchus in the current repo (jj + tasks template + optional epic; `--runner` picks the worker command) |
 | `next <agent_id>` | Get next ready task, create workspace, claim it |
 | `claim <task_id> <agent_id> [--force]` | Claim specific task (must be ready unless --force) |
 | `heartbeat <task_id> <agent_id>` | Refresh task claim lease heartbeat |
@@ -573,6 +578,7 @@ Handles are session-scoped and automatically cleared on `bacchus session stop`.
 | `status` | Show claims, orphaned workspaces, broken claims |
 | `context [--task-id X]` | Generate markdown context for agent |
 | `workflow` | Print protocol documentation |
+| `worker-prompt <agent_id> [task_id]` | Print the worker protocol as plain text (for `codex exec` and other non-Claude runners) |
 | `events [--limit N]` | Show recent orchestration events |
 | `self-update` | Update bacchus to latest version |
 | `check-update` | Check if newer version is available |
